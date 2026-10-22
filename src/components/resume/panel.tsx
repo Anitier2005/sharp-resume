@@ -19,7 +19,9 @@ export function ResumePanel() {
   const toast = useToast();
   const [zoom, setZoom] = useState(100);
   const [libOpen, setLibOpen] = useState(false);
+  const [sheets, setSheets] = useState(1);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
 
   // 窗口变窄时自动缩小，保证纸面完整
   useEffect(() => {
@@ -35,6 +37,22 @@ export function ResumePanel() {
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  // 按 A4 比例估算这份内容占几页：纸张按宽度自适应，所以用宽高比换算，缩放不影响结果
+  useEffect(() => {
+    const paper = wrapRef.current?.firstElementChild as HTMLElement | null;
+    if (!paper) return;
+    const measure = () => {
+      const width = paper.clientWidth;
+      if (!width) return;
+      const height = paper.scrollHeight;
+      setSheets(Math.max(1, height / (width * (297 / 210))));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(paper);
+    return () => observer.disconnect();
+  }, [page?.id]);
 
   if (!person || !resume || !page) {
     return (
@@ -185,7 +203,7 @@ export function ResumePanel() {
       </div>
 
       <div className="canvas" ref={canvasRef}>
-        <div className="paper-wrap" style={{ zoom: zoom / 100 }}>
+        <div className="paper-wrap" ref={wrapRef} style={{ zoom: zoom / 100 }}>
           {page.kind === "portfolio" ? (
             <Portfolio person={person} page={page} onPatchPage={patchPage} />
           ) : (
@@ -199,6 +217,12 @@ export function ResumePanel() {
           第 {index + 1} 页 / 共 {resume.pages.length} 页
         </span>
         <span>{meta["字"]}</span>
+        <span
+          className={sheets > 1.02 ? "over" : undefined}
+          title="按 A4 比例估算当前页占几页"
+        >
+          {sheets > 1.02 ? `≈ ${sheets.toFixed(1)} 页 A4` : "1 页 A4"}
+        </span>
         <span className="save">
           <i />
           {saveLabel}

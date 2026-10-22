@@ -164,7 +164,7 @@ html[data-accent="clay"]   .win[data-mode="dark"]{--acc:#F08A6E;}
 .winbtns button:hover{background:var(--bg-hover);color:var(--fg-1);}
 .winbtns button:last-child:hover{background:var(--danger);color:#fff;}
 
-.app{flex:1;min-height:0;display:grid;grid-template-columns:240px minmax(0,1fr) 420px;}
+.app{flex:1;min-height:0;display:grid;grid-template-columns:240px minmax(0,1fr) 420px;grid-template-rows:minmax(0,1fr);}
 
 /* ---------- 侧栏 ---------- */
 .side{
@@ -436,7 +436,7 @@ html[data-accent="clay"]   .win[data-mode="dark"]{--acc:#F08A6E;}
 }
 
 /* ---------- 简历 ---------- */
-.doc{display:flex;flex-direction:column;min-width:0;background:var(--bg-elev);border-left:1px solid var(--line);}
+.doc{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg-elev);border-left:1px solid var(--line);}
 .tabs{
   height:40px;flex:none;
   display:flex;align-items:center;gap:2px;
@@ -477,7 +477,7 @@ html[data-accent="clay"]   .win[data-mode="dark"]{--acc:#F08A6E;}
   display:flex;justify-content:center;
   padding:20px;
   background:var(--bg-canvas);
-  overflow:hidden;
+  overflow:auto;
 }
 .paper{
   width:100%;max-width:374px;min-height:528px;
@@ -513,6 +513,7 @@ html[data-accent="clay"]   .win[data-mode="dark"]{--acc:#F08A6E;}
 }
 .doc-foot .pn{font-weight:600;color:var(--acc-text);}
 .doc-foot .save{display:flex;align-items:center;gap:4px;}
+.doc-foot .over{color:var(--warn);font-weight:600;}
 .doc-foot .save i{width:4px;height:4px;border-radius:50%;background:var(--ok);}
 .doc-foot .zoom{margin-left:auto;}
 
