@@ -25,7 +25,7 @@ export function pageToMarkdown(person: Person, page: ResumePage): string {
     lines.push(`## ${label.experience}`, "");
     for (const exp of experiences) {
       if (!exp) continue;
-      lines.push(`### ${exp.company} · ${exp.role}　\`${exp.period}\``, "");
+      lines.push(`### ${exp.company} · ${exp.role}\u3000\`${exp.period}\``, "");
       const bullets = en ? exp.bulletsEn ?? exp.bullets : exp.bullets;
       for (const bullet of bullets) lines.push(`- ${bullet}`);
       lines.push("");
@@ -40,7 +40,7 @@ export function pageToMarkdown(person: Person, page: ResumePage): string {
     lines.push(`## ${label.project}`, "");
     for (const project of projects) {
       if (!project) continue;
-      lines.push(`### ${project.title}　\`${project.year}\``, "");
+      lines.push(`### ${project.title}\u3000\`${project.year}\``, "");
       lines.push(en ? project.descEn ?? project.desc : project.desc, "");
       if (project.tags.length) lines.push(`\`${project.tags.join("` `")}\``, "");
     }
@@ -49,7 +49,7 @@ export function pageToMarkdown(person: Person, page: ResumePage): string {
   if (person.education.length) {
     lines.push(`## ${label.education}`, "");
     for (const item of person.education) {
-      lines.push(`- ${en ? item.schoolEn ?? item.school : item.school} · ${item.degree}　\`${item.period}\``);
+      lines.push(`- ${en ? item.schoolEn ?? item.school : item.school} · ${item.degree}\u3000\`${item.period}\``);
     }
     lines.push("");
   }

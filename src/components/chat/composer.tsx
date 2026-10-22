@@ -1,38 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { Attachment } from "@/types";
 import { ArrowUp, Close, FileIcon, Plus } from "@/components/ui/icons";
-import { Dropdown, MenuItem } from "@/components/ui/menu";
-
-const MODELS = ["Sonnet 4.5", "Opus 4.5", "GPT-5.2", "本地模型"];
-
-function extOf(name: string): string {
-  const dot = name.lastIndexOf(".");
-  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
-}
-
-function toAttachment(file: File): Attachment {
-  return {
-    id: `f-${crypto.randomUUID().slice(0, 8)}`,
-    name: file.name,
-    size: file.size,
-    ext: extOf(file.name),
-  };
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
+import { formatSize, toAttachment } from "@/lib/attach";
 
 interface ComposerProps {
   model: string;
-  onModelChange: (model: string) => void;
+  onOpenSettings: () => void;
   onSend: (text: string, files: Attachment[]) => void;
   busy: boolean;
-  /** 外部注入的草稿（点击建议动作时填入） */
-  draft: string;
-  onDraftConsumed: () => void;
+  /** 输入内容由会话面板持有，建议动作可以直接写入 */
+  text: string;
+  onTextChange: (text: string) => void;
   /** 待发送附件由外层持有，方便拖放注入 */
   files: Attachment[];
   onFilesChange: (files: Attachment[]) => void;
@@ -40,24 +18,16 @@ interface ComposerProps {
 
 export function Composer({
   model,
-  onModelChange,
+  onOpenSettings,
   onSend,
   busy,
-  draft,
-  onDraftConsumed,
+  text,
+  onTextChange,
   files,
   onFilesChange,
 }: ComposerProps) {
-  const [text, setText] = useState("");
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    if (!draft) return;
-    setText(draft);
-    onDraftConsumed();
-    areaRef.current?.focus();
-  }, [draft, onDraftConsumed]);
 
   useEffect(() => {
     const el = areaRef.current;
@@ -71,7 +41,7 @@ export function Composer({
     if (!value && files.length === 0) return;
     if (busy) return;
     onSend(value, files);
-    setText("");
+    onTextChange("");
     onFilesChange([]);
   };
 
@@ -105,7 +75,7 @@ export function Composer({
             value={text}
             placeholder="描述你想改的地方，或拖入 JD、旧简历…"
             aria-label="消息输入"
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => onTextChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
@@ -123,23 +93,14 @@ export function Composer({
             >
               <Plus size={11} />
             </button>
-            <Dropdown
-              width={140}
-              trigger={
-                <button type="button" className="pick">
-                  {model}
-                </button>
-              }
+            <button
+              type="button"
+              className="pick"
+              onClick={onOpenSettings}
+              title="模型设置"
             >
-              {MODELS.map((item) => (
-                <MenuItem
-                  key={item}
-                  label={item}
-                  hint={item === model ? "当前" : undefined}
-                  onSelect={() => onModelChange(item)}
-                />
-              ))}
-            </Dropdown>
+              {model}
+            </button>
             <button
               type="button"
               className="send"
@@ -171,5 +132,3 @@ export function Composer({
     </div>
   );
 }
-
-export { toAttachment };

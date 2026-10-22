@@ -1,7 +1,7 @@
 import { ACCENTS } from "@/types";
 import { useWorkspace } from "@/store/workspace";
 import { isTauri } from "@/lib/storage";
-import { useToast } from "@/components/ui/toast";
+import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuLabel, MenuSep } from "@/components/ui/menu";
 import { WinClose, WinMax, WinMin } from "@/components/ui/icons";
 

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useWorkspace } from "@/store/workspace";
-import { useToast } from "@/components/ui/toast";
+import { useToast } from "@/components/ui/toast-context";
 import { ArrowDown, ArrowUp, Check, Close, Plus, Trash } from "@/components/ui/icons";
 import type { EducationItem, Experience, Person, ProjectItem, SkillGroup } from "@/types";
 
