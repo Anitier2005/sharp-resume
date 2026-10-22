@@ -1,87 +1,88 @@
 # Sharp Resume
 
-> AI 简历工作台 · 一份简历，多个页面，一条对话线。
+> AI 简历工作台 · 一个人一套经历，想投几家就派生几份简历。
 
-基于 **Tauri 2 + React 19 + TypeScript + Tailwind CSS + shadcn/ui** 的桌面应用。左侧简历库、中间 AI 会话、右侧简历编辑区；一份简历可以同时包含中文简历、英文简历与作品集，各自独立排版、统一导出。
+桌面应用（Tauri 2 + React 19 + TypeScript），**不使用任何 UI 框架**：样式是一层 CSS 变量令牌，组件自己写，图标是内联 SVG。
 
-## 当前阶段
+## 界面
 
-仓库处于 **页面原型（UI prototype）** 阶段：三栏布局、页签分页、可编辑简历、文件上传、导出菜单等交互均已可点，AI 与真实导出为演示占位。
+三栏，一条 1px 线贯穿：
 
-- [x] 三栏可拖拽布局
-- [x] 简历列表（搜索 / 排序 / 新建 / 右键操作）
-- [x] 会话区（消息流、改稿卡片、任意文件上传与拖放）
-- [x] 简历区（多页签：中文 / English / 作品集，新增与删除页面）
-- [x] 简历内联编辑（contentEditable，非受控写入避免光标跳动）
-- [x] 导出菜单（PDF / Word / Markdown / PNG / 打印）
-- [x] 浅色 / 深色主题
-- [ ] 接入真实模型与会话持久化
-- [ ] 真实导出（PDF / DOCX）
+| 左 · 候选人 → 简历 | 中 · 会话 | 右 · 简历 |
+| --- | --- | --- |
+| 一级是人，展开是这个人名下的简历 | 一份简历一条独立会话 | 顶栏分页器 + 纸面编辑 + 导出 |
+
+关键设计：**经历与作品挂在「人」这一级，被这个人所有简历共享**。所以改一段经历，这个人所有简历都会变；但每份简历的会话、摘要、页面组合互相独立。
+
+## 当前进度
+
+- [x] 两级列表：候选人 → 简历（展开/收起、搜索、新建、重命名、复制、删除）
+- [x] 会话：消息流、任意文件上传与拖放、改写建议、一键写回共享经历
+- [x] 简历区：多页签（中文 / English / 作品集）、新增与删除页面、缩放
+- [x] 纸面内联编辑（contentEditable，非受控写入，编辑即写回数据）
+- [x] 中英双语字段（公司、职位、学历、技能、作品各有一份英文）
+- [x] 本地持久化：桌面端写用户数据目录 `workspace.json`，浏览器回落 localStorage
+- [x] 导出：打印 / 存 PDF（当前页）、Markdown（当前页 / 整份）
+- [x] 主题：白（默认）/ 靛 / 松 / 朱 + 明暗两套
+- [ ] 接入真实模型（当前是本地改写规则，不联网）
+- [ ] 导出 DOCX / PNG
+- [ ] 经历库管理面板（现在只能在纸面上改，改的就是共享库）
 - [ ] Tauri 打包绿色版 exe
+
+## 主题规则
+
+这是这个项目最容易做错的地方，写成硬规则：
+
+1. **表面恒为白**（深色模式为石墨），表面与线条**不参与主题染色**。
+2. 主题只改 `--acc` 这一组，作用域限定在**组件**：选中条与选中底、图标、发送按钮、页签下划线、聚焦环、选区、纸面标记。
+3. 一句话：换主题只换「点缀」，不换「底色」。
+
+令牌分六组：`--bg-*` 表面 / `--line-*` 描边 / `--fg-*` 文字 / `--acc-*` 强调 / `--ok|warn|danger` 语义 / `--paper-*` 纸面。
 
 ## 技术栈
 
 | 层 | 选型 |
 | --- | --- |
-| 桌面壳 | Tauri 2（WebView2） |
+| 桌面壳 | Tauri 2（WebView2，无边框窗口 + 自定义标题栏） |
 | 前端 | React 19 + TypeScript（strict） |
-| 样式 | Tailwind CSS 3.4 + shadcn/ui（Radix UI） |
-| 布局 | react-resizable-panels |
-| 图标 | lucide-react |
-| 提示 | sonner |
+| 样式 | 纯 CSS + 自定义属性令牌（单文件 `src/styles/app.css`） |
+| 图标 | 内联 SVG（`src/components/ui/icons.tsx`） |
+| 状态 | `useReducer` + Context，自动保存到磁盘 |
 
 ## 开发
 
 ```bash
 npm install
 npm run dev        # 浏览器预览 http://localhost:1420
-npm run tauri:dev  # 桌面窗口调试（需要 Rust + MSVC Build Tools + WebView2）
-```
-
-## 打包
-
-```bash
+npm run tauri:dev  # 桌面窗口（需要 Rust + MSVC Build Tools + WebView2）
 npm run tauri:build
 ```
 
-- 安装包：`src-tauri/target/release/bundle/nsis/*.exe`
-- 绿色版：`src-tauri/target/release/sharp-resume.exe` 可直接分发（目标机需 WebView2 运行时，Win10 1803+ 一般自带）
+## 数据
 
-> 首次打包前需要先生成图标：`npm run tauri icon path/to/logo.png`，会写入 `src-tauri/icons/`。
+工作区是一个 JSON：`{ version, people[], ui{} }`。
 
-## 目录结构
+- 桌面端：`%APPDATA%\com.sharpresume.desktop\workspace.json`（由 Rust 侧读写）
+- 浏览器：`localStorage["sharp-resume:workspace:v1"]`
+
+首次启动写入 `src/data/seed.ts` 的示例数据（2 个完整候选人 + 6 个占位）。
+
+## 目录
 
 ```
 src/
-├─ components/
-│  ├─ app-title-bar.tsx      # 自定义窗口标题栏（无边框窗口）
-│  ├─ resume-list-panel.tsx  # 左：简历库
-│  ├─ chat-panel.tsx         # 中：会话 + 任意文件上传
-│  ├─ resume-panel.tsx       # 右：页签 + 画布 + 导出 + 状态栏
-│  ├─ resume-documents.tsx   # A4 简历 / 作品集排版与内联编辑
-│  ├─ editable.tsx           # contentEditable 封装
-│  └─ ui/                    # shadcn/ui 组件
-├─ data/mock.ts              # 演示数据（4 份简历 / 10 个页面）
-├─ lib/                      # 工具函数
-└─ types/index.ts            # ResumeItem / ResumePage / Doc 数据模型
-src-tauri/                   # Rust 侧：窗口、文件、导出命令
+  components/
+    chat/       会话面板、消息、输入框
+    resume/     页签、纸面、作品集
+    ui/         自己写的基础件：可编辑文本、下拉菜单、提示、图标
+  lib/          存储、导出、改写规则、字数统计
+  store/        工作区状态与自动保存
+  styles/       app.css（令牌 + 全部样式）
+  types/        数据模型
+design/         视觉探索过程，editor.html 是定稿方向
 ```
 
-## 数据模型
+## 说明
 
-```
-ResumeItem (一份简历 = 一条会话)
-└─ pages: ResumePage[]
-   ├─ resume-zh  → ResumeDoc
-   ├─ resume-en  → ResumeDoc
-   └─ portfolio  → PortfolioDoc
-```
-
-简历与会话一一对应：切换左侧简历时，中间的对话上下文和右侧的页面集合同步切换。
-
-## 设计约定
-
-- 简历纸面始终为白色（贴近打印效果），与应用外壳主题解耦
-- 编辑态采用块级 hover 工具栏（AI 改写 / 拖拽），不做右侧属性面板
-- 导出按钮区分「当前页面」与「整份简历」
-- 所有占位交互统一使用 toast 说明，不产生静默失败
+- `design/` 下是设计阶段的文件，不参与构建，保留作参照。
+- AI 还没接。当前回复来自 `src/lib/rewrite.ts` 的本地规则，只做「主动语态」这类可解释的文本变换，**不编造数字**，也不联网。
