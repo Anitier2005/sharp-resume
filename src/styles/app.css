@@ -600,7 +600,20 @@ html[data-accent="clay"]   .win[data-mode="dark"]{--acc:#F08A6E;}
 }
 
 /* ---------- 纸面编辑 ---------- */
-.paper-wrap{width:374px;max-width:100%;}
+.paper-wrap{position:relative;width:374px;max-width:100%;}
+/* 超出 A4 一页时在纸面上画一条分页虚线，标出打印会被切断的位置 */
+.paper-break{
+  position:absolute;left:-8px;right:-8px;
+  border-top:1px dashed color-mix(in srgb, var(--acc-paper) 42%, transparent);
+  pointer-events:none;
+}
+.paper-break span{
+  position:absolute;right:11px;top:-9px;
+  padding:0 3px;
+  font-size:8px;letter-spacing:.12em;
+  color:color-mix(in srgb, var(--acc-paper) 78%, transparent);
+  background:var(--paper);
+}
 [contenteditable][data-ph]:empty::before{content:attr(data-ph);color:var(--paper-3);pointer-events:none;}
 [contenteditable]:focus{outline:none;background:color-mix(in srgb, var(--acc-paper) 6%, transparent);border-radius:2px;}
 .p-summary{margin-top:10px;font-size:9.5px;line-height:1.9;color:var(--paper-2);}
