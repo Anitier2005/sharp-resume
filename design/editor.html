@@ -171,6 +171,85 @@ html[data-accent="indigo"] .win[data-mode="dark"]{--acc:#8FA1FF;}
 html[data-accent="pine"]   .win[data-mode="dark"]{--acc:#6DC3A0;}
 html[data-accent="clay"]   .win[data-mode="dark"]{--acc:#F08A6E;}
 
+/* ============================================================
+   白：不做表面染色，只留线条与灰阶。
+   与「墨」的区别：墨是 4%–9% 暖染的米灰面，白是 #FFF 纯白面，
+   层级完全由 1px 线与极淡投影承担。
+   ============================================================ */
+html[data-accent="white"] .win{
+  --acc:#242422;
+  --acc-paper:#242422;
+
+  /* 表面：零染色 */
+  --bg-title:#FFFFFF;
+  --bg-side:#FFFFFF;
+  --bg-elev:#FFFFFF;
+  --bg-canvas:#F8F8F6;
+  --bg-hover:#F5F5F2;
+  --bg-press:#ECECE9;
+
+  /* 线条：比墨更淡，但保留三档 */
+  --line:#EDEDEA;
+  --line-soft:#F4F4F1;
+  --line-strong:#DFDFDB;
+
+  --fg-1:#191917;
+  --fg-2:#56564F;
+  --fg-3:#8E8E86;
+  --fg-4:#B5B5AD;
+
+  --acc-text:#242422;
+  --acc-soft:#F0F0EC;
+  --acc-softer:#FAFAF8;
+  --acc-line:#E3E3DE;
+  --acc-line-2:#CBCBC4;
+
+  --paper:#FFFFFF;
+  --paper-fg:#141412;
+  --paper-2:#57574F;
+  --paper-3:#A3A39B;
+  --paper-line:#EBEBE5;
+
+  --shadow-win:0 1px 2px rgba(20,20,15,.04),0 18px 40px -30px rgba(20,20,15,.35);
+  --shadow-paper:0 1px 2px rgba(20,20,15,.05),0 12px 26px -22px rgba(20,20,15,.28);
+}
+
+html[data-accent="white"] .win[data-mode="dark"]{
+  --acc:#DCDCD7;
+  --acc-fg:#141416;
+
+  --bg-title:#141416;
+  --bg-side:#141416;
+  --bg-elev:#18181A;
+  --bg-canvas:#101012;
+  --bg-hover:#1E1E21;
+  --bg-press:#29292D;
+
+  --line:#252529;
+  --line-soft:#1E1E22;
+  --line-strong:#323237;
+
+  --fg-1:#EBEBE6;
+  --fg-2:#A5A59F;
+  --fg-3:#797974;
+  --fg-4:#595955;
+
+  --acc-text:#E6E6E0;
+  --acc-soft:#242428;
+  --acc-softer:#1D1D20;
+  --acc-line:#2F2F34;
+  --acc-line-2:#404047;
+
+  --paper:#EFEFEA;
+  --paper-fg:#171714;
+  --paper-2:#54544D;
+  --paper-3:#96968F;
+  --paper-line:#E1E1DA;
+
+  --shadow-win:0 1px 2px rgba(0,0,0,.5),0 28px 60px -34px rgba(0,0,0,.8);
+  --shadow-paper:0 2px 16px rgba(0,0,0,.34);
+}
+
 .win ::selection{background:var(--acc-soft);color:var(--fg-1);}
 .paper ::selection{background:color-mix(in srgb, var(--acc-paper) 14%, #FFFFFF);color:var(--paper-fg);}
 .win :focus-visible{outline:2px solid var(--acc-line-2);outline-offset:1px;}
@@ -576,6 +655,7 @@ body.mode-dark .sw[aria-pressed="true"]{background:#1F1F22;border-color:#303035;
       <button class="sw" data-a="indigo" aria-pressed="false"><i style="--c:#3B50B4"></i>靛</button>
       <button class="sw" data-a="pine" aria-pressed="false"><i style="--c:#2A6650"></i>松</button>
       <button class="sw" data-a="clay" aria-pressed="false"><i style="--c:#B2452C"></i>朱</button>
+      <button class="sw" data-a="white" aria-pressed="false"><i style="--c:#F4F4F1"></i>白</button>
     </div>
   </div>
 </header>
