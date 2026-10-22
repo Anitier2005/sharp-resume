@@ -20,6 +20,8 @@ export function ResumePanel() {
   const [zoom, setZoom] = useState(100);
   const [libOpen, setLibOpen] = useState(false);
   const [sheets, setSheets] = useState(1);
+  /** 当前纸宽下 A4 一页的高度（px），用来画分页线 */
+  const [a4Height, setA4Height] = useState(529);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -43,10 +45,12 @@ export function ResumePanel() {
     const paper = wrapRef.current?.firstElementChild as HTMLElement | null;
     if (!paper) return;
     const measure = () => {
-      const width = paper.clientWidth;
+      const width = paper.offsetWidth;
       if (!width) return;
-      const height = paper.scrollHeight;
-      setSheets(Math.max(1, height / (width * (297 / 210))));
+      const height = paper.offsetHeight;
+      const onePage = width * (297 / 210);
+      setA4Height(onePage);
+      setSheets(Math.max(1, height / onePage));
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -208,6 +212,11 @@ export function ResumePanel() {
             <Portfolio person={person} page={page} onPatchPage={patchPage} />
           ) : (
             <Paper person={person} page={page} onPatchPage={patchPage} onPatchBullet={patchBullet} />
+          )}
+          {sheets > 1.02 && (
+            <div className="paper-break" style={{ top: a4Height }} aria-hidden>
+              <span>A4</span>
+            </div>
           )}
         </div>
       </div>
