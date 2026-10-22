@@ -54,9 +54,14 @@
 ```bash
 npm install
 npm run dev        # 浏览器预览 http://localhost:1420
-npm run tauri:dev  # 桌面窗口（需要 Rust + MSVC Build Tools + WebView2）
+npm run tauri:dev  # 桌面窗口
 npm run tauri:build
 ```
+
+> **Windows 打包前提**：Rust 的 `x86_64-pc-windows-msvc` 目标需要 MSVC 编译器（`cl.exe`）。
+> 只装 Rust 不装 C++ 工具链时，`cargo check` 会报 `failed to find tool "cl.exe"`。
+> 装一次即可：Visual Studio Installer → 勾选「使用 C++ 的桌面开发」（约 2–3 GB）。
+> 打包产物在 `src-tauri/target/release/bundle/nsis/`。
 
 ## 数据
 
