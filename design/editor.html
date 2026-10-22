@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="zh-CN" data-accent="ink">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sharp Resume · Editor</title>
+<style>
+/* ==========================================================================
+   Sharp Resume · Editor 方向
+   参照编辑器语言的取舍：
+   1. 一个字号层级（12 / 11.5 / 10 / 9），不靠颜色拉层级
+   2. 分隔只用 1px 发丝线，容器不再套容器
+   3. 强调色只出现在「发送」和「当前页签」，其余全是中性灰
+   4. 圆角 4–8px，投影几乎为零
+   ========================================================================== */
+:root{
+  --ui:"Segoe UI Variable Text","Segoe UI",-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --mono:"SF Mono","Cascadia Mono",Consolas,ui-monospace,monospace;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;height:100%;}
+body{
+  background:#F4F4F2;
+  color:#1A1A18;
+  font-family:var(--ui);
+  font-size:12px;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;}
+
+/* ---------- 展示外壳 ---------- */
+.bar{
+  height:50px;
+  display:flex;align-items:center;gap:16px;
+  padding:0 20px;
+  background:#fff;
+  border-bottom:1px solid #E7E7E3;
+}
+.bar-name{font-size:12px;font-weight:600;letter-spacing:-.01em;}
+.bar-name span{font-weight:400;color:#A0A09A;margin-left:2px;}
+.bar-desc{font-size:11px;color:#8E8E88;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.accents{margin-left:auto;display:flex;align-items:center;gap:8px;}
+.accents span{font-size:9.5px;color:#A8A8A2;margin-right:2px;}
+.dot{width:11px;height:11px;border-radius:50%;border:1px solid rgba(0,0,0,.12);}
+.dot[data-a="ink"]{background:#131311;}
+.dot[data-a="blue"]{background:#2F5BD8;}
+.dot[data-a="green"]{background:#2E6B4F;}
+.dot[aria-pressed="true"]{box-shadow:0 0 0 2px #fff,0 0 0 3px rgba(0,0,0,.22);}
+.stage{padding:22px;display:flex;justify-content:center;}
+
+/* ---------- 窗口 ---------- */
+.win{
+  --accent:#131311;
+  width:100%;
+  max-width:1240px;
+  height:720px;
+  display:flex;
+  flex-direction:column;
+  background:#fff;
+  border:1px solid #E2E2DE;
+  border-radius:10px;
+  overflow:hidden;
+  box-shadow:0 1px 3px rgba(20,20,15,.06),0 18px 40px -32px rgba(20,20,15,.35);
+}
+[data-accent="blue"] .win{--accent:#2F5BD8;}
+[data-accent="green"] .win{--accent:#2E6B4F;}
+
+.titlebar{
+  height:30px;flex:none;
+  display:flex;align-items:center;gap:8px;
+  padding:0 4px 0 14px;
+  background:#F7F7F5;
+  border-bottom:1px solid #E7E7E3;
+  font-size:11px;color:#6E6E68;
+}
+.titlebar .doc-name{color:#3A3A36;}
+.winbtns{margin-left:auto;display:flex;}
+.winbtns button{
+  width:34px;height:30px;
+  display:grid;place-items:center;
+  color:#7C7C76;
+}
+.winbtns button:hover{background:#ECECE8;}
+.winbtns button:last-child:hover{background:#E5484D;color:#fff;}
+
+.app{flex:1;min-height:0;display:grid;grid-template-columns:240px minmax(0,1fr) 420px;}
+
+/* ---------- 侧栏 ---------- */
+.side{
+  display:flex;flex-direction:column;
+  background:#FAFAF8;
+  border-right:1px solid #E7E7E3;
+  padding:8px 7px 6px;
+  min-width:0;
+  overflow-y:auto;
+  scrollbar-width:thin;
+  scrollbar-color:#DCDCD6 transparent;
+}
+.row{
+  display:flex;align-items:center;gap:7px;
+  width:100%;height:28px;
+  padding:0 7px;
+  border-radius:5px;
+  font-size:12px;
+  color:#4A4A45;
+  text-align:left;
+}
+.row:hover{background:#F0F0EC;}
+.row svg{flex:none;color:#8E8E88;}
+.row.em{color:#2A2A26;}
+
+.sec{
+  display:flex;align-items:center;
+  margin:14px 0 4px;
+  padding:0 7px;
+  font-size:10px;
+  letter-spacing:.04em;
+  color:#A0A09A;
+}
+.sec button{margin-left:auto;color:#B4B4AE;display:grid;place-items:center;width:16px;height:16px;border-radius:4px;}
+.sec button:hover{background:#EDEDE9;color:#4A4A45;}
+
+.person{height:28px;}
+.person .n{margin-left:auto;font-size:9.5px;color:#B0B0AA;font-variant-numeric:tabular-nums;}
+.person .chev{transition:transform .18s ease;color:#B4B4AE;}
+.person.open .chev{transform:rotate(90deg);}
+
+.subs{list-style:none;margin:0;padding:0 0 2px;}
+.item{
+  display:flex;align-items:center;gap:8px;
+  height:26px;
+  padding:0 7px 0 27px;
+  border-radius:5px;
+  font-size:11.5px;
+  color:#5A5A55;
+  cursor:default;
+}
+.item:hover{background:#F2F2EE;color:#2A2A26;}
+.item.on{background:#EBEBE6;color:#161614;}
+.item .pg{
+  margin-left:auto;
+  font-size:9px;
+  letter-spacing:.06em;
+  color:#B4B4AE;
+  font-variant-numeric:tabular-nums;
+}
+.item.on .pg{color:#8E8E88;}
+.new-res{
+  display:flex;align-items:center;gap:6px;
+  height:26px;
+  margin:2px 7px 0 27px;
+  padding:0 7px;
+  border-radius:5px;
+  font-size:10.5px;
+  color:#A8A8A2;
+}
+.new-res:hover{background:#F2F2EE;color:#4A4A45;}
+
+.side-foot{
+  margin-top:auto;
+  display:flex;align-items:center;gap:6px;
+  padding:8px 8px 2px;
+  border-top:1px solid #EDEDE9;
+  font-size:10px;
+  color:#A0A09A;
+}
+.live{width:4px;height:4px;border-radius:50%;background:#9CB3A4;}
+
+/* ---------- 会话 ---------- */
+.chat{display:flex;flex-direction:column;min-width:0;background:#fff;}
+.chat-head{
+  height:40px;flex:none;
+  display:flex;align-items:center;gap:6px;
+  padding:0 14px;
+  border-bottom:1px solid #E7E7E3;
+  font-size:11.5px;
+  color:#8E8E88;
+}
+.crumb{display:flex;align-items:center;gap:5px;min-width:0;}
+.crumb b{font-weight:400;color:#2A2A26;}
+.crumb .sep{color:#C4C4BE;}
+.chat-head .model{
+  margin-left:auto;
+  display:flex;align-items:center;gap:4px;
+  height:22px;padding:0 7px;
+  border-radius:5px;
+  font-size:10.5px;
+  color:#7C7C76;
+}
+.chat-head .model:hover{background:#F2F2EE;color:#2A2A26;}
+
+.thread{
+  flex:1;min-height:0;overflow:hidden;
+  display:flex;flex-direction:column;gap:22px;
+  padding:22px 26px 8px;
+}
+.thread-in{width:100%;max-width:620px;margin:0 auto;display:flex;flex-direction:column;gap:22px;}
+
+.turn-user{display:flex;flex-direction:column;gap:8px;}
+.attach{
+  display:inline-flex;align-items:center;gap:6px;
+  align-self:flex-start;
+  height:26px;padding:0 8px;
+  border:1px solid #E7E7E3;
+  border-radius:5px;
+  background:#fff;
+  font-size:10.5px;
+  color:#5A5A55;
+  max-width:100%;
+}
+.attach .sz{color:#A8A8A2;font-variant-numeric:tabular-nums;}
+.prompt{
+  padding:10px 12px;
+  border-radius:7px;
+  background:#F6F6F2;
+  font-size:12px;
+  line-height:1.72;
+  color:#22221E;
+}
+
+.turn-ai{display:flex;flex-direction:column;gap:10px;}
+.tool{display:flex;align-items:center;gap:6px;font-size:10.5px;color:#8E8E88;}
+.tool svg{flex:none;color:#B0B0AA;}
+.turn-ai p{margin:0;font-size:12px;line-height:1.78;color:#2E2E2A;}
+.turn-ai p.dim{color:#7C7C76;}
+
+.change{
+  padding-left:11px;
+  border-left:1px solid #DCDCD6;
+}
+.change .lb{display:block;margin-bottom:5px;font-size:9.5px;letter-spacing:.06em;color:#A8A8A2;}
+.change .old{
+  display:block;
+  font-size:11.5px;line-height:1.7;
+  color:#B0B0AA;
+  text-decoration:line-through;
+  text-decoration-color:#D2D2CC;
+}
+.change .new{
+  display:block;
+  margin-top:2px;
+  font-size:12px;line-height:1.7;
+  color:#161614;
+}
+.change .new b{font-weight:600;}
+
+.acts{display:flex;flex-direction:column;margin-top:4px;border-top:1px solid #EDEDE9;}
+.act{
+  display:flex;align-items:center;gap:8px;
+  height:31px;
+  border-bottom:1px solid #EDEDE9;
+  font-size:11.5px;
+  color:#5A5A55;
+  text-align:left;
+}
+.act:hover{color:#161614;}
+.act svg{color:#B0B0AA;}
+.act:hover svg{color:#6E6E68;}
+
+.composer{flex:none;padding:10px 26px 12px;}
+.composer-in{width:100%;max-width:620px;margin:0 auto;}
+.box{
+  border:1px solid #E4E4DE;
+  border-radius:8px;
+  background:#fff;
+  padding:10px 10px 7px 12px;
+  box-shadow:0 1px 2px rgba(20,20,15,.04);
+  transition:border-color .15s ease;
+}
+.box:hover{border-color:#D6D6D0;}
+.ph{height:38px;font-size:12px;color:#ADADA6;line-height:1.6;}
+.bar-row{display:flex;align-items:center;gap:8px;}
+.plus{
+  width:20px;height:20px;flex:none;
+  display:grid;place-items:center;
+  border:1px solid #E7E7E3;
+  border-radius:5px;
+  color:#7C7C76;
+}
+.plus:hover{background:#F2F2EE;color:#2A2A26;}
+.pick{display:flex;align-items:center;gap:4px;font-size:10.5px;color:#8E8E88;}
+.pick:hover{color:#2A2A26;}
+.send{
+  margin-left:auto;
+  width:22px;height:22px;
+  display:grid;place-items:center;
+  border-radius:50%;
+  background:var(--accent);
+  color:#fff;
+}
+.send:hover{filter:brightness(1.15);}
+.hint{
+  margin-top:7px;
+  text-align:center;
+  font-size:9.5px;
+  color:#B4B4AE;
+}
+
+/* ---------- 简历 ---------- */
+.doc{display:flex;flex-direction:column;min-width:0;background:#fff;border-left:1px solid #E7E7E3;}
+.tabs{
+  height:40px;flex:none;
+  display:flex;align-items:center;gap:2px;
+  padding:0 10px;
+  border-bottom:1px solid #E7E7E3;
+}
+.tab{
+  position:relative;
+  height:40px;
+  padding:0 9px;
+  font-size:11.5px;
+  color:#8E8E88;
+  white-space:nowrap;
+}
+.tab:hover{color:#2A2A26;}
+.tab.on{color:#161614;}
+.tab.on::after{
+  content:"";position:absolute;left:9px;right:9px;bottom:0;height:1.5px;
+  background:var(--accent);
+}
+.tab-add{width:22px;height:22px;display:grid;place-items:center;border-radius:5px;color:#A8A8A2;font-size:14px;line-height:1;}
+.tab-add:hover{background:#F2F2EE;color:#2A2A26;}
+.export{
+  margin-left:auto;
+  display:flex;align-items:center;gap:4px;
+  height:24px;padding:0 7px;
+  border-radius:5px;
+  font-size:10.5px;
+  color:#7C7C76;
+}
+.export:hover{background:#F2F2EE;color:#2A2A26;}
+
+.canvas{
+  flex:1;min-height:0;
+  display:flex;justify-content:center;
+  padding:20px;
+  background:#FAFAF8;
+  overflow:hidden;
+}
+.paper{
+  width:100%;max-width:374px;min-height:528px;
+  align-self:flex-start;
+  padding:32px 34px 34px;
+  background:#fff;
+  border:1px solid #EBEBE6;
+  border-radius:3px;
+  box-shadow:0 1px 2px rgba(20,20,15,.04);
+}
+.p-name{font-size:21px;font-weight:600;letter-spacing:.14em;line-height:1.2;color:#141412;}
+.p-role{margin-top:8px;font-size:8.5px;letter-spacing:.22em;text-transform:uppercase;color:#A8A8A2;}
+.p-meta{margin-top:11px;font-size:9px;color:#A8A8A2;}
+.p-rule{height:1px;background:#EDEDE9;margin:16px 0 15px;}
+.p-sec + .p-sec{margin-top:16px;}
+.p-sec-title{margin-bottom:8px;font-size:9px;font-weight:500;letter-spacing:.14em;color:#8E8E88;}
+.p-item + .p-item{margin-top:11px;}
+.p-line{display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
+.p-line b{font-size:10.5px;font-weight:600;color:#1E1E1A;}
+.p-line span{font-size:8.5px;color:#B0B0AA;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.p-item p{margin:4px 0 0;font-size:9.5px;line-height:1.9;color:#5A5A55;}
+
+.doc-foot{
+  height:22px;flex:none;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 12px;
+  border-top:1px solid #EDEDE9;
+  background:#FAFAF8;
+  font-size:9px;
+  color:#A8A8A2;
+  font-variant-numeric:tabular-nums;
+}
+
+@media (max-width:1160px){
+  .app{grid-template-columns:220px minmax(0,1fr) 380px;}
+  .bar-desc{display:none;}
+}
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="bar-name">Sharp Resume<span>· Editor</span></div>
+  <p class="bar-desc">一个字号、一条发丝线、黑色作为唯一强调 —— 容器不再套容器。</p>
+  <div class="accents">
+    <span>强调色</span>
+    <button class="dot" data-a="ink" aria-pressed="true" aria-label="黑"></button>
+    <button class="dot" data-a="blue" aria-pressed="false" aria-label="靛蓝"></button>
+    <button class="dot" data-a="green" aria-pressed="false" aria-label="墨绿"></button>
+  </div>
+</header>
+
+<main class="stage">
+  <div class="win">
+
+    <div class="titlebar">
+      <span class="doc-name">字节 · 产品设计师</span>
+      <span>— Sharp Resume</span>
+      <div class="winbtns">
+        <button aria-label="最小化"><svg width="10" height="10" viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" stroke-width="1"/></svg></button>
+        <button aria-label="最大化"><svg width="10" height="10" viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg></button>
+        <button aria-label="关闭"><svg width="10" height="10" viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1"/></svg></button>
+      </div>
+    </div>
+
+    <div class="app">
+
+      <!-- 侧栏 -->
+      <aside class="side">
+        <button class="row em">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          新建简历
+        </button>
+        <button class="row">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+          搜索
+        </button>
+
+        <div class="sec">
+          候选人
+          <button aria-label="新建候选人">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+
+        <button class="row person open">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+          林夏
+          <span class="n">3</span>
+          <svg class="chev" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+
+        <ul class="subs">
+          <li class="item on">字节 · 产品设计师<span class="pg">中 · EN</span></li>
+          <li class="item">通用版 · 产品设计师<span class="pg">中</span></li>
+          <li class="item">英文投递版<span class="pg">EN</span></li>
+          <div class="new-res">+ 新建简历</div>
+        </ul>
+
+        <button class="row person">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+          陈默
+          <span class="n">2</span>
+          <svg class="chev" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+
+        <ul class="subs">
+          <li class="item">腾讯 · 后端工程师<span class="pg">中 · EN</span></li>
+          <li class="item">通用版 · 后端<span class="pg">中</span></li>
+        </ul>
+
+        <button class="row person">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+          周识
+          <span class="n">2</span>
+          <svg class="chev" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+
+        <button class="row person">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+          何以安
+          <span class="n">1</span>
+          <svg class="chev" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+
+        <button class="row person">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+          苏黎
+          <span class="n">1</span>
+          <svg class="chev" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+
+        <button class="row person">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+          郑野
+          <span class="n">2</span>
+          <svg class="chev" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+
+        <button class="row person">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+          白露
+          <span class="n">1</span>
+          <svg class="chev" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+
+        <button class="row person">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+          顾南
+          <span class="n">3</span>
+          <svg class="chev" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+
+        <div class="side-foot"><span class="live"></span>本地工作区</div>
+      </aside>
+
+      <!-- 会话 -->
+      <section class="chat">
+        <header class="chat-head">
+          <div class="crumb">
+            <span>林夏</span>
+            <svg class="sep" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+            <b>字节 · 产品设计师</b>
+          </div>
+          <button class="model">
+            Sonnet 4.5
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        </header>
+
+        <div class="thread">
+          <div class="thread-in">
+
+            <div class="turn-user">
+              <div class="attach">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/></svg>
+                JD · 字节跳动 · 产品设计.pdf
+                <span class="sz">248 KB</span>
+              </div>
+              <div class="prompt">按这个 JD 调一版，重点突出 B 端和复杂业务。</div>
+            </div>
+
+            <div class="turn-ai">
+              <div class="tool">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg>
+                已解析 JD · 提取 12 个关键词
+              </div>
+              <p>读完了。JD 里三次提到「复杂业务抽象」，但你第二段只写了视觉产出。</p>
+              <div class="change">
+                <span class="lb">第 2 段 · 字节跳动</span>
+                <span class="old">负责投放平台的设计体系，主导 3 个核心模块重构。</span>
+                <span class="new">主导投放平台配置链路重构，把 11 步压缩到 4 步，客户自助率 <b>＋32%</b>。</span>
+              </div>
+              <div class="acts">
+                <button class="act">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg>
+                  应用到第 2 段
+                </button>
+                <button class="act">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                  我再补一条数据
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="composer">
+          <div class="composer-in">
+            <div class="box">
+              <div class="ph">描述你想改的地方，或拖入 JD、旧简历…</div>
+              <div class="bar-row">
+                <button class="plus" aria-label="添加文件">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                </button>
+                <button class="pick">
+                  Sonnet 4.5
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <button class="send" aria-label="发送">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="hint">Enter 发送 · Shift + Enter 换行</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 简历 -->
+      <section class="doc">
+        <div class="tabs">
+          <button class="tab on">中文简历</button>
+          <button class="tab">English</button>
+          <button class="tab">作品集</button>
+          <button class="tab-add" aria-label="新增页面">+</button>
+          <button class="export">
+            导出
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        </div>
+
+        <div class="canvas">
+          <article class="paper">
+            <div class="p-name">林 夏</div>
+            <div class="p-role">Product Designer</div>
+            <div class="p-meta">linxia@mail.com · 上海 · 5 年经验</div>
+            <div class="p-rule"></div>
+
+            <div class="p-sec">
+              <div class="p-sec-title">工作经历</div>
+              <div class="p-item">
+                <div class="p-line"><b>字节跳动 · 商业化产品设计</b><span>2021.06 — 至今</span></div>
+                <p>负责 B 端投放平台的设计体系，主导 3 个核心模块重构；<br/>投放配置流程 11 步 → 4 步，客户自助率提升 32%。</p>
+              </div>
+              <div class="p-item">
+                <div class="p-line"><b>小红书 · 产品设计</b><span>2019.07 — 2021.05</span></div>
+                <p>创作者工具从 0 到 1，组件库覆盖 80% 页面。</p>
+              </div>
+            </div>
+
+            <div class="p-sec">
+              <div class="p-sec-title">项目</div>
+              <div class="p-item">
+                <div class="p-line"><b>投放平台 · 配置链路重构</b><span>2023</span></div>
+                <p>把 7 个分散配置页收敛为一个流程，抽象出 4 类可复用业务模型。</p>
+              </div>
+            </div>
+
+            <div class="p-sec">
+              <div class="p-sec-title">教育</div>
+              <div class="p-item">
+                <div class="p-line"><b>同济大学 · 工业设计</b><span>2015 — 2019</span></div>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="doc-foot"><span>第 1 页 / 共 1 页</span><span>1,240 字</span><span>90%</span></div>
+      </section>
+
+    </div>
+  </div>
+</main>
+
+<script>
+document.querySelectorAll('.dot').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    document.documentElement.dataset.accent = btn.dataset.a;
+    document.querySelectorAll('.dot').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b === btn));
+    });
+  });
+});
+</script>
+</body>
+</html>
