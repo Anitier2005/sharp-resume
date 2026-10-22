@@ -24,8 +24,11 @@ import type {
 type PageRefField = "experienceIds" | "projectIds";
 import { SEED } from "@/data/seed";
 import { loadWorkspace, saveWorkspace } from "@/lib/storage";
+import { uid } from "@/lib/uid";
+/* Provider 与 useWorkspace 必须从同一处导出（context 就定义在这里）；
+   Fast Refresh 会退化成整页刷新，桌面端可以接受 */
+/* eslint-disable react-refresh/only-export-components */
 
-const uid = (prefix: string) => `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
 
 type Action =
   | { type: "hydrate"; workspace: Workspace }
@@ -372,7 +375,8 @@ const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, SEED);
   const [ready, setReady] = useState(false);
-  const [saveState, setSaveState] = useState<SaveState>("idle");
+  // 上次落盘的快照：与 state 不是同一个对象即说明有未保存的改动，由它派生保存状态
+  const [savedSnapshot, setSavedSnapshot] = useState<Workspace | null>(null);
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const firstRun = useRef(true);
 
@@ -383,6 +387,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (!alive) return;
       if (saved && saved.version === 1 && saved.people?.length) {
         dispatch({ type: "hydrate", workspace: saved });
+        setSavedSnapshot(saved);
+      } else {
+        setSavedSnapshot(SEED);
       }
       setReady(true);
     });
@@ -413,24 +420,24 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [resume, resolvedPageId],
   );
 
-  // 自动保存
+  // 自动保存：改动后 500ms 落盘。保存状态由「快照是否还是当前 state」派生，不在 effect 里同步 setState
   useEffect(() => {
     if (!ready) return;
     if (firstRun.current) {
       firstRun.current = false;
       return;
     }
-    setSaveState("saving");
     const timer = window.setTimeout(() => {
       saveWorkspace(state)
-        .then(() => setSaveState("saved"))
+        .then(() => setSavedSnapshot(state))
         .catch((error) => {
           console.error("[storage] 保存失败", error);
-          setSaveState("idle");
         });
     }, 500);
     return () => window.clearTimeout(timer);
   }, [state, ready]);
+
+  const saveState: SaveState = !ready ? "idle" : savedSnapshot === state ? "saved" : "saving";
 
   const expanded = useMemo(() => new Set(state.ui.expanded ?? []), [state.ui.expanded]);
 

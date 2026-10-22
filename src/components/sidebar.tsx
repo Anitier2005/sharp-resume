@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
-import { useToast } from "@/components/ui/toast";
+import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem, MenuSep } from "@/components/ui/menu";
 import { ChevronRight, Plus, Search, User } from "@/components/ui/icons";
 import { pageShort, type Person, type Resume } from "@/types";

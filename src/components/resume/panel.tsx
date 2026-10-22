@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
-import { useToast } from "@/components/ui/toast";
+import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem, MenuSep } from "@/components/ui/menu";
 import { ChevronDown, Close, Layers, Plus } from "@/components/ui/icons";
 import { countChars, pageIndex } from "@/lib/doc";

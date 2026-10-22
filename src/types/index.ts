@@ -104,7 +104,7 @@ export interface ChangeItem {
   before: string;
   after: string;
   /** 绑定到某条经历的某一句，应用时写回共享库 */
-  target?: { experienceId: string; bulletIndex: number };
+  target?: { experienceId: string; bulletIndex: number; lang?: "zh" | "en" };
 }
 
 export interface ChatAction {
