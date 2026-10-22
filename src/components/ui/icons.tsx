@@ -67,6 +67,13 @@ export const ArrowUp = (p: IconProps) => (
   </svg>
 );
 
+export const ArrowDown = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 2.2, ...p })}>
+    <path d="M12 5v14" />
+    <path d="m6 13 6 6 6-6" />
+  </svg>
+);
+
 export const Close = (p: IconProps) => (
   <svg {...base({ strokeWidth: 2, ...p })}>
     <path d="M6 6l12 12M18 6L6 18" />

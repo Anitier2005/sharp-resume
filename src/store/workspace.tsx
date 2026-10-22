@@ -19,6 +19,9 @@ import type {
   ResumePage,
   Workspace,
 } from "@/types";
+
+/** 页面引用字段：决定「这一页放哪些经历 / 作品」 */
+type PageRefField = "experienceIds" | "projectIds";
 import { SEED } from "@/data/seed";
 import { loadWorkspace, saveWorkspace } from "@/lib/storage";
 
@@ -39,6 +42,25 @@ type Action =
   | { type: "removePage"; personId: string; resumeId: string; pageId: string }
   | { type: "updatePage"; personId: string; resumeId: string; pageId: string; patch: Partial<ResumePage> }
   | { type: "updateExperience"; personId: string; expId: string; patch: Partial<Experience> }
+  | { type: "patchPerson"; personId: string; patch: Partial<Person> }
+  | { type: "removeExperience"; personId: string; expId: string }
+  | {
+      type: "togglePageItem";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      field: PageRefField;
+      itemId: string;
+    }
+  | {
+      type: "movePageItem";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      field: PageRefField;
+      itemId: string;
+      dir: -1 | 1;
+    }
   | { type: "appendMessage"; personId: string; resumeId: string; message: ChatMessage }
   | { type: "patchMessage"; personId: string; resumeId: string; messageId: string; patch: Partial<ChatMessage> };
 
@@ -253,6 +275,62 @@ function reducer(state: Workspace, action: Action): Workspace {
               },
         ),
       };
+
+    /** 批量改「人」这一级：增删经历 / 作品 / 教育 / 技能都走这里 */
+    case "patchPerson":
+      return {
+        ...state,
+        people: state.people.map((person) =>
+          person.id !== action.personId ? person : { ...person, ...action.patch },
+        ),
+      };
+
+    /** 删一段经历：同时把它从这个人所有简历的所有页面里摘掉，避免悬空引用 */
+    case "removeExperience":
+      return {
+        ...state,
+        people: state.people.map((person) => {
+          if (person.id !== action.personId) return person;
+          return {
+            ...person,
+            experiences: person.experiences.filter((item) => item.id !== action.expId),
+            resumes: person.resumes.map((resume) => ({
+              ...resume,
+              pages: resume.pages.map((page) => ({
+                ...page,
+                experienceIds: page.experienceIds.filter((id) => id !== action.expId),
+              })),
+            })),
+          };
+        }),
+      };
+
+    case "togglePageItem":
+      return mapResume(state, action.personId, action.resumeId, (resume) => ({
+        ...resume,
+        pages: resume.pages.map((page) => {
+          if (page.id !== action.pageId) return page;
+          const list = page[action.field];
+          const next = list.includes(action.itemId)
+            ? list.filter((id) => id !== action.itemId)
+            : [...list, action.itemId];
+          return { ...page, [action.field]: next };
+        }),
+      }));
+
+    case "movePageItem":
+      return mapResume(state, action.personId, action.resumeId, (resume) => ({
+        ...resume,
+        pages: resume.pages.map((page) => {
+          if (page.id !== action.pageId) return page;
+          const list = [...page[action.field]];
+          const from = list.indexOf(action.itemId);
+          const to = from + action.dir;
+          if (from < 0 || to < 0 || to >= list.length) return page;
+          [list[from], list[to]] = [list[to], list[from]];
+          return { ...page, [action.field]: list };
+        }),
+      }));
 
     case "appendMessage":
       return mapResume(state, action.personId, action.resumeId, (resume) => ({

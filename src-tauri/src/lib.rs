@@ -60,6 +60,12 @@ fn save_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|error| format!("写入文件失败：{error}"))
 }
 
+/// 把二进制写到用户选择的任意路径（导出 DOCX 用；前端传字节数组）。
+#[tauri::command]
+fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    std::fs::write(&path, data).map_err(|error| format!("写入文件失败：{error}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -69,7 +75,8 @@ pub fn run() {
             app_info,
             read_state,
             write_state,
-            save_text_file
+            save_text_file,
+            save_binary_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sharp Resume");

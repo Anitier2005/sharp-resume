@@ -2,19 +2,23 @@ import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { useToast } from "@/components/ui/toast";
 import { Dropdown, MenuItem, MenuSep } from "@/components/ui/menu";
-import { ChevronDown, Close, Plus } from "@/components/ui/icons";
+import { ChevronDown, Close, Layers, Plus } from "@/components/ui/icons";
 import { countChars, pageIndex } from "@/lib/doc";
-import { pageToMarkdown, printPage, resumeToMarkdown, saveText } from "@/lib/export";
+import { pageToMarkdown, printPage, resumeToMarkdown, saveBytes, saveText } from "@/lib/export";
+import { pageToDocx } from "@/lib/docx";
 import { PAGE_KIND_LABEL, type PageKind } from "@/types";
+import { LibraryDrawer } from "@/components/library/drawer";
 import { Paper } from "./paper";
 import { Portfolio } from "./portfolio";
 
 const KIND_OPTIONS: PageKind[] = ["zh", "en", "portfolio"];
 
 export function ResumePanel() {
-  const { person, resume, page, activePageId, setActivePageId, dispatch, saveState } = useWorkspace();
+  const { state, person, resume, page, activePageId, setActivePageId, dispatch, saveState } =
+    useWorkspace();
   const toast = useToast();
   const [zoom, setZoom] = useState(100);
+  const [libOpen, setLibOpen] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
   // 窗口变窄时自动缩小，保证纸面完整
@@ -122,6 +126,16 @@ export function ResumePanel() {
           ))}
         </Dropdown>
 
+        <button
+          type="button"
+          className="tabs-btn"
+          onClick={() => setLibOpen(true)}
+          title="编辑共享经历与作品，勾选本页用哪些"
+        >
+          <Layers size={11} />
+          经历库
+        </button>
+
         <span className="tabs-fill" />
 
         <Dropdown
@@ -135,6 +149,20 @@ export function ResumePanel() {
         >
           <MenuItem label="打印 / 存为 PDF" hint="当前页" onSelect={printPage} />
           <MenuSep />
+          <MenuItem
+            label="Word · 当前页"
+            hint=".docx"
+            onSelect={() => {
+              const bytes = pageToDocx(person, page, state.ui.accent);
+              void saveBytes(
+                `${person.name}-${page.label}.docx`,
+                bytes,
+                "Word 文档",
+                ["docx"],
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              ).then((path) => path && toast("已导出 Word"));
+            }}
+          />
           <MenuItem
             label="Markdown · 当前页"
             onSelect={() => {
@@ -152,7 +180,7 @@ export function ResumePanel() {
             }}
           />
           <MenuSep />
-          <MenuItem label="Word / 图片" hint="待接入" onSelect={() => toast("导出 Word 还没接，先用 PDF")} />
+          <MenuItem label="PNG 图片" hint="待接入" onSelect={() => toast("图片导出还没接，先用 PDF")} />
         </Dropdown>
       </div>
 
@@ -195,6 +223,8 @@ export function ResumePanel() {
           </button>
         </div>
       </div>
+
+      <LibraryDrawer open={libOpen} onClose={() => setLibOpen(false)} />
     </section>
   );
 }

@@ -92,6 +92,33 @@ export async function saveText(defaultName: string, content: string): Promise<st
   return defaultName;
 }
 
+/** 保存二进制（DOCX 等）：桌面端弹系统保存框，浏览器端走下载 */
+export async function saveBytes(
+  defaultName: string,
+  bytes: Uint8Array,
+  filterName: string,
+  extensions: string[],
+  mime = "application/octet-stream",
+): Promise<string | null> {
+  if (isTauri()) {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const path = await save({ defaultPath: defaultName, filters: [{ name: filterName, extensions }] });
+    if (!path) return null;
+    await invoke("save_binary_file", { path, data: Array.from(bytes) });
+    return path;
+  }
+
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  const blob = new Blob([buffer as ArrayBuffer], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = defaultName;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return defaultName;
+}
+
 /** 打印当前页；在系统对话框里选「另存为 PDF」即导出 */
 export function printPage(): void {
   window.print();
