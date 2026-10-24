@@ -36,6 +36,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   /* 组件强调色（默认中性） */
   --acc:#242422;
   --acc-fg:#FFFFFF;
+  /* 纸面强调色：恒定中性深灰，不随主题（accent）也不随明暗改变 */
   --acc-paper:#242422;
 
   /* 表面：只有明暗两套，不参与主题 */
@@ -88,11 +89,14 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   overflow:hidden;
 }
 
-/* 主题：只换强调色，表面保持白 */
-html[data-accent="white"]  .win{--acc:#242422;--acc-paper:#242422;}
-html[data-accent="indigo"] .win{--acc:#3B50B4;--acc-paper:#3B50B4;}
-html[data-accent="pine"]   .win{--acc:#2A6650;--acc-paper:#2A6650;}
-html[data-accent="clay"]   .win{--acc:#B2452C;--acc-paper:#B2452C;}
+/* 主题：只换强调色，表面保持白。
+   --acc-paper 不参与主题覆盖——纸面上的元素（抬头职位、小节标题、
+   分页虚线、作品缩略图底纹、编辑焦点底色）必须恒定，否则同一份简历
+   换个主题颜色就变了，导出结果也会跟着变。 */
+html[data-accent="white"]  .win{--acc:#242422;}
+html[data-accent="indigo"] .win{--acc:#3B50B4;}
+html[data-accent="pine"]   .win{--acc:#2A6650;}
+html[data-accent="clay"]   .win{--acc:#B2452C;}
 
 /* 深色：表面换成石墨，组件强调色换成同色相的亮色 */
 .win[data-mode="dark"]{
