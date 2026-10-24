@@ -47,7 +47,13 @@ export function Sidebar() {
         className="row em"
         onClick={() => {
           const target = person ?? state.people[0];
-          if (!target) return;
+          // 全新安装时一个人都没有，直接建简历会无处挂载 —— 改为建第一位候选人
+          // （createPerson 会连带创建「通用版」简历与首页），用户不会点了没反应。
+          if (!target) {
+            dispatch({ type: "createPerson" });
+            toast("已新建第一位候选人与简历");
+            return;
+          }
           dispatch({ type: "createResume", personId: target.id });
           toast("已新建简历");
         }}
@@ -199,7 +205,13 @@ export function Sidebar() {
           );
         })}
 
-        {people.length === 0 && <div className="side-empty">没有匹配的结果</div>}
+        {people.length === 0 && (
+          <div className="side-empty">
+            {state.people.length === 0
+              ? "还没有候选人。点上方「新建简历」写下第一份。"
+              : "没有匹配的结果"}
+          </div>
+        )}
       </div>
 
       <div className="side-foot">

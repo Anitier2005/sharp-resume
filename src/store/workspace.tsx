@@ -23,6 +23,7 @@ import type {
 /** 页面引用字段：决定「这一页放哪些经历 / 作品」 */
 type PageRefField = "experienceIds" | "projectIds";
 import { SEED } from "@/data/seed";
+import { EMPTY_WORKSPACE } from "@/data/empty";
 import { loadWorkspace, saveWorkspace } from "@/lib/storage";
 import { uid } from "@/lib/uid";
 /* Provider 与 useWorkspace 必须从同一处导出（context 就定义在这里）；
@@ -372,8 +373,17 @@ interface WorkspaceContextValue {
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
+/**
+ * 初始工作区：开发构建给示例数据便于调样式，生产构建给空白工作区。
+ *
+ * 用三元表达式而非 if 分支，是为了让 Vite 在构建期把 import.meta.env.DEV
+ * 折叠成 false，`false ? SEED : EMPTY_WORKSPACE` 随之化简为 EMPTY_WORKSPACE，
+ * 未被引用的 seed.ts 就被 tree-shake 掉 —— 发布产物里不含任何示例简历。
+ */
+const INITIAL_WORKSPACE: Workspace = import.meta.env.DEV ? SEED : EMPTY_WORKSPACE;
+
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, SEED);
+  const [state, dispatch] = useReducer(reducer, INITIAL_WORKSPACE);
   const [ready, setReady] = useState(false);
   // 上次落盘的快照：与 state 不是同一个对象即说明有未保存的改动，由它派生保存状态
   const [savedSnapshot, setSavedSnapshot] = useState<Workspace | null>(null);
@@ -389,7 +399,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "hydrate", workspace: saved });
         setSavedSnapshot(saved);
       } else {
-        setSavedSnapshot(SEED);
+        setSavedSnapshot(INITIAL_WORKSPACE);
       }
       setReady(true);
     });
