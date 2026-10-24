@@ -1,4 +1,4 @@
-import { ACCENTS } from "@/types";
+import { ACCENTS, TEXT_SCALES } from "@/types";
 import { useWorkspace } from "@/store/workspace";
 import { isTauri } from "@/lib/storage";
 import { useToast } from "@/components/ui/toast-context";
@@ -14,10 +14,11 @@ async function windowAction(action: "minimize" | "maximize" | "close") {
 }
 
 export function TitleBar() {
-  const { state, resume, dispatch } = useWorkspace();
+  const { state, resume, dispatch, textScale, systemTextScale, setTextScale } = useWorkspace();
   const toast = useToast();
   const desktop = isTauri();
   const { accent, mode } = state.ui;
+  const autoScale = state.ui.textScale == null;
 
   const run = (action: "minimize" | "maximize" | "close") => {
     if (!desktop) {
@@ -39,7 +40,7 @@ export function TitleBar() {
 
       <div className="titlebar-right">
         <Dropdown
-          width={186}
+          width={222}
           trigger={
             <button type="button" className="appearance" aria-label="外观">
               <span
@@ -80,6 +81,28 @@ export function TitleBar() {
                 onClick={() => dispatch({ type: "setAccent", accent: item.key })}
               >
                 <i style={{ background: item.color }} />
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <MenuSep />
+          <MenuLabel>字号 · {Math.round(textScale * 100)}%</MenuLabel>
+          <div className="menu-seg">
+            <button
+              type="button"
+              aria-pressed={autoScale}
+              onClick={() => setTextScale(null)}
+              title={`跟随系统文本大小（当前 ${Math.round(systemTextScale * 100)}%）`}
+            >
+              自动
+            </button>
+            {TEXT_SCALES.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                aria-pressed={state.ui.textScale === item.value}
+                onClick={() => setTextScale(item.value)}
+              >
                 {item.label}
               </button>
             ))}

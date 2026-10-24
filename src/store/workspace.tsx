@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -19,12 +20,13 @@ import type {
   ResumePage,
   Workspace,
 } from "@/types";
+import { AUTO_TEXT_SCALE_FLOOR } from "@/types";
 
 /** 页面引用字段：决定「这一页放哪些经历 / 作品」 */
 type PageRefField = "experienceIds" | "projectIds";
 import { SEED } from "@/data/seed";
 import { EMPTY_WORKSPACE } from "@/data/empty";
-import { loadWorkspace, saveWorkspace } from "@/lib/storage";
+import { loadWorkspace, saveWorkspace, isTauri } from "@/lib/storage";
 import { uid } from "@/lib/uid";
 /* Provider 与 useWorkspace 必须从同一处导出（context 就定义在这里）；
    Fast Refresh 会退化成整页刷新，桌面端可以接受 */
@@ -38,6 +40,7 @@ type Action =
   | { type: "selectResume"; personId: string; resumeId: string }
   | { type: "setAccent"; accent: AccentKey }
   | { type: "setMode"; mode: "light" | "dark" }
+  | { type: "setTextScale"; textScale: number | null }
   | { type: "createPerson" }
   | { type: "createResume"; personId: string }
   | { type: "renameResume"; personId: string; resumeId: string; title: string }
@@ -150,6 +153,9 @@ function reducer(state: Workspace, action: Action): Workspace {
 
     case "setMode":
       return { ...state, ui: { ...state.ui, mode: action.mode } };
+
+    case "setTextScale":
+      return { ...state, ui: { ...state.ui, textScale: action.textScale } };
 
     case "createPerson": {
       const id = uid("p");
@@ -369,6 +375,11 @@ interface WorkspaceContextValue {
   toggleExpanded: (personId: string) => void;
   saveState: SaveState;
   ready: boolean;
+  /** 实际生效的 UI 字号倍率（已合并系统设置与用户档位） */
+  textScale: number;
+  /** 系统「文本大小」给出的倍率，已含可读下限 */
+  systemTextScale: number;
+  setTextScale: (value: number | null) => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -447,6 +458,34 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer);
   }, [state, ready]);
 
+  // 系统文本缩放：Windows「辅助功能 → 文本大小」不会自动传给网页，主动问一次。
+  // 非桌面端（浏览器预览）拿不到，用可读下限兜底。
+  const [systemTextScale, setSystemTextScale] = useState(AUTO_TEXT_SCALE_FLOOR);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let alive = true;
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<number>("text_scale"))
+      .then((value) => {
+        if (alive && Number.isFinite(value) && value > 0) setSystemTextScale(value);
+      })
+      .catch(() => {
+        /* 读不到就用下限，不影响可用性 */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // 用户选过档位就听用户的，否则自动跟随系统（下限已在 Rust 侧保证）。
+  const textScale = state.ui.textScale ?? systemTextScale;
+
+  // 落到根字号上：所有 rem 字号随之缩放。
+  // 用 layout effect 而不是 effect：在浏览器绘制前写入变量，避免档位切换时闪一帧旧字号。
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty("--text-scale", String(textScale));
+  }, [textScale]);
+
   const saveState: SaveState = !ready ? "idle" : savedSnapshot === state ? "saved" : "saving";
 
   const expanded = useMemo(() => new Set(state.ui.expanded ?? []), [state.ui.expanded]);
@@ -468,6 +507,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     toggleExpanded,
     saveState,
     ready,
+    textScale,
+    systemTextScale,
+    setTextScale: (value: number | null) =>
+      dispatch({ type: "setTextScale", textScale: value }),
   };
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

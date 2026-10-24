@@ -135,10 +135,27 @@ export interface Workspace {
     activeResumeId: string | null;
     /** 侧栏展开了哪些候选人 */
     expanded?: string[];
+    /**
+     * UI 字号倍率。缺省（undefined / null）表示自动：
+     * 跟随 Windows「文本大小」设置，且不低于可读下限。
+     * 用户在外观里选过档位后存入具体数值，之后不再受系统设置影响。
+     */
+    textScale?: number | null;
   };
 }
 
 export type AccentKey = "white" | "indigo" | "pine" | "clay";
+
+/** UI 字号档位。semantic 值直接作为 CSS 的 --text-scale。 */
+export const TEXT_SCALES: { key: string; label: string; value: number }[] = [
+  { key: "sm", label: "小", value: 1.05 },
+  { key: "md", label: "标准", value: 1.2 },
+  { key: "lg", label: "大", value: 1.35 },
+  { key: "xl", label: "特大", value: 1.5 },
+];
+
+/** 自动档取系统值与可读下限的较大者；应用内选过档位则用档位值。 */
+export const AUTO_TEXT_SCALE_FLOOR = 1.2;
 
 export const ACCENTS: { key: AccentKey; label: string; color: string }[] = [
   { key: "white", label: "白", color: "#FFFFFF" },

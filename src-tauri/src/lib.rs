@@ -17,6 +17,45 @@ struct AppInfo {
     portable: bool,
 }
 
+/// UI 字号的可读下限：初版设计主体只有 9–11.5px，偏小。
+/// 用户没动系统设置时也用这个值，保证默认就是可读的。
+const MIN_TEXT_SCALE: f64 = 1.2;
+
+/// 读取 Windows「设置 → 辅助功能 → 文本大小」的缩放系数。
+///
+/// 这个设置独立于显示缩放（DPI）：DPI 由 WebView2 自动处理，
+/// 而文本大小只会改注册表里的 TextScaleFactor，网页不会自动跟随，必须自己读。
+/// 未设置时返回 1.0（100%）。
+#[cfg(target_os = "windows")]
+fn system_text_scale() -> f64 {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let Ok(key) = hkcu.open_subkey(r"Software\Microsoft\Accessibility") else {
+        return 1.0;
+    };
+    let Ok(raw) = key.get_value::<u32, _>("TextScaleFactor") else {
+        return 1.0;
+    };
+    // 有效区间 100–225；越界视为未设置，避免脏注册表把界面撑爆
+    if !(100..=225).contains(&raw) {
+        return 1.0;
+    }
+    raw as f64 / 100.0
+}
+
+#[cfg(not(target_os = "windows"))]
+fn system_text_scale() -> f64 {
+    1.0
+}
+
+/// 返回系统文本缩放，前端据此决定 UI 字号倍率。
+#[tauri::command]
+fn text_scale() -> f64 {
+    system_text_scale().max(MIN_TEXT_SCALE)
+}
+
 /// 把窗口收进当前显示器的可用范围。
 ///
 /// tauri.conf.json 里写的是逻辑像素，在 125% / 150% 缩放的笔记本上换算成
@@ -202,6 +241,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            text_scale,
             read_state,
             write_state,
             reveal_data_dir,

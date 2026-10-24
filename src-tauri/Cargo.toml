@@ -24,3 +24,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# 读取 Windows「辅助功能 → 文本大小」的实际缩放值，供 UI 字号跟随。
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
