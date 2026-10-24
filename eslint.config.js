@@ -6,7 +6,9 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // src-tauri/target 下有 tauri-codegen 产出的压缩 JS，src-tauri/gen 是生成的
+  // ACL schema，两者都不是本项目源码；不忽略会让 `npm run lint` 报一堆解析错误。
+  globalIgnores(['dist', 'src-tauri/target', 'src-tauri/gen']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
