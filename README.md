@@ -100,14 +100,30 @@ npm run tauri:build
 
 > **Windows 打包前提**：Rust 的 `x86_64-pc-windows-msvc` 目标需要 MSVC 编译器（`cl.exe`）。
 > 只装 Rust 不装 C++ 工具链时，`cargo check` 会报 `failed to find tool "cl.exe"`。
-> 装一次即可：Visual Studio Installer → 勾选「使用 C++ 的桌面开发」（约 2–3 GB）。
-> 打包产物在 `src-tauri/target/release/bundle/nsis/`。
+> 装法：Visual Studio Installer → 勾选「使用 C++ 的桌面开发」。
+>
+> 装完 `cl.exe` 也不在 PATH 里，必须先跑 `vcvarsall`。本机只有 x86 宿主编译器（`Hostx86/x64`），
+> 所以参数是 `x86_amd64`，不是 `x64`：
+>
+> ```bat
+> call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x86_amd64
+> cd /d <repo>\src-tauri
+> cargo build --release
+> ```
+>
+> 产物是 `src-tauri/target/release/sharp-resume.exe`——单文件，前端资源已内嵌，
+> 拷到别的机器上双击就能跑（目标机需要 WebView2 Runtime，Win10 1803+ 与 Win11 自带）。
+> 要装到系统里再去掉 `--no-bundle` 的限制跑 `npm run tauri:build`，产物在 `src-tauri/target/release/bundle/nsis/`。
 
 ## 数据
 
 工作区是一个 JSON：`{ version, people[], ui{} }`。
 
-- 桌面端：`%APPDATA%\com.sharpresume.desktop\workspace.json`（由 Rust 侧读写）
+- 桌面端（便携）：**exe 同级的 `SharpResumeData\workspace.json`**
+  —— 整个目录可整体拷贝 / 备份 / 放 U 盘，数据跟着 exe 走。
+- 桌面端（回退）：若 exe 所在位置不可写（如 `Program Files`、只读介质），
+  自动回退到 `%LOCALAPPDATA%\com.sharpresume.desktop\workspace.json`。
+  旧版数据会自动复制一份到新位置，原文件保留。
 - 浏览器：`localStorage["sharp-resume:workspace:v1"]`
 
 首次启动写入 `src/data/seed.ts` 的示例数据（2 个完整候选人 + 6 个占位）。

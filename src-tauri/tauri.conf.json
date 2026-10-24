@@ -22,7 +22,8 @@
         "resizable": true,
         "decorations": false,
         "dragDropEnabled": false,
-        "shadow": true
+        "shadow": true,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu-sandbox"
       }
     ],
     "security": {

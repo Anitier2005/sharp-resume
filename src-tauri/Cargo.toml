@@ -10,6 +10,11 @@ rust-version = "1.77.2"
 name = "sharp_resume_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# 生产构建必须启用：把 dist/ 以 tauri:// 自定义协议内嵌进二进制。
+# 缺了它，release 版会去连 devUrl（localhost:1420），窗口只剩白屏。
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
