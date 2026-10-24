@@ -1,0 +1,38 @@
+/* Toast：居中底部堆叠，不拦截鼠标 */
+
+.toasts {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.toast {
+  padding: 7px 12px 8px;
+  border-radius: 5px;
+  background: #1f1f1c;
+  color: #f3f3ee;
+  font-size: 0.6875rem;
+  box-shadow: 0 12px 26px -18px rgba(0, 0, 0, 0.6);
+  animation: toastIn 0.18s ease both;
+}
+:global(html[data-mode="dark"]) .toast {
+  background: #edede8;
+  color: #171714;
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

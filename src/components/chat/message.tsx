@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import type { ChatAction, ChatMessage } from "@/types";
 import { Check, FileIcon, Plus } from "@/components/ui/icons";
+import { cx } from "@/lib/cx";
+import styles from "./message.module.css";
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -18,15 +20,15 @@ function highlight(text: string): ReactNode[] {
 
 export function UserTurn({ message }: { message: ChatMessage }) {
   return (
-    <div className="turn-user">
+    <div className={styles.turnUser}>
       {message.attachments?.map((file) => (
-        <div className="attach" key={file.id} title={file.name}>
+        <div className={styles.attach} key={file.id} title={file.name}>
           <FileIcon size={10} />
-          <span className="an">{file.name}</span>
-          <span className="sz">{formatSize(file.size)}</span>
+          <span className={styles.an}>{file.name}</span>
+          <span className={styles.sz}>{formatSize(file.size)}</span>
         </div>
       ))}
-      {message.content && <div className="prompt">{message.content}</div>}
+      {message.content && <div className={styles.prompt}>{message.content}</div>}
     </div>
   );
 }
@@ -39,9 +41,9 @@ export function AssistantTurn({
   onAction: (action: ChatAction) => void;
 }) {
   return (
-    <div className="turn-ai">
+    <div className={styles.turnAi}>
       {message.tool && (
-        <div className="tool">
+        <div className={styles.tool}>
           <Check size={11} />
           {message.tool}
         </div>
@@ -49,20 +51,20 @@ export function AssistantTurn({
       {message.content && <p>{message.content}</p>}
 
       {message.changes?.map((change, index) => (
-        <div className="change" key={index}>
-          <span className="lb">{change.label}</span>
-          <span className="old">{change.before}</span>
-          <span className="new">{highlight(change.after)}</span>
+        <div className={styles.change} key={index}>
+          <span className={styles.lb}>{change.label}</span>
+          <span className={styles.old}>{change.before}</span>
+          <span className={styles.new}>{highlight(change.after)}</span>
         </div>
       ))}
 
       {message.actions && message.actions.length > 0 && (
-        <div className="acts">
+        <div className={styles.acts}>
           {message.actions.map((action) => (
             <button
               key={action.id}
               type="button"
-              className={`act${action.kind === "apply" ? " primary" : ""}`}
+              className={cx(styles.act, action.kind === "apply" && styles.actPrimary)}
               onClick={() => onAction(action)}
             >
               {action.kind === "apply" ? <Check size={12} /> : <Plus size={12} />}
@@ -77,8 +79,8 @@ export function AssistantTurn({
 
 export function TypingTurn() {
   return (
-    <div className="turn-ai">
-      <div className="typing">
+    <div className={styles.turnAi}>
+      <div className={styles.typing}>
         <span />
         <span />
         <span />
@@ -89,12 +91,12 @@ export function TypingTurn() {
 
 export function EmptyTurn({ name, onPick }: { name: string; onPick: (text: string) => void }) {
   return (
-    <div className="empty-turn">
+    <div className={styles.emptyTurn}>
       <p>这是 {name} 的独立会话。</p>
-      <p className="dim">
+      <p className={styles.dim}>
         描述要改的地方，或拖入 JD、旧简历、截图。同一候选人的其他简历不会受到影响，但经历库是共用的。
       </p>
-      <div className="empty-hints">
+      <div className={styles.emptyHints}>
         {["按 JD 重写摘要", "把第二段改得更量化", "压缩到一页"].map((text) => (
           <button key={text} type="button" onClick={() => onPick(text)}>
             {text}

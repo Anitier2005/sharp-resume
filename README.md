@@ -103,7 +103,7 @@
 | --- | --- |
 | 桌面壳 | Tauri 2（WebView2，无边框窗口 + 自定义标题栏） |
 | 前端 | React 19 + TypeScript（strict） |
-| 样式 | 纯 CSS + 自定义属性令牌（单文件 `src/styles/app.css`） |
+| 样式 | 纯 CSS + CSS Modules 作用域隔离 + 自定义属性令牌 |
 | 图标 | 内联 SVG（`src/components/ui/icons.tsx`） |
 | 状态 | `useReducer` + Context，自动保存到磁盘 |
 
@@ -144,23 +144,54 @@ npm run tauri:build
   旧版数据会自动复制一份到新位置，原文件保留。
 - 浏览器：`localStorage["sharp-resume:workspace:v1"]`
 
-首次启动写入 `src/data/seed.ts` 的示例数据（2 个完整候选人 + 6 个占位）。
+开发构建首次启动写入 `src/data/seed.ts` 的示例数据（2 个完整候选人 + 6 个占位）；
+生产构建经 `vite.config` 的 alias 换成空工作区，**发布产物不含任何示例数据**。
 
 ## 目录
 
 ```
 src/
   components/
-    chat/       会话面板、消息、输入框
-    library/    经历库抽屉：共享经历 / 作品 / 教育 / 技能 / 人物
-    resume/     页签、纸面、作品集
-    ui/         自己写的基础件：可编辑文本、下拉菜单、提示、图标
-  lib/          存储、导出、DOCX 生成、改写规则、字数统计
-  store/        工作区状态与自动保存
-  styles/       app.css（令牌 + 全部样式）
+    chat/       会话：panel（编排）+ message（渲染）+ composer（输入）+ ai-settings（设置）
+    library/    经历库抽屉：drawer（外壳）+ pane-*（5 个面板）+ parts（共用件）
+    resume/     页签与画布 + paper（纸面）+ portfolio（作品集页）
+    ui/         基础件：editable / menu / toast / icons / shared.module.css
+  lib/          存储、导出、DOCX 生成、改写规则、字数统计、类名拼接
+  store/
+    workspace/  状态分层：types / helpers / reducer / context / provider / use-workspace
+  styles/       全局层：tokens / base / layout / print + index 汇总
   types/        数据模型
 design/         视觉探索过程，editor.html 是定稿方向
 ```
+
+### 样式组织（CSS Modules）
+
+组件样式一律与组件同目录，`Component.module.css`；`src/styles/` 只放**全局层**：
+
+| 文件 | 职责 | 为什么全局 |
+| --- | --- | --- |
+| `tokens.css` | 设计令牌、主题、明暗、字号缩放、`.win` 作用域 | 主题靠 `html[data-accent=x] .win` 选中令牌根，类名一旦哈希就失效 |
+| `base.css` | reset、字体、按钮、滚动条、选区 | 元素级规则，无归属组件 |
+| `layout.css` | `.app` 三栏网格与窄屏断点 | 唯一布局根，只有一个实例 |
+| `print.css` | 打印时只留纸面 | 见下方「打印契约」 |
+
+三条约定，改动时容易踩：
+
+1. **复合选择器要保留复合形态。** 例如 `.row.em` 的特异度是 `(0,2,0)`，若拆成单独的
+   `.em`（`0,1,0`）就会被 `.row:hover`（`0,1,1`）压过，hover 时强调色丢失。
+   同理 `.item.itemOn`、`.tab.tabOn`、`.menu-item.danger`。
+2. **带前缀的选择器不能拍平。** `.zoomCtl button` 是 `(0,1,1)`，所以覆盖它的规则必须写
+   `.zoomCtl .zoomVal` 而不是 `.zoomVal`。
+3. **暗色覆盖用 `:global(html[data-mode="dark"]) .本地类`。** `:global()` 只豁免外层，
+   内层类名照常哈希。
+
+### 打印契约
+
+打印规则**不按类名**选中元素（类名会被哈希），改用数据属性：
+
+`data-print="hide"` 隐藏外壳 chrome｜`flow` 改为块级流｜`page` 重置纸面外层宽度与缩放｜`sheet` 纸面本体去边框铺满
+
+新增需要参与打印的元素时，加对应属性即可，不必碰样式实现。
 
 ## 说明
 

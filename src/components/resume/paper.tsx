@@ -1,5 +1,6 @@
 import type { Person, ResumePage } from "@/types";
 import { Editable } from "@/components/ui/editable";
+import styles from "./paper.module.css";
 
 interface PaperProps {
   person: Person;
@@ -24,23 +25,23 @@ export function Paper({ person, page, onPatchPage, onPatchBullet }: PaperProps) 
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
   return (
-    <article className={`paper${en ? " en" : ""}`}>
+    <article className={styles.paper} data-lang={en ? "en" : "zh"} data-print="sheet">
       <Editable
-        className="p-name"
+        className={styles.name}
         value={page.headline}
         placeholder="姓名"
         multiline={false}
         onChange={(value) => onPatchPage({ headline: value })}
       />
       <Editable
-        className="p-role"
+        className={styles.role}
         value={page.role}
         placeholder="目标岗位"
         multiline={false}
         onChange={(value) => onPatchPage({ role: value })}
       />
       <Editable
-        className="p-meta"
+        className={styles.meta}
         value={page.meta.join(" · ")}
         placeholder="邮箱 · 城市 · 年限"
         multiline={false}
@@ -48,11 +49,11 @@ export function Paper({ person, page, onPatchPage, onPatchBullet }: PaperProps) 
           onPatchPage({ meta: value.split("·").map((item) => item.trim()).filter(Boolean) })
         }
       />
-      <div className="p-rule" />
+      <div className={styles.rule} />
 
       {page.summary !== undefined && (
         <Editable
-          className="p-summary"
+          className={styles.summary}
           value={page.summary}
           placeholder="一句话摘要（可留空）"
           onChange={(value) => onPatchPage({ summary: value })}
@@ -60,23 +61,23 @@ export function Paper({ person, page, onPatchPage, onPatchBullet }: PaperProps) 
       )}
 
       {experiences.length > 0 && (
-        <div className="p-sec">
-          <div className="p-sec-title">{label.experience}</div>
+        <div className={styles.sec}>
+          <div className={styles.secTitle}>{label.experience}</div>
           {experiences.map((exp) => (
-            <div className="p-item" key={exp.id}>
-              <div className="p-line">
+            <div className={styles.item} key={exp.id}>
+              <div className={styles.line}>
                 <b>
                   {en ? exp.companyEn ?? exp.company : exp.company} ·{" "}
                   {en ? exp.roleEn ?? exp.role : exp.role}
                 </b>
                 <span>{exp.period}</span>
               </div>
-              <div className="p-bullets">
+              <div className={styles.bullets}>
                 {(en ? exp.bulletsEn ?? exp.bullets : exp.bullets).map((bullet, index) => (
                   <Editable
                     key={index}
                     as="span"
-                    className="p-bullet"
+                    className={styles.bullet}
                     value={bullet}
                     placeholder="描述这一段的产出"
                     onChange={(value) => onPatchBullet(exp.id, index, value)}
@@ -89,11 +90,11 @@ export function Paper({ person, page, onPatchPage, onPatchBullet }: PaperProps) 
       )}
 
       {projects.length > 0 && (
-        <div className="p-sec">
-          <div className="p-sec-title">{label.project}</div>
+        <div className={styles.sec}>
+          <div className={styles.secTitle}>{label.project}</div>
           {projects.map((project) => (
-            <div className="p-item" key={project.id}>
-              <div className="p-line">
+            <div className={styles.item} key={project.id}>
+              <div className={styles.line}>
                 <b>{en ? project.titleEn ?? project.title : project.title}</b>
                 <span>{project.year}</span>
               </div>
@@ -104,11 +105,11 @@ export function Paper({ person, page, onPatchPage, onPatchBullet }: PaperProps) 
       )}
 
       {person.education.length > 0 && (
-        <div className="p-sec">
-          <div className="p-sec-title">{label.education}</div>
+        <div className={styles.sec}>
+          <div className={styles.secTitle}>{label.education}</div>
           {person.education.map((item) => (
-            <div className="p-item" key={item.id}>
-              <div className="p-line">
+            <div className={styles.item} key={item.id}>
+              <div className={styles.line}>
                 <b>
                   {en ? item.schoolEn ?? item.school : item.school} ·{" "}
                   {en ? item.degreeEn ?? item.degree : item.degree}
@@ -121,10 +122,10 @@ export function Paper({ person, page, onPatchPage, onPatchBullet }: PaperProps) 
       )}
 
       {person.skills.length > 0 && (
-        <div className="p-sec">
-          <div className="p-sec-title">{label.skill}</div>
+        <div className={styles.sec}>
+          <div className={styles.secTitle}>{label.skill}</div>
           {person.skills.map((group) => (
-            <div className="p-skill" key={group.id}>
+            <div className={styles.skill} key={group.id}>
               <span>{en ? group.labelEn ?? group.label : group.label}</span>
               <p>{en ? group.valueEn ?? group.value : group.value}</p>
             </div>

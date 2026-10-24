@@ -1,0 +1,166 @@
+/* ---------- 输入区外壳 ---------- */
+.composer {
+  flex: none;
+  padding: 10px 26px 12px;
+}
+.composerIn {
+  width: 100%;
+  max-width: 620px;
+  margin: 0 auto;
+}
+
+/* 输入框容器（注意：与抽屉里的复选框 `tick` 不是同一个东西） */
+.box {
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  padding: 10px 10px 7px 12px;
+  box-shadow: var(--shadow-control);
+  caret-color: var(--acc);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.box:hover {
+  border-color: var(--acc-line-2);
+}
+.box:focus-within {
+  border-color: var(--acc-line-2);
+  box-shadow: 0 0 0 3px var(--acc-softer);
+}
+
+/* 多行正文输入 */
+.input {
+  width: 100%;
+  min-height: 20px;
+  max-height: 160px;
+  padding: 0 0 6px;
+  border: 0;
+  background: none;
+  outline: none;
+  resize: none;
+  overflow-y: auto;
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.72;
+  color: var(--fg-1);
+}
+.input::placeholder {
+  color: var(--fg-3);
+}
+
+/* ---------- 已选附件 ---------- */
+.pendingFiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 8px;
+}
+.pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 5px 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 0.65625rem;
+  color: var(--fg-2);
+}
+.pending svg {
+  flex: none;
+  color: var(--acc-text);
+}
+.pending .sz {
+  color: var(--fg-4);
+  font-variant-numeric: tabular-nums;
+}
+.pending button {
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  color: var(--fg-4);
+}
+.pending button:hover {
+  background: var(--bg-press);
+  color: var(--fg-1);
+}
+
+/* ---------- 工具条 ---------- */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plus {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--fg-3);
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+.plus:hover {
+  background: var(--acc-softer);
+  border-color: var(--acc-line-2);
+  color: var(--acc-text);
+}
+
+/* 模型选择按钮。
+   原 app.css 里 composer 与 drawer 都定义了 .pick，后者在文件中位置更靠后因而胜出，
+   这个按钮长期沿用抽屉那套（height/padding/radius）尺寸。拆成 CSS Modules 后两者
+   已彻底分开；此处按原先的实际渲染值写死，保证纯重构不改变观感。
+   若想回到 composer 原本的设计意图，去掉 height/padding/border-radius 三行即可。 */
+.pick {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  height: 20px;
+  padding: 0 6px 0 3px;
+  border-radius: 3px;
+  font-size: 0.625rem;
+  color: var(--fg-3);
+}
+.pick:hover {
+  color: var(--acc-text);
+}
+
+.send {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--acc);
+  color: var(--acc-fg);
+  transition: background 0.14s ease;
+}
+.send:hover {
+  background: var(--acc-hover);
+}
+
+/* ---------- 快捷键提示 ---------- */
+.hint {
+  margin-top: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 0.59375rem;
+  color: var(--fg-4);
+}
+.hint kbd {
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  padding: 1px 3px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--acc-softer);
+  color: var(--fg-3);
+}

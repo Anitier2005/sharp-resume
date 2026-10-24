@@ -1,0 +1,206 @@
+/* 简历列：页签栏 + 画布 + 状态栏 */
+
+.doc {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-elev);
+  border-left: 1px solid var(--line);
+}
+
+.empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  font-size: 0.71875rem;
+  color: var(--fg-3);
+}
+
+/* ---------- 页签 ---------- */
+.tabs {
+  height: 40px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  padding: 0 9px;
+  border-radius: 4px 4px 0 0;
+  font-size: 0.71875rem;
+  color: var(--fg-3);
+  white-space: nowrap;
+  transition: color 0.14s ease, background 0.14s ease;
+}
+.tab:hover {
+  color: var(--fg-1);
+  background: var(--acc-softer);
+}
+/* 选中页签：复合选择器，否则 .tab:hover 会盖掉颜色 */
+.tab.tabOn {
+  color: var(--acc-text);
+}
+.tab.tabOn::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  bottom: 0;
+  height: 2px;
+  background: var(--acc);
+}
+
+/* 关闭页签的小叉：hover 才出现 */
+.tx {
+  display: none;
+  width: 12px;
+  height: 12px;
+  place-items: center;
+  border-radius: 3px;
+  color: var(--fg-4);
+}
+.tab:hover .tx {
+  display: grid;
+}
+.tx:hover {
+  background: var(--bg-press);
+  color: var(--fg-1);
+}
+
+.tabAdd {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--fg-3);
+  font-size: 0.875rem;
+  line-height: 1;
+  margin-left: 2px;
+}
+.tabAdd:hover {
+  background: var(--acc-softer);
+  color: var(--acc-text);
+}
+
+.fill {
+  flex: 1;
+}
+
+/* 打开经历库的入口（原先误放在抽屉样式区） */
+.libBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  margin-left: 4px;
+  padding: 0 7px;
+  border-radius: 4px;
+  font-size: 0.65625rem;
+  color: var(--fg-3);
+}
+.libBtn:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+.libBtn:hover svg {
+  color: var(--acc-text);
+}
+
+.export {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 0.65625rem;
+  color: var(--fg-3);
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.export:hover {
+  background: var(--acc-softer);
+  color: var(--acc-text);
+}
+
+/* ---------- 画布 ---------- */
+.canvas {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  padding: 20px;
+  background: var(--bg-canvas);
+  overflow: auto;
+}
+
+/* ---------- 状态栏 ---------- */
+.foot {
+  height: 22px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 12px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--bg-title);
+  font-size: 0.5625rem;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+.foot .pn {
+  font-weight: 600;
+  color: var(--acc-text);
+}
+.foot .save {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.foot .save i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.foot .over {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.zoomCtl {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.zoomCtl button {
+  height: 16px;
+  min-width: 16px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  font-size: 0.5625rem;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+.zoomCtl button:hover {
+  background: var(--bg-press);
+  color: var(--fg-1);
+}
+/* 必须保留 .zoomCtl 前缀：`.zoomCtl button` 的特异度是 (0,1,1)，
+   单独的 `.zoomVal` 只有 (0,1,0)，会被前者的 color 覆盖掉 */
+.zoomCtl .zoomVal {
+  color: var(--acc-text);
+}

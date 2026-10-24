@@ -7,6 +7,8 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { cx } from "@/lib/cx";
+import styles from "./menu.module.css";
 
 interface DropdownProps {
   trigger: ReactElement<{ onClick?: () => void; "aria-expanded"?: boolean }>;
@@ -40,11 +42,11 @@ export function Dropdown({ trigger, children, align = "end", width }: DropdownPr
     : trigger;
 
   return (
-    <div className="dd" ref={ref}>
+    <div className={styles.dd} ref={ref}>
       {node}
       {open && (
         <div
-          className={`dd-menu ${align}`}
+          className={cx(styles.menu, align === "end" ? styles.end : styles.start)}
           role="menu"
           style={width ? { minWidth: width } : undefined}
           onClick={() => setOpen(false)}
@@ -69,20 +71,20 @@ export function MenuItem({ label, hint, icon, danger, onSelect }: MenuItemProps)
     <button
       type="button"
       role="menuitem"
-      className={`menu-item${danger ? " danger" : ""}`}
+      className={cx(styles.item, danger && styles.danger)}
       onClick={onSelect}
     >
-      {icon && <span className="mi">{icon}</span>}
-      <span className="ml">{label}</span>
-      {hint && <span className="mh">{hint}</span>}
+      {icon && <span className={styles.mi}>{icon}</span>}
+      <span className={styles.ml}>{label}</span>
+      {hint && <span className={styles.mh}>{hint}</span>}
     </button>
   );
 }
 
 export function MenuLabel({ children }: { children: ReactNode }) {
-  return <div className="menu-label">{children}</div>;
+  return <div className={styles.label}>{children}</div>;
 }
 
 export function MenuSep() {
-  return <div className="menu-sep" />;
+  return <div className={styles.sep} />;
 }

@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { AI_PRESETS, aiReady, testConnection, type AiSettings } from "@/lib/ai";
 import { Close } from "@/components/ui/icons";
+import { cx } from "@/lib/cx";
+import styles from "./ai-settings.module.css";
+import shared from "@/components/ui/shared.module.css";
 
 interface Props {
   settings: AiSettings;
@@ -46,22 +49,22 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
 
   return (
     <div
-      className="veil"
+      className={shared.veil}
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <div className="sheet" role="dialog" aria-modal="true" aria-label="模型设置">
-        <header className="sheet-head">
-          <div className="drawer-title">
+      <div className={styles.sheet} role="dialog" aria-modal="true" aria-label="模型设置">
+        <header className={styles.head}>
+          <div className={shared.overlayTitle}>
             <b>模型设置</b>
             <span>任何 OpenAI 兼容接口：DeepSeek / OpenAI / Ollama / 自建网关</span>
           </div>
-          <button type="button" className="drawer-close" aria-label="关闭" onClick={onClose}>
+          <button type="button" className={shared.overlayClose} aria-label="关闭" onClick={onClose}>
             <Close size={11} />
           </button>
         </header>
 
-        <div className="sheet-body">
-          <div className="presets">
+        <div className={styles.body}>
+          <div className={styles.presets}>
             {AI_PRESETS.map((preset) => (
               <button
                 key={preset.label}
@@ -74,8 +77,8 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
             ))}
           </div>
 
-          <label className="fld">
-            <span className="fld-k">接口地址</span>
+          <label className={shared.fld}>
+            <span className={shared.fldK}>接口地址</span>
             <input
               ref={firstRef}
               value={draft.baseUrl}
@@ -85,8 +88,8 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
             />
           </label>
 
-          <label className="fld">
-            <span className="fld-k">模型</span>
+          <label className={shared.fld}>
+            <span className={shared.fldK}>模型</span>
             <input
               value={draft.model}
               placeholder="deepseek-chat"
@@ -95,8 +98,8 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
             />
           </label>
 
-          <label className="fld">
-            <span className="fld-k">API Key</span>
+          <label className={shared.fld}>
+            <span className={shared.fldK}>API Key</span>
             <input
               type="password"
               value={draft.apiKey}
@@ -106,23 +109,23 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
             />
           </label>
 
-          <p className="sheet-note">
+          <p className={styles.note}>
             密钥只存在这台机器的 localStorage，不写进工作区、不随简历导出。留空则按本地改写规则回答。
           </p>
 
           {result && (
-            <p className={`sheet-result${result.ok ? " ok" : " bad"}`}>{result.text}</p>
+            <p className={cx(styles.result, result.ok ? styles.resultOk : styles.resultBad)}>{result.text}</p>
           )}
         </div>
 
-        <footer className="sheet-foot">
-          <button type="button" className="btn-ghost" onClick={onClose}>
+        <footer className={styles.foot}>
+          <button type="button" className={shared.btnGhost} onClick={onClose}>
             取消
           </button>
-          <span className="sp" />
+          <span className={styles.sp} />
           <button
             type="button"
-            className="btn-ghost"
+            className={shared.btnGhost}
             disabled={testing || !draft.baseUrl.trim() || !draft.model.trim()}
             onClick={() => void runTest()}
           >
@@ -130,7 +133,7 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
           </button>
           <button
             type="button"
-            className="btn-primary"
+            className={shared.btnPrimary}
             disabled={!aiReady(draft)}
             onClick={() => onSave(draft)}
           >

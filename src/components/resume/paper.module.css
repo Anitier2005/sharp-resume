@@ -1,0 +1,189 @@
+/* ==========================================================================
+   纸面（A4 等比预览）
+
+   这里所有字号刻意用 px，不跟 UI 缩放：
+   纸面是 1mm ≈ 1.78px 的等比缩略（.paper 最小高 528px ≈ 297mm），
+   字号代表印刷字号，跟着 UI 缩放会让「预览 ≈ 导出」失真、A4 分页估算漂移。
+   需要更大的阅读尺寸请用状态栏的缩放控件。
+   ========================================================================== */
+
+/* 纸面外层：承载缩放与分页标记 */
+.wrap {
+  position: relative;
+  width: 374px;
+  max-width: 100%;
+}
+
+.paper {
+  width: 100%;
+  max-width: 374px;
+  min-height: 528px;
+  align-self: flex-start;
+  padding: 32px 34px 34px;
+  background: var(--paper);
+  border: 1px solid var(--paper-line);
+  border-radius: 3px;
+  box-shadow: var(--shadow-paper);
+}
+
+.paper ::selection {
+  background: color-mix(in srgb, var(--acc-paper) 14%, #ffffff);
+  color: var(--paper-fg);
+}
+
+/* 超出 A4 一页时画一条分页虚线，标出打印会被切断的位置 */
+.break {
+  position: absolute;
+  left: -8px;
+  right: -8px;
+  border-top: 1px dashed color-mix(in srgb, var(--acc-paper) 42%, transparent);
+  pointer-events: none;
+}
+.break span {
+  position: absolute;
+  right: 11px;
+  top: -9px;
+  padding: 0 3px;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  color: color-mix(in srgb, var(--acc-paper) 78%, transparent);
+  background: var(--paper);
+}
+
+/* ---------- 抬头 ---------- */
+.name {
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+  color: var(--paper-fg);
+}
+.role {
+  margin-top: 8px;
+  font-size: 8.5px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--acc-paper);
+}
+.meta {
+  margin-top: 11px;
+  font-size: 9px;
+  color: var(--paper-3);
+}
+.rule {
+  height: 1px;
+  margin: 16px 0 15px;
+  background: linear-gradient(
+    90deg,
+    var(--acc-paper) 0 42px,
+    var(--paper-line) 42px 100%
+  );
+}
+
+/* ---------- 小节 ---------- */
+.sec + .sec {
+  margin-top: 16px;
+}
+.secTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--acc-paper);
+}
+.secTitle::before {
+  content: "";
+  width: 3px;
+  height: 3px;
+  border-radius: 1px;
+  background: var(--acc-paper);
+}
+
+.item + .item {
+  margin-top: 11px;
+}
+.item p {
+  margin: 4px 0 0;
+  font-size: 9.5px;
+  line-height: 1.9;
+  color: var(--paper-2);
+}
+
+.line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.line b {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--paper-fg);
+}
+.line span {
+  font-size: 8.5px;
+  color: var(--paper-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.summary {
+  margin-top: 10px;
+  font-size: 9.5px;
+  line-height: 1.9;
+  color: var(--paper-2);
+}
+
+.bullets {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+}
+.bullet {
+  position: relative;
+  display: block;
+  padding-left: 9px;
+  font-size: 9.5px;
+  line-height: 1.9;
+  color: var(--paper-2);
+}
+.bullet::before {
+  content: "·";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--paper-3);
+}
+
+.skill {
+  display: flex;
+  gap: 8px;
+  font-size: 9px;
+  line-height: 1.85;
+}
+.skill span {
+  flex: none;
+  width: 30px;
+  color: var(--paper-3);
+}
+.skill p {
+  margin: 0;
+  color: var(--paper-2);
+}
+
+/* ---------- 可直接编辑的字段 ---------- */
+/* 空态占位：用 data-ph 而不是 :empty，避免换行节点导致占位消失 */
+.paper [contenteditable][data-ph]:empty::before {
+  content: attr(data-ph);
+  color: var(--paper-3);
+  pointer-events: none;
+}
+.paper [contenteditable]:focus {
+  outline: none;
+  background: color-mix(in srgb, var(--acc-paper) 6%, transparent);
+  border-radius: 2px;
+}

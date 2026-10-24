@@ -1,0 +1,24 @@
+/* ==========================================================================
+   窗口骨架：三栏网格
+
+   保持全局：`.app` 是唯一的布局根，只有一个实例，模块化没有收益；
+   而打印规则与窄屏断点都需要稳定的选择器。
+   ========================================================================== */
+
+.app {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 420px;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* 窄窗口：侧栏与纸面各让出 20 / 40px，给会话留出可读宽度 */
+@media (max-width: 1160px) {
+  .app {
+    grid-template-columns: 220px minmax(0, 1fr) 380px;
+  }
+  .note {
+    display: none;
+  }
+}

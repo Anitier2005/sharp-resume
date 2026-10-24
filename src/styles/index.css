@@ -1,0 +1,8 @@
+/* 全局层：令牌 → 基础 → 骨架 → 打印。
+   组件样式一律在各组件目录下的 *.module.css，不进这里。
+
+   注意必须用 CSS 的 @import（不是 JS 的 import），且只能放在文件最前面。 */
+@import "./tokens.css";
+@import "./base.css";
+@import "./layout.css";
+@import "./print.css";

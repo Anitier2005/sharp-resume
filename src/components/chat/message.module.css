@@ -1,0 +1,236 @@
+/* ---------- 用户回合 ---------- */
+.turnUser {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-elev);
+  font-size: 0.65625rem;
+  color: var(--fg-2);
+  max-width: 100%;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+.attach svg {
+  flex: none;
+  color: var(--acc-text);
+}
+.attach:hover {
+  border-color: var(--acc-line-2);
+  background: var(--acc-softer);
+}
+.attach .an {
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attach .sz {
+  color: var(--fg-4);
+  font-variant-numeric: tabular-nums;
+}
+
+.prompt {
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: var(--acc-softer);
+  box-shadow: inset 0 0 0 1px var(--acc-line);
+  font-size: 0.75rem;
+  line-height: 1.72;
+  color: var(--fg-1);
+}
+
+/* ---------- AI 回合 ---------- */
+.turnAi {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.turnAi p {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.78;
+  color: var(--fg-1);
+}
+.turnAi p.dim {
+  color: var(--fg-2);
+}
+
+.tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.65625rem;
+  color: var(--fg-3);
+}
+.tool svg {
+  flex: none;
+  color: var(--acc-text);
+}
+
+/* 改写对照：左竖线 + 旧文划掉 + 新文高亮 */
+.change {
+  padding-left: 11px;
+  border-left: 2px solid var(--acc-line-2);
+}
+.change .lb {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 5px;
+  font-size: 0.59375rem;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+}
+.change .lb::before {
+  content: "";
+  width: 3px;
+  height: 3px;
+  border-radius: 1px;
+  background: var(--acc);
+}
+.change .old {
+  display: block;
+  font-size: 0.71875rem;
+  line-height: 1.7;
+  color: var(--fg-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--fg-4);
+}
+.change .new {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.75rem;
+  line-height: 1.7;
+  color: var(--fg-1);
+}
+.change .new b {
+  font-weight: 600;
+  color: var(--acc-text);
+  background: var(--acc-soft);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+/* 动作列表 */
+.acts {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+  border-top: 1px solid var(--line-soft);
+}
+.act {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 31px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 0.71875rem;
+  color: var(--fg-2);
+  text-align: left;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.act svg {
+  color: var(--fg-4);
+  transition: color 0.14s ease;
+}
+.act:hover {
+  background: var(--acc-softer);
+  color: var(--acc-text);
+}
+.act:hover svg {
+  color: var(--acc-text);
+}
+.actPrimary {
+  color: var(--acc-text);
+}
+.actPrimary svg {
+  color: var(--acc-text);
+}
+.act .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--acc-line-2);
+}
+
+/* ---------- 空回合引导 ---------- */
+.emptyTurn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+.emptyTurn p {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.78;
+  color: var(--fg-1);
+}
+.emptyTurn p.dim {
+  font-size: 0.71875rem;
+  color: var(--fg-2);
+}
+.emptyHints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.emptyHints button {
+  padding: 3px 8px 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 0.65625rem;
+  color: var(--fg-3);
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+.emptyHints button:hover {
+  background: var(--acc-softer);
+  border-color: var(--acc-line);
+  color: var(--acc-text);
+}
+
+/* ---------- 输入中动画 ---------- */
+.typing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+}
+.typing span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--fg-4);
+  animation: typing 1s infinite ease-in-out;
+}
+.typing span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typing span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}

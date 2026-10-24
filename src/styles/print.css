@@ -1,0 +1,60 @@
+/* ==========================================================================
+   打印：只留纸面
+
+   用 data-print 属性而不是类名做钩子 —— 组件样式已进 CSS Modules，
+   类名会被哈希，打印规则若按类名写就全部失效。
+   属性是稳定的对外契约，也顺带把"打印契约"从样式实现里解耦出来。
+
+   data-print 取值：
+     hide   完全隐藏（外壳 chrome）
+     flow   改为常规块级流（.doc / .canvas 这类 flex 容器）
+     page   纸面外层：取消固定宽度与缩放
+     sheet  纸面本体：去边距、去边框、去阴影，铺满页面
+   ========================================================================== */
+
+@media print {
+  html,
+  body,
+  #root {
+    height: auto;
+    background: #fff;
+  }
+
+  [data-print="hide"] {
+    display: none !important;
+  }
+
+  .win,
+  .app {
+    display: block;
+    height: auto;
+  }
+
+  [data-print="flow"] {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: none;
+    overflow: visible;
+  }
+
+  [data-print="page"] {
+    width: auto;
+    max-width: none;
+    zoom: 1 !important;
+  }
+
+  [data-print="sheet"] {
+    width: 100%;
+    max-width: none;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  @page {
+    margin: 16mm;
+  }
+}

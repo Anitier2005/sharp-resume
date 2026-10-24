@@ -4,6 +4,8 @@ import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem, MenuSep } from "@/components/ui/menu";
 import { ChevronRight, Plus, Search, User } from "@/components/ui/icons";
 import { pageShort, type Person, type Resume } from "@/types";
+import { cx } from "@/lib/cx";
+import styles from "./sidebar.module.css";
 
 function pageBadges(resume: Resume): string {
   const kinds = resume.pages.slice(0, 2).map((page) => pageShort(page.kind));
@@ -41,10 +43,10 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="side">
+    <aside className={styles.side} data-print="hide">
       <button
         type="button"
-        className="row em"
+        className={cx(styles.row, styles.em)}
         onClick={() => {
           const target = person ?? state.people[0];
           // 全新安装时一个人都没有，直接建简历会无处挂载 —— 改为建第一位候选人
@@ -62,7 +64,7 @@ export function Sidebar() {
         新建简历
       </button>
 
-      <div className="row search">
+      <div className={cx(styles.row, styles.search)}>
         <Search size={12} />
         <input
           ref={searchRef}
@@ -77,10 +79,10 @@ export function Sidebar() {
             }
           }}
         />
-        <span className="kbd">Ctrl K</span>
+        <span className={styles.kbd}>Ctrl K</span>
       </div>
 
-      <div className="sec">
+      <div className={styles.sec}>
         候选人
         <button
           type="button"
@@ -94,14 +96,14 @@ export function Sidebar() {
         </button>
       </div>
 
-      <div className="people">
+      <div className={styles.people}>
         {people.map((item) => {
           const open = expanded.has(item.id);
           return (
             <div key={item.id}>
               <button
                 type="button"
-                className={`row person${open ? " open" : ""}`}
+                className={cx(styles.row, styles.person, open && styles.personOpen)}
                 onClick={() => {
                   if (!open) {
                     dispatch({ type: "selectPerson", personId: item.id });
@@ -112,18 +114,18 @@ export function Sidebar() {
                 }}
               >
                 <User size={12} />
-                <span className="pname">{item.name}</span>
-                <span className="n">{item.resumes.length}</span>
-                <ChevronRight size={9} className="chev" />
+                <span className={styles.pname}>{item.name}</span>
+                <span className={styles.count}>{item.resumes.length}</span>
+                <ChevronRight size={9} className={styles.chev} />
               </button>
 
               {open && (
-                <ul className="subs">
+                <ul className={styles.subs}>
                   {item.resumes.map((target) => {
                     const active = resume?.id === target.id;
                     if (renaming === target.id) {
                       return (
-                        <li key={target.id} className="item editing">
+                        <li key={target.id} className={cx(styles.item, styles.editing)}>
                           <input
                             autoFocus
                             defaultValue={target.title}
@@ -151,13 +153,13 @@ export function Sidebar() {
                     return (
                       <li
                         key={target.id}
-                        className={`item${active ? " on" : ""}`}
+                        className={cx(styles.item, active && styles.itemOn)}
                         onClick={() => selectResume(item, target)}
                       >
-                        <span className="it">{target.title}</span>
-                        <span className="pg">{pageBadges(target)}</span>
+                        <span className={styles.it}>{target.title}</span>
+                        <span className={styles.pg}>{pageBadges(target)}</span>
                         <span
-                          className="more"
+                          className={styles.more}
                           onClick={(event) => event.stopPropagation()}
                           role="presentation"
                         >
@@ -193,7 +195,7 @@ export function Sidebar() {
                   <li>
                     <button
                       type="button"
-                      className="new-res"
+                      className={styles.newRes}
                       onClick={() => dispatch({ type: "createResume", personId: item.id })}
                     >
                       + 新建简历
@@ -206,7 +208,7 @@ export function Sidebar() {
         })}
 
         {people.length === 0 && (
-          <div className="side-empty">
+          <div className={styles.empty}>
             {state.people.length === 0
               ? "还没有候选人。点上方「新建简历」写下第一份。"
               : "没有匹配的结果"}
@@ -214,8 +216,8 @@ export function Sidebar() {
         )}
       </div>
 
-      <div className="side-foot">
-        <span className="live" />
+      <div className={styles.foot}>
+        <span className={styles.live} />
         本地工作区 · 自动保存
       </div>
     </aside>

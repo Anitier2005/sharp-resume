@@ -1,0 +1,116 @@
+/* 作品集页：左文右图，靠 1px 发丝线分隔。纸面外框复用 paper.module.css */
+
+.list {
+  margin-top: 14px;
+  border-top: 1px solid var(--paper-line);
+}
+
+.item {
+  display: flex;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--paper-line);
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+.head b {
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--paper-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.index {
+  flex: none;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--acc-paper);
+  font-variant-numeric: tabular-nums;
+}
+
+.year {
+  flex: none;
+  font-size: 8.5px;
+  color: var(--paper-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.desc {
+  margin: 0;
+  font-size: 9px;
+  line-height: 1.85;
+  color: var(--paper-2);
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 1px;
+}
+.tags span {
+  font-size: 7.5px;
+  letter-spacing: 0.04em;
+  color: var(--paper-3);
+  border: 1px solid var(--paper-line);
+  border-radius: 2px;
+  padding: 0 3px 1px;
+}
+
+/* 缩略图占位：用斜纹底纹表达"这里有图"，不加载真实图片 */
+.thumb {
+  position: relative;
+  flex: none;
+  width: 88px;
+  height: 62px;
+  border: 1px solid var(--paper-line);
+  background-color: color-mix(in srgb, var(--acc-paper) 3%, #ffffff);
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 6px,
+    color-mix(in srgb, var(--acc-paper) 4%, transparent) 6px 7px
+  );
+  overflow: hidden;
+}
+.thumb[data-cover="1"] {
+  background-color: color-mix(in srgb, var(--acc-paper) 5%, #ffffff);
+}
+.thumb[data-cover="2"] {
+  background-color: color-mix(in srgb, var(--acc-paper) 2%, #fbfbf9);
+}
+.thumb[data-cover="3"] {
+  background-color: color-mix(in srgb, var(--acc-paper) 7%, #ffffff);
+}
+
+.mark {
+  position: absolute;
+  right: 5px;
+  bottom: 3px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--acc-paper) 16%, transparent);
+}
+
+.empty {
+  margin-top: 14px;
+  font-size: 10px;
+  color: var(--paper-3);
+}

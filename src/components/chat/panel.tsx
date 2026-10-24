@@ -11,6 +11,7 @@ import { AssistantTurn, EmptyTurn, TypingTurn, UserTurn } from "./message";
 import { keywordCount, rewriteBullet } from "@/lib/rewrite";
 import { aiReady, loadAi, saveAi, streamChat, type AiSettings } from "@/lib/ai";
 import { buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
+import styles from "./chat.module.css";
 
 function buildReply(
   personName: string,
@@ -307,15 +308,16 @@ export function ChatPanel() {
 
   if (!person || !resume) {
     return (
-      <section className="chat">
-        <div className="chat-empty">左侧还没有简历，先新建一份。</div>
+      <section className={styles.chat} data-print="hide">
+        <div className={styles.empty}>左侧还没有简历，先新建一份。</div>
       </section>
     );
   }
 
   return (
     <section
-      className={`chat${dragging ? " dragging" : ""}`}
+      className={styles.chat}
+      data-print="hide"
       onDragOver={(event) => {
         event.preventDefault();
         setDragging(true);
@@ -326,19 +328,19 @@ export function ChatPanel() {
       }}
       onDrop={onDrop}
     >
-      <header className="chat-head">
-        <div className="crumb">
-          <span className="who">{person.name}</span>
-          <ChevronRight size={9} className="sep" />
+      <header className={styles.head}>
+        <div className={styles.crumb}>
+          <span className={styles.who}>{person.name}</span>
+          <ChevronRight size={9} className={styles.sep} />
           <b>{resume.title}</b>
         </div>
-        <button type="button" className="model-static" onClick={() => setAiOpen(true)}>
+        <button type="button" className={styles.modelStatic} onClick={() => setAiOpen(true)}>
           {modelLabel}
         </button>
       </header>
 
-      <div className="thread" ref={scrollRef}>
-        <div className="thread-in">
+      <div className={styles.thread} ref={scrollRef}>
+        <div className={styles.threadIn}>
           {messages.length === 0 && !busy && <EmptyTurn name={resume.title} onPick={setInput} />}
           {messages.map((message) =>
             message.role === "user" ? (
@@ -375,7 +377,7 @@ export function ChatPanel() {
         />
       )}
 
-      {dragging && <div className="drop-hint">松开即可添加附件</div>}
+      {dragging && <div className={styles.dropHint}>松开即可添加附件</div>}
     </section>
   );
 }

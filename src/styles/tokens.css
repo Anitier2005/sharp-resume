@@ -1,0 +1,166 @@
+/* ==========================================================================
+   设计令牌（全局，唯一一个"故意不模块化"的样式文件）
+
+   为什么保持全局：
+   - `.win` 是整棵树的主题作用域，`html[data-accent="x"] .win{--acc}` 这类
+     上层选择器必须能选中它；一旦被 CSS Modules 哈希，主题与明暗全部失效。
+   - CSS 自定义属性是「级联继承」的，作用域越靠上越好，不需要模块隔离。
+
+   令牌分六组：
+   1. 中性面   --bg-* / --line-* / --fg-*
+   2. 强调色   --acc-*（只驱动组件：选中、图标、按钮、页签、聚焦、选区）
+   3. 语义色   --ok / --warn / --danger
+   4. 纸面     --paper-*（不随明暗与主题改变，保证导出所见即所得）
+   5. 阴影     --shadow-*
+   6. 字号缩放 --text-scale
+   ========================================================================== */
+
+:root {
+  --ui: "Segoe UI Variable Text", "Segoe UI", -apple-system, "PingFang SC",
+    "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "SF Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  /* UI 字号缩放系数：1 = 16px 基准。
+     默认 1.2（初版主体只有 9–11.5px 偏小）；
+     运行时可被 Windows「文本大小」设置或应用内外观档位覆盖。
+     UI 字号全部用 rem，改这一个值即可整体缩放；
+     纸面（.paper 内）刻意保留 px，见 paper.module.css 的说明。 */
+  --text-scale: 1.2;
+}
+
+/* 根字号承载缩放：所有 rem 字号以此为基准 */
+html {
+  font-size: calc(16px * var(--text-scale));
+}
+
+/* --------------------------------------------------------------------------
+   主题根：.win 持有全部令牌，并作为窗口外壳（全应用只有一个实例）
+   -------------------------------------------------------------------------- */
+.win {
+  /* 组件强调色（默认中性） */
+  --acc: #242422;
+  --acc-fg: #ffffff;
+  /* 纸面强调色：恒定中性深灰，不随主题（accent）也不随明暗改变 */
+  --acc-paper: #242422;
+
+  /* 表面：只有明暗两套，不参与主题 */
+  --bg-title: #ffffff;
+  --bg-side: #ffffff;
+  --bg-elev: #ffffff;
+  --bg-canvas: #f8f8f6;
+  --bg-hover: #f5f5f2;
+  --bg-press: #ecece9;
+
+  --line: #ededea;
+  --line-soft: #f4f4f1;
+  --line-strong: #dfdfdb;
+
+  --fg-1: #191917;
+  --fg-2: #56564f;
+  --fg-3: #8e8e86;
+  --fg-4: #b5b5ad;
+
+  /* 强调色阶：只驱动组件——选中、图标、按钮、页签、聚焦、选区 */
+  --acc-text: color-mix(in srgb, var(--acc) 94%, #000);
+  --acc-hover: color-mix(in srgb, var(--acc) 86%, #000);
+  --acc-soft: color-mix(in srgb, var(--acc) 10%, #ffffff);
+  --acc-softer: color-mix(in srgb, var(--acc) 4%, #ffffff);
+  --acc-line: color-mix(in srgb, var(--acc) 22%, #ffffff);
+  --acc-line-2: color-mix(in srgb, var(--acc) 38%, #ffffff);
+
+  /* 语义色 */
+  --ok: #3f7d5d;
+  --ok-soft: color-mix(in srgb, #3f7d5d 12%, #ffffff);
+  --warn: #94661f;
+  --danger: #be463c;
+
+  /* 纸面：不随明暗与主题改变，保证导出结果一致 */
+  --paper: #ffffff;
+  --paper-fg: #141412;
+  --paper-2: #57574f;
+  --paper-3: #a3a39b;
+  --paper-line: #ebebe5;
+
+  --shadow-win: 0 1px 2px rgba(20, 20, 15, 0.04),
+    0 18px 40px -30px rgba(20, 20, 15, 0.35);
+  --shadow-paper: 0 1px 2px rgba(20, 20, 15, 0.05),
+    0 12px 26px -22px rgba(20, 20, 15, 0.28);
+  --shadow-control: 0 1px 2px rgba(20, 20, 15, 0.04);
+
+  /* 窗口外壳本体 */
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+
+/* 主题：只换强调色，表面保持白。
+   --acc-paper 不参与主题覆盖——纸面上的元素（抬头职位、小节标题、
+   分页虚线、作品缩略图底纹、编辑焦点底色）必须恒定，否则同一份简历
+   换个主题颜色就变了，导出结果也会跟着变。 */
+html[data-accent="white"] .win { --acc: #242422; }
+html[data-accent="indigo"] .win { --acc: #3b50b4; }
+html[data-accent="pine"] .win { --acc: #2a6650; }
+html[data-accent="clay"] .win { --acc: #b2452c; }
+
+/* 深色：表面换成石墨，组件强调色换成同色相的亮色 */
+.win[data-mode="dark"] {
+  --acc: #dcdcd7;
+  --acc-fg: #141416;
+
+  --bg-title: #141416;
+  --bg-side: #141416;
+  --bg-elev: #18181a;
+  --bg-canvas: #101012;
+  --bg-hover: #1e1e21;
+  --bg-press: #29292d;
+
+  --line: #252529;
+  --line-soft: #1e1e22;
+  --line-strong: #323237;
+
+  --fg-1: #ebebe6;
+  --fg-2: #a5a59f;
+  --fg-3: #797974;
+  --fg-4: #595955;
+
+  --acc-text: color-mix(in srgb, var(--acc) 92%, #ffffff);
+  --acc-hover: color-mix(in srgb, var(--acc) 84%, #ffffff);
+  --acc-soft: color-mix(in srgb, var(--acc) 16%, #18181a);
+  --acc-softer: color-mix(in srgb, var(--acc) 8%, #18181a);
+  --acc-line: color-mix(in srgb, var(--acc) 28%, #202024);
+  --acc-line-2: color-mix(in srgb, var(--acc) 46%, #202024);
+
+  --ok: #79c79c;
+  --ok-soft: color-mix(in srgb, #79c79c 16%, #17171a);
+  --warn: #d9a961;
+  --danger: #f08278;
+
+  --paper: #efefea;
+  --paper-fg: #171714;
+  --paper-2: #54544d;
+  --paper-3: #96968f;
+  --paper-line: #e1e1da;
+
+  --shadow-win: 0 1px 2px rgba(0, 0, 0, 0.5), 0 28px 60px -34px rgba(0, 0, 0, 0.8);
+  --shadow-paper: 0 2px 16px rgba(0, 0, 0, 0.34);
+  --shadow-control: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+/* 只覆盖 --acc；--acc-paper 保持深色值，因为深色模式下纸面仍是浅色 */
+html[data-accent="white"] .win[data-mode="dark"] { --acc: #dcdcd7; }
+html[data-accent="indigo"] .win[data-mode="dark"] { --acc: #8fa1ff; }
+html[data-accent="pine"] .win[data-mode="dark"] { --acc: #6dc3a0; }
+html[data-accent="clay"] .win[data-mode="dark"] { --acc: #f08a6e; }
+
+/* 选区与聚焦环：同样属于"主题派生的全局规则"，放在这里以免每个模块重复 */
+.win ::selection {
+  background: var(--acc-soft);
+  color: var(--fg-1);
+}
+.win :focus-visible {
+  outline: 2px solid var(--acc-line-2);
+  outline-offset: 1px;
+}

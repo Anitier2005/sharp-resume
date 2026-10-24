@@ -10,6 +10,9 @@ import { PAGE_KIND_LABEL, type PageKind } from "@/types";
 import { LibraryDrawer } from "@/components/library/drawer";
 import { Paper } from "./paper";
 import { Portfolio } from "./portfolio";
+import { cx } from "@/lib/cx";
+import styles from "./resume.module.css";
+import paperStyles from "./paper.module.css";
 
 const KIND_OPTIONS: PageKind[] = ["zh", "en", "portfolio"];
 
@@ -60,8 +63,8 @@ export function ResumePanel() {
 
   if (!person || !resume || !page) {
     return (
-      <section className="doc">
-        <div className="doc-empty">还没有简历。左侧点「新建简历」开始。</div>
+      <section className={styles.doc}>
+        <div className={styles.empty}>还没有简历。左侧点「新建简历」开始。</div>
       </section>
     );
   }
@@ -96,19 +99,19 @@ export function ResumePanel() {
   const saveLabel = saveState === "saving" ? "保存中…" : "已保存";
 
   return (
-    <section className="doc">
-      <div className="tabs">
+    <section className={styles.doc}>
+      <div className={styles.tabs} data-print="hide">
         {resume.pages.map((item) => (
           <button
             key={item.id}
             type="button"
-            className={`tab${item.id === page.id ? " on" : ""}`}
+            className={cx(styles.tab, item.id === page.id && styles.tabOn)}
             onClick={() => setActivePageId(item.id)}
           >
             {item.label}
             {resume.pages.length > 1 && (
               <span
-                className="tx"
+                className={styles.tx}
                 role="button"
                 aria-label={`删除 ${item.label}`}
                 tabIndex={-1}
@@ -132,7 +135,7 @@ export function ResumePanel() {
         <Dropdown
           width={150}
           trigger={
-            <button type="button" className="tab-add" aria-label="新增页面">
+            <button type="button" className={styles.tabAdd} aria-label="新增页面">
               <Plus size={11} />
             </button>
           }
@@ -150,7 +153,7 @@ export function ResumePanel() {
 
         <button
           type="button"
-          className="tabs-btn"
+          className={styles.libBtn}
           onClick={() => setLibOpen(true)}
           title="编辑共享经历与作品，勾选本页用哪些"
         >
@@ -158,12 +161,12 @@ export function ResumePanel() {
           经历库
         </button>
 
-        <span className="tabs-fill" />
+        <span className={styles.fill} />
 
         <Dropdown
           width={196}
           trigger={
-            <button type="button" className="export">
+            <button type="button" className={styles.export}>
               导出
               <ChevronDown size={9} />
             </button>
@@ -206,37 +209,37 @@ export function ResumePanel() {
         </Dropdown>
       </div>
 
-      <div className="canvas" ref={canvasRef}>
-        <div className="paper-wrap" ref={wrapRef} style={{ zoom: zoom / 100 }}>
+      <div className={styles.canvas} ref={canvasRef} data-print="flow">
+        <div className={paperStyles.wrap} data-print="page" ref={wrapRef} style={{ zoom: zoom / 100 }}>
           {page.kind === "portfolio" ? (
             <Portfolio person={person} page={page} onPatchPage={patchPage} />
           ) : (
             <Paper person={person} page={page} onPatchPage={patchPage} onPatchBullet={patchBullet} />
           )}
           {sheets > 1.02 && (
-            <div className="paper-break" style={{ top: a4Height }} aria-hidden>
+            <div className={paperStyles.break} style={{ top: a4Height }} aria-hidden>
               <span>A4</span>
             </div>
           )}
         </div>
       </div>
 
-      <div className="doc-foot">
+      <div className={styles.foot} data-print="hide">
         <span>
           第 {index + 1} 页 / 共 {resume.pages.length} 页
         </span>
         <span>{meta["字"]}</span>
         <span
-          className={sheets > 1.02 ? "over" : undefined}
+          className={sheets > 1.02 ? styles.over : undefined}
           title="按 A4 比例估算当前页占几页"
         >
           {sheets > 1.02 ? `≈ ${sheets.toFixed(1)} 页 A4` : "1 页 A4"}
         </span>
-        <span className="save">
+        <span className={styles.save}>
           <i />
           {saveLabel}
         </span>
-        <div className="zoom-ctl">
+        <div className={styles.zoomCtl}>
           <button
             type="button"
             aria-label="缩小"
@@ -244,7 +247,7 @@ export function ResumePanel() {
           >
             −
           </button>
-          <button type="button" className="zoom-val" onClick={() => setZoom(100)} title="回到 100%">
+          <button type="button" className={styles.zoomVal} onClick={() => setZoom(100)} title="回到 100%">
             {zoom}%
           </button>
           <button

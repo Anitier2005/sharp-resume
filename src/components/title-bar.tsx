@@ -4,6 +4,8 @@ import { isTauri } from "@/lib/storage";
 import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuLabel, MenuSep } from "@/components/ui/menu";
 import { WinClose, WinMax, WinMin } from "@/components/ui/icons";
+import styles from "./title-bar.module.css";
+import menu from "@/components/ui/menu.module.css";
 
 async function windowAction(action: "minimize" | "maximize" | "close") {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
@@ -30,21 +32,22 @@ export function TitleBar() {
 
   return (
     <div
-      className="titlebar"
+      className={styles.titlebar}
       data-tauri-drag-region
+      data-print="hide"
       onDoubleClick={() => run("maximize")}
     >
-      <span className="glyph" />
-      <span className="doc-name">{resume?.title ?? "未选择简历"}</span>
+      <span className={styles.glyph} />
+      <span className={styles.docName}>{resume?.title ?? "未选择简历"}</span>
       <span>— Sharp Resume</span>
 
-      <div className="titlebar-right">
+      <div className={styles.right}>
         <Dropdown
           width={222}
           trigger={
-            <button type="button" className="appearance" aria-label="外观">
+            <button type="button" className={styles.appearance} aria-label="外观">
               <span
-                className="appearance-dot"
+                className={styles.dot}
                 data-accent={accent}
                 data-mode={mode}
               />
@@ -53,7 +56,7 @@ export function TitleBar() {
           }
         >
           <MenuLabel>明暗</MenuLabel>
-          <div className="menu-seg">
+          <div className={menu.seg}>
             <button
               type="button"
               aria-pressed={mode === "light"}
@@ -71,12 +74,12 @@ export function TitleBar() {
           </div>
           <MenuSep />
           <MenuLabel>强调色</MenuLabel>
-          <div className="menu-swatches">
+          <div className={menu.swatches}>
             {ACCENTS.map((item) => (
               <button
                 key={item.key}
                 type="button"
-                className="menu-sw"
+                className={menu.sw}
                 aria-pressed={accent === item.key}
                 onClick={() => dispatch({ type: "setAccent", accent: item.key })}
               >
@@ -87,7 +90,7 @@ export function TitleBar() {
           </div>
           <MenuSep />
           <MenuLabel>字号 · {Math.round(textScale * 100)}%</MenuLabel>
-          <div className="menu-seg">
+          <div className={menu.seg}>
             <button
               type="button"
               aria-pressed={autoScale}
@@ -109,7 +112,7 @@ export function TitleBar() {
           </div>
         </Dropdown>
 
-        <div className="winbtns">
+        <div className={styles.winbtns}>
           <button type="button" aria-label="最小化" onClick={() => run("minimize")}>
             <WinMin />
           </button>

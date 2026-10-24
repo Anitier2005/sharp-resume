@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Attachment } from "@/types";
 import { ArrowUp, Close, FileIcon, Plus } from "@/components/ui/icons";
+import styles from "./composer.module.css";
 import { formatSize, toAttachment } from "@/lib/attach";
 
 interface ComposerProps {
@@ -46,16 +47,16 @@ export function Composer({
   };
 
   return (
-    <div className="composer">
-      <div className="composer-in">
-        <div className="box">
+    <div className={styles.composer}>
+      <div className={styles.composerIn}>
+        <div className={styles.box}>
           {files.length > 0 && (
-            <div className="pending-files">
+            <div className={styles.pendingFiles}>
               {files.map((file) => (
-                <span className="pending" key={file.id}>
+                <span className={styles.pending} key={file.id}>
                   <FileIcon size={10} />
                   {file.name}
-                  <span className="sz">{formatSize(file.size)}</span>
+                  <span className={styles.sz}>{formatSize(file.size)}</span>
                   <button
                     type="button"
                     aria-label={`移除 ${file.name}`}
@@ -70,7 +71,7 @@ export function Composer({
 
           <textarea
             ref={areaRef}
-            className="input-area"
+            className={styles.input}
             rows={1}
             value={text}
             placeholder="描述你想改的地方，或拖入 JD、旧简历…"
@@ -84,10 +85,10 @@ export function Composer({
             }}
           />
 
-          <div className="bar-row">
+          <div className={styles.bar}>
             <button
               type="button"
-              className="plus"
+              className={styles.plus}
               aria-label="添加文件"
               onClick={() => fileRef.current?.click()}
             >
@@ -95,7 +96,7 @@ export function Composer({
             </button>
             <button
               type="button"
-              className="pick"
+              className={styles.pick}
               onClick={onOpenSettings}
               title="模型设置"
             >
@@ -103,7 +104,7 @@ export function Composer({
             </button>
             <button
               type="button"
-              className="send"
+              className={styles.send}
               aria-label="发送"
               disabled={busy || (!text.trim() && files.length === 0)}
               onClick={submit}
@@ -124,7 +125,7 @@ export function Composer({
             }}
           />
         </div>
-        <div className="hint">
+        <div className={styles.hint}>
           <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>
           <kbd>Enter</kbd> 换行
         </div>

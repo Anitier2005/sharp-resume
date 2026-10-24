@@ -1,0 +1,59 @@
+/* ==========================================================================
+   全局基础层：reset、字体渲染、全局伪元素
+
+   只放"无法归属到某个组件"的规则。组件自身的样式一律进各自的 .module.css。
+   ========================================================================== */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: #ffffff;
+  color: #1a1a17;
+  font-family: var(--ui);
+  font-size: 0.75rem;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 按钮继承父级字体，避免各组件重复声明 font:inherit */
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+::selection {
+  background: #e3e3dd;
+  color: #141412;
+}
+
+/* 细滚动条：多个可滚动容器共用，写在这里避免重复 */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--acc-line) transparent;
+}
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: var(--acc-line);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.scroll-thin::-webkit-scrollbar-thumb:hover {
+  background: var(--acc-line-2);
+  background-clip: content-box;
+}

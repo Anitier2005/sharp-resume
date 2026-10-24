@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { ToastContext } from "./toast-context";
+import styles from "./toast.module.css";
 
 interface ToastItem {
   id: number;
@@ -21,9 +22,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={push}>
       {children}
-      <div className="toasts" aria-live="polite">
+      <div className={styles.toasts} data-print="hide" aria-live="polite">
         {items.map((item) => (
-          <div key={item.id} className="toast">
+          <div key={item.id} className={styles.toast}>
             {item.text}
           </div>
         ))}

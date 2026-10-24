@@ -1,0 +1,124 @@
+.chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-elev);
+  position: relative;
+}
+
+.empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  font-size: 0.71875rem;
+  color: var(--fg-3);
+}
+
+/* ---------- 会话头 ---------- */
+.head {
+  height: 40px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.71875rem;
+  color: var(--fg-3);
+}
+
+.crumb {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.crumb .who {
+  color: var(--acc-text);
+}
+.crumb b {
+  font-weight: 400;
+  color: var(--fg-1);
+}
+.crumb .sep {
+  color: var(--fg-4);
+}
+
+.model {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 0.65625rem;
+  color: var(--fg-3);
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.model:hover {
+  background: var(--acc-softer);
+  color: var(--acc-text);
+}
+
+/* 未配置模型时的静态占位（点击进入设置） */
+.modelStatic {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 7px;
+  font-size: 0.65625rem;
+  color: var(--fg-3);
+}
+.modelStatic:hover {
+  color: var(--fg-1);
+}
+
+/* ---------- 消息流 ---------- */
+.thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 22px 26px 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--acc-line) transparent;
+}
+.thread::-webkit-scrollbar {
+  width: 8px;
+}
+.thread::-webkit-scrollbar-thumb {
+  background: var(--acc-line);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.threadIn {
+  width: 100%;
+  max-width: 620px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* 拖拽悬停提示 */
+.dropHint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 40px;
+  bottom: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--acc-line-2);
+  background: color-mix(in srgb, var(--bg-elev) 86%, transparent);
+  font-size: 0.71875rem;
+  color: var(--acc-text);
+  pointer-events: none;
+}
