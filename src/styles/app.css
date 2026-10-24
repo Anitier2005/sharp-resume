@@ -162,9 +162,12 @@ html[data-accent="clay"]   .win[data-mode="dark"]{--acc:#F08A6E;}
 
 /* ---------- 标题栏 ---------- */
 .titlebar{
-  height:30px;flex:none;
+  /* 固定 38px：比原 30px 宽松，与 VS Code（35px）观感相当。
+     刻意用 px 不用 rem —— 标题栏是窗口外壳，各档字号下高度应稳定；
+     若写成 rem，1.05 档 40px、1.5 档 57px，档位间跳动过大。 */
+  height:38px;flex:none;
   display:flex;align-items:center;gap:8px;
-  padding:0 4px 0 12px;
+  padding:0 4px 0 14px;
   background:var(--bg-title);
   border-bottom:1px solid var(--line);
   font-size:0.6875rem;
@@ -172,8 +175,9 @@ html[data-accent="clay"]   .win[data-mode="dark"]{--acc:#F08A6E;}
 }
 .glyph{width:9px;height:9px;border-radius:2px;background:var(--acc);box-shadow:0 0 0 3px var(--acc-softer);}
 .titlebar .doc-name{color:var(--fg-2);}
-.winbtns{margin-left:auto;display:flex;}
-.winbtns button{width:34px;height:30px;display:grid;place-items:center;color:var(--fg-3);}
+.winbtns{margin-left:auto;display:flex;height:100%;}
+/* 宽 46px 对齐 Windows 原生窗口按钮（SM_CXSIZE）；高度撑满标题栏 */
+.winbtns button{width:46px;height:100%;display:grid;place-items:center;color:var(--fg-3);}
 .winbtns button:hover{background:var(--bg-hover);color:var(--fg-1);}
 .winbtns button:last-child:hover{background:var(--danger);color:#fff;}
 
@@ -541,8 +545,8 @@ html[data-accent="clay"]   .win[data-mode="dark"]{--acc:#F08A6E;}
    ========================================================================== */
 
 /* ---------- 标题栏右侧 ---------- */
-.titlebar-right{margin-left:auto;display:flex;align-items:center;gap:2px;}
-.appearance{display:flex;align-items:center;gap:5px;height:22px;padding:0 7px;border-radius:4px;font-size:0.65625rem;color:var(--fg-3);}
+.titlebar-right{margin-left:auto;display:flex;align-items:center;gap:2px;height:100%;}
+.appearance{display:flex;align-items:center;gap:5px;height:26px;padding:0 8px;border-radius:4px;font-size:0.65625rem;color:var(--fg-3);}
 .appearance:hover{background:var(--bg-hover);color:var(--fg-1);}
 .appearance-dot{width:8px;height:8px;border-radius:2px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.14);background:#fff;}
 .appearance-dot[data-accent="indigo"]{background:#3B50B4;}
