@@ -138,12 +138,18 @@
 .person svg {
   color: var(--fg-3);
 }
+/* 数字徽标：不能用 grid + place-items 居中。
+   place-items 居中的是行盒，不是字形墨迹；行盒随 font 的 normal 行高走，
+   「1」这类数字只有上伸没有下伸，墨迹会被顶到偏下 1.5px（实测）。
+   改用 flex + line-height:1，让行盒等于字号，墨迹居中误差降到 0.5px 以内。 */
 .person .count {
   margin-left: auto;
   min-width: 15px;
   height: 15px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
   padding: 0 4px;
   border: 1px solid transparent;
   border-radius: 3px;

@@ -198,12 +198,15 @@
   align-items: center;
   gap: 3px;
 }
+/* 同上：数字/百分号用 flex + line-height:1 居中，grid 会把墨迹压偏下 */
 .zoomCtl button {
   height: 16px;
   min-width: 16px;
   padding: 0 3px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
   border-radius: 3px;
   font-size: 0.5625rem;
   color: var(--fg-3);
