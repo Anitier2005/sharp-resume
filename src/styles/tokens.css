@@ -160,7 +160,13 @@ html[data-accent="clay"] .win[data-mode="dark"] { --acc: #f08a6e; }
   background: var(--acc-soft);
   color: var(--fg-1);
 }
-.win :focus-visible {
+/* 聚焦环是「全局兜底」，只服务那些没有自带聚焦样式的元素（按钮、页签、链接…）。
+   这里必须用 :where(.win) 把特异性压到 (0,1,0)：
+   写成 `.win :focus-visible` 是 (0,2,0)，会盖掉组件里单类名写的 `outline: none`
+   （如 `.input`、`.bullet input`、`.search input`），于是输入框上同时出现
+   「容器圆角聚焦环」和「输入框方角硬描边」两层框——输入框文字外面套一个
+   90° 的死板方框，视觉上非常刺眼。压到 (0,1,0) 后组件自己的声明天然获胜。 */
+:where(.win) :focus-visible {
   outline: 2px solid var(--acc-line-2);
   outline-offset: 1px;
 }

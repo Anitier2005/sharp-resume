@@ -46,6 +46,12 @@
 .input::placeholder {
   color: var(--fg-3);
 }
+/* 聚焦表现由外层 .box:focus-within 承担（圆角描边 + 3px 软光环）。
+   这里显式关掉全局聚焦环：`.input` 与 `:where(.win) :focus-visible` 同为 (0,1,0)，
+   只靠源文件顺序不可靠——加上 :focus-visible 提到 (0,2,0)，永远赢。 */
+.input:focus-visible {
+  outline: none;
+}
 
 /* ---------- 已选附件 ---------- */
 .pendingFiles {

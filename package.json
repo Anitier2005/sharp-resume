@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "package:clean": "node scripts/package.mjs ../release-clean"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",

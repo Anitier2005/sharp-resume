@@ -215,7 +215,139 @@ fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// WebView2 运行时的固定 GUID（微软官方 EdgeUpdate 客户端 ID）
+#[cfg(target_os = "windows")]
+const WEBVIEW2_CLIENT: &str = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+
+/// 检测本机是否装了 WebView2 运行时。
+///
+/// Tauri 的窗口本身由 WebView2 渲染：没有运行时时进程会直接崩掉，
+/// 用户看到的是"双击没反应"或闪一下就没了——这种静默失败最难排查，
+/// 所以在创建任何窗口之前先自己检查一次，给出能看懂的提示。
+///
+/// 注册表位置有三处，缺一不可：系统级 64 位视图、系统级 32 位视图
+/// （WOW6432Node，安装器在 x64 上也常写这里）、以及当前用户级安装
+/// （Edge 自带的不进 HKLM，只写 HKCU）。
+#[cfg(target_os = "windows")]
+fn webview2_version() -> Option<String> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+
+    const BASES: [&str; 3] = [
+        r"SOFTWARE\Microsoft\EdgeUpdate\Clients",
+        r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients",
+        r"SOFTWARE\Microsoft\EdgeUpdate\Clients",
+    ];
+
+    for hive in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+        for base in BASES {
+            let root = RegKey::predef(hive);
+            let Ok(clients) = root.open_subkey(base) else {
+                continue;
+            };
+            let Ok(key) = clients.open_subkey(WEBVIEW2_CLIENT) else {
+                continue;
+            };
+            let Ok(pv) = key.get_value::<String, _>("pv") else {
+                continue;
+            };
+            // 卸载后残留的键会把 pv 写成 0.0.0.0，不予采信
+            let trimmed = pv.trim();
+            if !trimmed.is_empty() && trimmed != "0.0.0.0" {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 用系统消息框告知缺少 WebView2，并询问是否打开下载页。
+///
+/// 这里刻意不用 Tauri 的 dialog 插件：窗口都建不起来时插件还没初始化，
+/// 只能直接调 user32 / shell32。
+#[cfg(target_os = "windows")]
+fn report_missing_webview2() {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    const MB_YESNO: u32 = 0x0000_0004;
+    const MB_ICONERROR: u32 = 0x0000_0010;
+    const IDYES: i32 = 6;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn MessageBoxW(hwnd: *mut core::ffi::c_void, text: *const u16, caption: *const u16, utype: u32) -> i32;
+    }
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(
+            hwnd: *mut core::ffi::c_void,
+            op: *const u16,
+            file: *const u16,
+            params: *const u16,
+            dir: *const u16,
+            show: i32,
+        ) -> *mut core::ffi::c_void;
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    let url = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
+    let text = format!(
+        "缺少 Microsoft Edge WebView2 运行时，界面无法显示。\n\n\
+         这是 Windows 10 常见情况（Windows 11 自带）。\n\
+         点「是」将打开微软官方下载页，安装后重新打开本程序即可。\n\n\
+         手动下载：{url}"
+    );
+
+    let text = wide(&text);
+    let caption = wide("Sharp Resume 无法启动");
+    let flags = MB_YESNO | MB_ICONERROR;
+
+    let answer = unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            flags,
+        )
+    };
+
+    if answer == IDYES {
+        let op = wide("open");
+        let file = wide(url);
+        unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                op.as_ptr(),
+                file.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1, // SW_SHOWNORMAL
+            );
+        }
+    }
+}
+
+/// 启动前的环境自检：缺 WebView2 就提示并退出，不留白窗或静默闪退。
+#[cfg(target_os = "windows")]
+fn ensure_webview2() {
+    if webview2_version().is_some() {
+        return;
+    }
+    report_missing_webview2();
+    std::process::exit(1);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_webview2() {}
+
 pub fn run() {
+    // 必须最先执行：窗口一旦创建就依赖 WebView2，届时再检查已经来不及
+    ensure_webview2();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Attachment, ChatAction, ChatMessage, ResumePage } from "@/types";
+import type { Attachment, ChatAction, ChatMessage } from "@/types";
 import { useWorkspace } from "@/store/workspace";
 import { uid } from "@/lib/uid";
 import { useToast } from "@/components/ui/toast-context";
@@ -8,79 +8,17 @@ import { Composer } from "./composer";
 import { toAttachment, attachmentText } from "@/lib/attach";
 import { AiSettingsSheet } from "./ai-settings";
 import { AssistantTurn, EmptyTurn, TypingTurn, UserTurn } from "./message";
-import { keywordCount, rewriteBullet } from "@/lib/rewrite";
 import { aiReady, loadAi, saveAi, streamChat, type AiSettings } from "@/lib/ai";
 import { buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
 import styles from "./chat.module.css";
 
-function buildReply(
-  personName: string,
-  page: ResumePage | null,
-  experiences: { id: string; company: string; bullets: string[] }[],
-  text: string,
-  files: Attachment[],
-): ChatMessage {
-  const targetId = page?.experienceIds[0];
-  const exp = experiences.find((item) => item.id === targetId) ?? experiences[0];
-  const bullet = exp?.bullets[0];
-  const fileNames = files.map((file) => file.name).join("、");
-
-  if (files.length > 0) {
-    return {
-      id: uid("m"),
-      role: "assistant",
-      time: Date.now(),
-      tool: `已登记 ${files.length} 个文件 · 提取 ${keywordCount(fileNames + text)} 个关键词`,
-      content: exp && bullet
-        ? `收到 ${fileNames}。本地模式还没有接入模型读不了文件内容，我先按规则改写了第 1 段的表述——真正的 JD 对齐要等模型接上。`
-        : `收到 ${fileNames}。这份简历还没有经历，先在左侧经历库补一段，我再按 JD 对齐。`,
-      changes:
-        exp && bullet
-          ? [
-              {
-                label: `第 1 段 · ${exp.company}`,
-                before: bullet,
-                after: rewriteBullet(bullet),
-                target: { experienceId: exp.id, bulletIndex: 0 },
-              },
-            ]
-          : undefined,
-      actions: exp && bullet
-        ? [
-            { id: uid("a"), label: `应用到第 1 段`, kind: "apply" },
-            { id: uid("a"), label: "换个说法", kind: "hint" },
-          ]
-        : undefined,
-    };
-  }
-
-  return {
-    id: uid("m"),
-    role: "assistant",
-    time: Date.now(),
-    tool: "本地规则 · 主动语态与结果表述",
-    content: exp && bullet
-      ? `${personName} 的经历库里有 ${experiences.length} 段经历，这份简历引用了 ${page?.experienceIds.length ?? 0} 段。第 1 段开头是「负责」，改成主动表述会更像主导者。`
-      : "这份简历还没有引用任何经历。先在左侧展开候选人补一段经历，再来改写。",
-    changes:
-      exp && bullet
-        ? [
-            {
-              label: `第 1 段 · ${exp.company}`,
-              before: bullet,
-              after: rewriteBullet(bullet),
-              target: { experienceId: exp.id, bulletIndex: 0 },
-            },
-          ]
-        : undefined,
-    actions: exp && bullet
-      ? [
-          { id: uid("a"), label: "应用到第 1 段", kind: "apply" },
-          { id: uid("a"), label: "这段再具体点", kind: "hint" },
-        ]
-      : undefined,
-  };
-}
+/**
+ * 没有配置模型时不产生任何"回答"。
+ *
+ * 这里曾经用 lib/rewrite.ts 的本地规则拼一段看起来像 AI 的回复
+ * （还带"已提取 N 个关键词"这类并未真正计算的工具行），用户会误以为是模型输出。
+ * 现在改为：不写消息、不伪造内容，直接把设置面板推到用户面前。
+ */
 
 export function ChatPanel() {
   const { person, resume, page, dispatch } = useWorkspace();
@@ -92,11 +30,10 @@ export function ChatPanel() {
   const [aiOpen, setAiOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const timerRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const configured = aiReady(ai);
-  const modelLabel = configured ? ai.model : "本地规则";
+  const modelLabel = configured ? ai.model : "未配置模型 · 点此设置";
 
   const messages = useMemo(() => resume?.messages ?? [], [resume]);
 
@@ -110,9 +47,6 @@ export function ChatPanel() {
     setBusy(false);
     setFiles([]);
     setInput("");
-    return () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current);
-    };
   }, [resume?.id]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -120,6 +54,20 @@ export function ChatPanel() {
   const send = useCallback(
     (text: string, attachments: Attachment[]) => {
       if (!person || !resume) return;
+
+      // 没有模型就到此为止：不发消息、不伪造回答，直接引导去配置
+      if (!configured) {
+        setAiOpen(true);
+        toast("先配置模型才能对话");
+        return;
+      }
+
+      const targetPage = page ?? resume.pages[0] ?? null;
+      if (!targetPage) {
+        toast("这份简历还没有页面，先在右边新增一页");
+        return;
+      }
+
       const userMessage: ChatMessage = {
         id: uid("m"),
         role: "user",
@@ -131,7 +79,7 @@ export function ChatPanel() {
 
       const snapshotPerson = person;
       const snapshotResume = resume;
-      const snapshotPage = page ?? resume.pages[0] ?? null;
+      const snapshotPage = targetPage;
       const patchReply = (messageId: string, patch: Partial<ChatMessage>) =>
         dispatch({
           type: "patchMessage",
@@ -141,102 +89,79 @@ export function ChatPanel() {
           patch,
         });
 
-      /* ---- 接了模型：流式回答 ---- */
-      if (configured && snapshotPage) {
-        setBusy(true);
-        const replyId = uid("m");
-        dispatch({
-          type: "appendMessage",
-          personId: snapshotPerson.id,
-          resumeId: snapshotResume.id,
-          message: {
-            id: replyId,
-            role: "assistant",
-            time: Date.now(),
-            content: "",
-            tool: `${ai.model} · 正在读简历`,
-          },
-        });
-
-        const controller = new AbortController();
-        abortRef.current?.abort();
-        abortRef.current = controller;
-
-        let acc = "";
-        let flushedAt = 0;
-        const flush = (force: boolean) => {
-          const now = Date.now();
-          if (!force && now - flushedAt < 70) return;
-          flushedAt = now;
-          patchReply(replyId, { content: acc });
-        };
-
-        const messagesForApi = toApiMessages(
-          buildSystemPrompt(snapshotPerson, snapshotPage, snapshotResume.title),
-          snapshotResume.messages.map((item) => ({ role: item.role, content: item.content })),
-          text,
-          attachments.map((file) => ({ name: file.name, text: attachmentText(file.id) })),
-        );
-
-        void (async () => {
-          try {
-            await streamChat({
-              settings: ai,
-              messages: messagesForApi,
-              signal: controller.signal,
-              onDelta: (delta) => {
-                acc += delta;
-                flush(false);
-              },
-            });
-            const { content, changes } = splitReply(acc, snapshotPerson);
-            patchReply(replyId, {
-              content: content || "（模型没有返回正文）",
-              tool: `${ai.model} · 完成`,
-              changes: changes.length ? changes : undefined,
-              actions: changes.length
-                ? [
-                    { id: uid("a"), label: `应用 ${changes.length} 处改写`, kind: "apply" },
-                    { id: uid("a"), label: "再收一收", kind: "hint" },
-                  ]
-                : undefined,
-            });
-          } catch (error) {
-            if (controller.signal.aborted) return;
-            const reason = error instanceof Error ? error.message : String(error);
-            patchReply(replyId, {
-              content: `调用失败：${reason}`,
-              tool: `${ai.model} · 调用失败`,
-              actions: [{ id: uid("a"), label: "去检查设置", kind: "hint" }],
-            });
-            toast("模型调用失败，检查接口地址与密钥");
-          } finally {
-            setBusy(false);
-            abortRef.current = null;
-          }
-        })();
-        return;
-      }
-
-      /* ---- 没接模型：本地规则 ---- */
+      // ---- 流式回答：到这里一定已配置模型，且当前有页面 ----
       setBusy(true);
-      timerRef.current = window.setTimeout(() => {
-        const reply = buildReply(
-          snapshotPerson.name,
-          snapshotPage,
-          snapshotPerson.experiences,
-          text,
-          attachments,
-        );
-        dispatch({
-          type: "appendMessage",
-          personId: snapshotPerson.id,
-          resumeId: snapshotResume.id,
-          message: reply,
-        });
-        setBusy(false);
-        timerRef.current = null;
-      }, 900);
+      const replyId = uid("m");
+      dispatch({
+        type: "appendMessage",
+        personId: snapshotPerson.id,
+        resumeId: snapshotResume.id,
+        message: {
+          id: replyId,
+          role: "assistant",
+          time: Date.now(),
+          content: "",
+          tool: `${ai.model} · 正在读简历`,
+        },
+      });
+
+      const controller = new AbortController();
+      abortRef.current?.abort();
+      abortRef.current = controller;
+
+      let acc = "";
+      let flushedAt = 0;
+      const flush = (force: boolean) => {
+        const now = Date.now();
+        if (!force && now - flushedAt < 70) return;
+        flushedAt = now;
+        patchReply(replyId, { content: acc });
+      };
+
+      const messagesForApi = toApiMessages(
+        buildSystemPrompt(snapshotPerson, snapshotPage, snapshotResume.title),
+        snapshotResume.messages.map((item) => ({ role: item.role, content: item.content })),
+        text,
+        attachments.map((file) => ({ name: file.name, text: attachmentText(file.id) })),
+      );
+
+      void (async () => {
+        try {
+          await streamChat({
+            settings: ai,
+            messages: messagesForApi,
+            signal: controller.signal,
+            onDelta: (delta) => {
+              acc += delta;
+              flush(false);
+            },
+          });
+          const { content, changes } = splitReply(acc, snapshotPerson);
+          patchReply(replyId, {
+            content: content || "（模型没有返回正文）",
+            tool: `${ai.model} · 完成`,
+            changes: changes.length ? changes : undefined,
+            actions: changes.length
+              ? [
+                  { id: uid("a"), label: `应用 ${changes.length} 处改写`, kind: "apply" },
+                  { id: uid("a"), label: "再收一收", kind: "hint" },
+                ]
+              : undefined,
+          });
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          const reason = error instanceof Error ? error.message : String(error);
+          patchReply(replyId, {
+            content: `调用失败：${reason}`,
+            tool: `${ai.model} · 调用失败`,
+            actions: [{ id: uid("a"), label: "去检查设置", kind: "hint" }],
+          });
+          toast("模型调用失败，检查接口地址与密钥");
+        } finally {
+          setBusy(false);
+          abortRef.current = null;
+        }
+      })();
     },
     [person, resume, page, dispatch, ai, configured, toast],
   );
