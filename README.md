@@ -111,10 +111,26 @@
 
 ```bash
 npm install
-npm run dev        # 浏览器预览 http://localhost:1420
-npm run tauri:dev  # 桌面窗口
-npm run tauri:build
+npm run dev            # 纯前端热更新，浏览器开 http://localhost:1420
+.tools\dev.cmd        # 桌面窗口热更新（前端即时，Rust 改动自动重建重启）
+.tools\build.bat      # release exe
+npm run package:clean  # 把 exe 放进 ../release-clean（清空、自检、单文件）
 ```
+
+热重载范围：
+
+| 改了什么 | 结果 |
+|---|---|
+| `.tsx` / `.ts` / `.css` | 保存即生效，窗口不刷新、应用状态不丢 |
+| `src-tauri/**`（Rust） | tauri 自动增量重建并重启窗口，debug 档十几秒 |
+| `tauri.conf.json` | 重启窗口 |
+
+只调界面时用 `npm run dev` 更轻：浏览器里同样是热更新，只是没有文件对话框等 Tauri 能力
+（状态回落 localStorage、导出回落浏览器下载，功能照样能点）。
+
+> 两个 `.tools\*.cmd` 只负责把 MSVC 环境拼好再调命令 —— 本机 `cl.exe` 不在 PATH 里，
+> 且 Windows SDK 的 ucrt 库不全（缺 `legacy_stdio_definitions.lib` / `oldnames.lib`），
+> 由 `.tools\libstub` 的空壳导入库顶上。细节见脚本里注释。
 
 > **Windows 打包前提**：Rust 的 `x86_64-pc-windows-msvc` 目标需要 MSVC 编译器（`cl.exe`）。
 > 只装 Rust 不装 C++ 工具链时，`cargo check` 会报 `failed to find tool "cl.exe"`。
