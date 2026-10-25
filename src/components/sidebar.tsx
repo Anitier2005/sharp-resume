@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem, MenuSep } from "@/components/ui/menu";
-import { ChevronRight, Plus, Search, User } from "@/components/ui/icons";
+import { ChevronRight, Layers, Plus, Search, User } from "@/components/ui/icons";
+import { LibraryDrawer } from "@/components/library/drawer";
 import { pageShort, type Person, type Resume } from "@/types";
 import { cx } from "@/lib/cx";
 import styles from "./sidebar.module.css";
@@ -17,6 +18,8 @@ export function Sidebar() {
   const toast = useToast();
   const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
+  /** 经历库属于「人」，抽屉也开在这里；面板自己从 store 取当前人 */
+  const [libOpen, setLibOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -121,6 +124,27 @@ export function Sidebar() {
 
               {open && (
                 <ul className={styles.subs}>
+                  {/* 经历与作品挂在「人」这一级，入口就放在人下面，不放简历工具条 */}
+                  <li>
+                    <button
+                      type="button"
+                      className={styles.libEntry}
+                      title={`编辑${item.name}的共享经历与作品，勾选进当前页`}
+                      onClick={() => {
+                        if (person?.id !== item.id) {
+                          dispatch({ type: "selectPerson", personId: item.id });
+                        }
+                        setLibOpen(true);
+                      }}
+                    >
+                      <Layers size={10} />
+                      <span className={styles.libName}>经历库</span>
+                      <span className={styles.libCount}>
+                        {item.experiences.length} 段 · {item.projects.length} 件
+                      </span>
+                    </button>
+                  </li>
+
                   {item.resumes.map((target) => {
                     const active = resume?.id === target.id;
                     if (renaming === target.id) {
@@ -220,6 +244,8 @@ export function Sidebar() {
         <span className={styles.live} />
         本地工作区 · 自动保存
       </div>
+
+      <LibraryDrawer open={libOpen} onClose={() => setLibOpen(false)} />
     </aside>
   );
 }

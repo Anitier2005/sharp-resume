@@ -2,12 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem, MenuSep } from "@/components/ui/menu";
-import { ChevronDown, Close, Layers, Plus } from "@/components/ui/icons";
+import { ChevronDown, Close, Plus } from "@/components/ui/icons";
 import { countChars, pageIndex } from "@/lib/doc";
 import { pageToMarkdown, printPage, resumeToMarkdown, saveBytes, saveText } from "@/lib/export";
 import { pageToDocx } from "@/lib/docx";
 import { PAGE_KIND_LABEL, type PageKind } from "@/types";
-import { LibraryDrawer } from "@/components/library/drawer";
 import { Paper } from "./paper";
 import { Portfolio } from "./portfolio";
 import { ResumeForm } from "./form";
@@ -25,7 +24,6 @@ export function ResumePanel() {
   const toast = useToast();
   const [mode, setMode] = useState<ViewMode>("edit");
   const [zoom, setZoom] = useState(100);
-  const [libOpen, setLibOpen] = useState(false);
   const [sheets, setSheets] = useState(1);
   /** 当前纸宽下 A4 一页的高度（px），用来画分页线 */
   const [a4Height, setA4Height] = useState(529);
@@ -152,16 +150,6 @@ export function ResumePanel() {
             />
           ))}
         </Dropdown>
-
-        <button
-          type="button"
-          className={styles.libBtn}
-          onClick={() => setLibOpen(true)}
-          title="编辑共享经历与作品，勾选本页用哪些"
-        >
-          <Layers size={11} />
-          经历库
-        </button>
 
         <span className={styles.fill} />
 
@@ -359,8 +347,6 @@ export function ResumePanel() {
         </div>
         )}
       </div>
-
-      <LibraryDrawer open={libOpen} onClose={() => setLibOpen(false)} />
     </section>
   );
 }

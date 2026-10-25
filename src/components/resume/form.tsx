@@ -287,7 +287,7 @@ export function ResumeForm({
                   {exp.notes.trim() ? (
                     <p className={styles.notes}>{exp.notes}</p>
                   ) : (
-                    <div className={styles.recordEmpty}>这段经历在库里还没有详实记录。</div>
+                    <div className={styles.recordEmpty}>这段经历在左侧经历库里还没有详实记录。</div>
                   )}
                   {exp.facts.length > 0 && (
                     <div className={styles.facts}>
@@ -315,7 +315,7 @@ export function ResumeForm({
         }
       >
         {spare.length === 0 ? (
-          <MenuItem label="库里没有可加的经历" onSelect={() => toast("先去经历库新增一段")} />
+          <MenuItem label="库里没有可加的经历" onSelect={() => toast("先在左侧经历库新增一段")} />
         ) : (
           spare.map((exp) => (
             <MenuItem key={exp.id} label={`${exp.company} · ${exp.role}`} onSelect={() => onAddEntry(exp.id)} />
@@ -329,12 +329,12 @@ export function ResumeForm({
   const projectSection = (
     <Section
       title="作品"
-      hint="勾选进本页，内容在经历库里改"
+      hint="勾选进本页，内容在左侧经历库里改"
       count={`${page.projectIds.length} 件`}
       open={open.project}
       onToggle={() => toggle("project")}
     >
-      {person.projects.length === 0 && <div className={styles.emptyNote}>还没有共享作品。</div>}
+      {person.projects.length === 0 && <div className={styles.emptyNote}>这个人还没有共享作品，去左侧经历库加一件。</div>}
       <div className={styles.pickList}>
         {person.projects.map((project) => {
           const on = page.projectIds.includes(project.id);
@@ -383,13 +383,13 @@ export function ResumeForm({
   const educationSection = (
     <Section
       title="教育"
-      hint="人的一级，所有简历共用"
+      hint="人的一级，在左侧经历库里改"
       count={`${person.education.length} 条`}
       open={open.education}
       onToggle={() => toggle("education")}
     >
       {person.education.length === 0 && (
-        <div className={styles.emptyNote}>还没有教育经历，去经历库补。</div>
+        <div className={styles.emptyNote}>还没有教育经历，去左侧经历库补。</div>
       )}
       {person.education.map((item) => (
         <div className={styles.readonly} key={item.id}>
@@ -406,12 +406,12 @@ export function ResumeForm({
   const skillSection = (
     <Section
       title="技能"
-      hint="人的一级，所有简历共用"
+      hint="人的一级，在左侧经历库里改"
       count={`${person.skills.length} 组`}
       open={open.skill}
       onToggle={() => toggle("skill")}
     >
-      {person.skills.length === 0 && <div className={styles.emptyNote}>还没有技能分组。</div>}
+      {person.skills.length === 0 && <div className={styles.emptyNote}>还没有技能分组，去左侧经历库补。</div>}
       {person.skills.map((group) => (
         <div className={styles.readonly} key={group.id}>
           <span className={styles.k}>{en ? group.labelEn || group.label : group.label}：</span>

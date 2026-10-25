@@ -309,6 +309,43 @@
   color: var(--acc-text);
 }
 
+/* 经历库入口：属于「人」，所以在人的子树里，排在简历之前 */
+.libEntry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: calc(100% - 34px);
+  height: 26px;
+  margin: 0 7px 2px 27px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 0.65625rem;
+  color: var(--fg-3);
+  text-align: left;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.libEntry svg {
+  flex: none;
+  color: var(--fg-4);
+}
+.libEntry:hover {
+  background: var(--acc-softer);
+  color: var(--acc-text);
+}
+.libEntry:hover svg {
+  color: var(--acc-text);
+}
+.libName {
+  flex: none;
+}
+.libCount {
+  margin-left: auto;
+  font-size: 0.59375rem;
+  color: var(--fg-4);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .empty {
   padding: 14px 10px;
   font-size: 0.65625rem;

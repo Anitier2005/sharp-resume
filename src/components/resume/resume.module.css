@@ -96,28 +96,6 @@
   flex: 1;
 }
 
-/* 打开经历库的入口（原先误放在抽屉样式区） */
-.libBtn {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  margin-left: 2px;
-  padding: 0 6px;
-  white-space: nowrap;
-  border-radius: 4px;
-  font-size: 0.65625rem;
-  color: var(--fg-3);
-}
-.libBtn:hover {
-  background: var(--bg-hover);
-  color: var(--fg-1);
-}
-.libBtn:hover svg {
-  color: var(--acc-text);
-}
-
 .export {
   flex: none;
   margin-left: 2px;
