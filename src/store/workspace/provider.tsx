@@ -17,12 +17,20 @@ import { reducer } from "./reducer";
 import { WorkspaceContext, type WorkspaceContextValue, type SaveState } from "./context";
 
 /**
- * 初始工作区：开发构建给示例数据便于调样式，生产构建给空白工作区。
+ * 初始工作区：空白起步，跟正式版一致。
+ *
+ * 以前是「DEV 就给示例数据」，结果 dev 窗口当正式工作区用时，没有存档就会载入
+ * 8 个虚构候选人和一段假的 AI 改写对话，一操作还落盘，用户会以为自己的数据
+ * 被一堆「不存在的会话」占了。现在改成显式索取：
+ *   http://localhost:1420/?seed=1   → 载入示例数据（调样式用）
+ *   桌面 dev 窗口 / 不带参数          → 空白，跟生产一致
  *
  * vite.config 在 production 下把 @/data/seed 重定向到 seed.prod（空实现），
- * 这里再留一道 DEV 判断做双保险 —— 发布产物里不含任何示例简历。
+ * 所以发布产物里永远不含示例简历，带 ?seed=1 也只会得到空白工作区。
  */
-const INITIAL_WORKSPACE: Workspace = import.meta.env.DEV ? SEED : EMPTY_WORKSPACE;
+const wantsSeed =
+  import.meta.env.DEV && new URLSearchParams(window.location.search).has("seed");
+const INITIAL_WORKSPACE: Workspace = wantsSeed ? SEED : EMPTY_WORKSPACE;
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, INITIAL_WORKSPACE);

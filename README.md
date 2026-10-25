@@ -128,6 +128,10 @@ npm run package:clean  # 把 exe 放进 ../release-clean（清空、自检、单
 只调界面时用 `npm run dev` 更轻：浏览器里同样是热更新，只是没有文件对话框等 Tauri 能力
 （状态回落 localStorage、导出回落浏览器下载，功能照样能点）。
 
+> 首屏一律是空白工作区，跟正式版一致。要载入示例数据（8 个虚构候选人 + 一段对话，
+> 调版式用）就在浏览器地址后面加参数：`http://localhost:1420/?seed=1`。
+> 桌面 dev 窗口不带参数，所以不会再被示例数据占住。
+
 > 两个 `.tools\*.cmd` 只负责把 MSVC 环境拼好再调命令 —— 本机 `cl.exe` 不在 PATH 里，
 > 且 Windows SDK 的 ucrt 库不全（缺 `legacy_stdio_definitions.lib` / `oldnames.lib`），
 > 由 `.tools\libstub` 的空壳导入库顶上。细节见脚本里注释。
