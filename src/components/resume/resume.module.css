@@ -23,8 +23,8 @@
   flex: none;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 0 10px;
+  gap: 1px;
+  padding: 0 6px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -34,7 +34,7 @@
   align-items: center;
   gap: 4px;
   height: 40px;
-  padding: 0 9px;
+  padding: 0 6px;
   border-radius: 4px 4px 0 0;
   font-size: 0.71875rem;
   color: var(--fg-3);
@@ -52,8 +52,8 @@
 .tab.tabOn::after {
   content: "";
   position: absolute;
-  left: 9px;
-  right: 9px;
+  left: 6px;
+  right: 6px;
   bottom: 0;
   height: 2px;
   background: var(--acc);
@@ -77,7 +77,7 @@
 }
 
 .tabAdd {
-  width: 22px;
+  width: 20px;
   height: 22px;
   display: grid;
   place-items: center;
@@ -98,12 +98,14 @@
 
 /* 打开经历库的入口（原先误放在抽屉样式区） */
 .libBtn {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 5px;
   height: 22px;
-  margin-left: 4px;
-  padding: 0 7px;
+  margin-left: 2px;
+  padding: 0 6px;
+  white-space: nowrap;
   border-radius: 4px;
   font-size: 0.65625rem;
   color: var(--fg-3);
@@ -117,12 +119,13 @@
 }
 
 .export {
-  margin-left: auto;
+  flex: none;
+  margin-left: 2px;
   display: flex;
   align-items: center;
   gap: 4px;
   height: 24px;
-  padding: 0 7px;
+  padding: 0 6px;
   border-radius: 5px;
   font-size: 0.65625rem;
   color: var(--fg-3);
@@ -131,6 +134,39 @@
 .export:hover {
   background: var(--acc-softer);
   color: var(--acc-text);
+}
+
+/* 编辑 / 预览切换。flex:none + nowrap 必须写死：
+   右栏只有 420px，挤起来段控会被压成竖排两个字 */
+.seg {
+  flex: none;
+  display: inline-flex;
+  height: 22px;
+  margin-left: 2px;
+  padding: 1px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-hover);
+}
+.segBtn {
+  flex: none;
+  min-width: 34px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 0.65625rem;
+  line-height: 20px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.segBtn:hover {
+  color: var(--fg-1);
+}
+/* 复合选择器压过 .segBtn:hover，否则选中态在 hover 时褪色 */
+.segBtn.segOn {
+  background: var(--bg-elev);
+  color: var(--acc-text);
+  box-shadow: var(--shadow-control);
 }
 
 /* ---------- 画布 ---------- */

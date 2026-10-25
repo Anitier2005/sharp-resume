@@ -27,5 +27,5 @@ export type PersonListKey = "experiences" | "projects" | "education" | "skills";
 
 export type PatchPerson = (next: Partial<Person>) => void;
 
-/** 页面上要勾选的引用字段 */
-export type PageRefField = "experienceIds" | "projectIds";
+/** 页面上要勾选的引用字段（经历已改由 entries 承载，只剩作品还是勾选列表） */
+export type PageRefField = "projectIds";

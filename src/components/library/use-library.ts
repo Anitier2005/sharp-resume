@@ -14,7 +14,7 @@ export function usePatchPerson(person: Person) {
   );
 }
 
-/** 勾选 / 取消「本页」引用某段经历或作品 */
+/** 勾选 / 取消「本页」引用某件作品（经历已改由 entries 承载，见 useEntryToggle） */
 export function usePageToggle() {
   const { person, resume, page, dispatch } = useWorkspace();
   return useCallback(
@@ -27,6 +27,35 @@ export function usePageToggle() {
         pageId: page.id,
         field,
         itemId,
+      });
+    },
+    [dispatch, person, resume, page],
+  );
+}
+
+/** 把一段共享经历挂到 / 摘出当前页 —— 挂上时同时开一条空措辞 */
+export function useEntryToggle() {
+  const { person, resume, page, dispatch } = useWorkspace();
+  return useCallback(
+    (experienceId: string) => {
+      if (!person || !resume || !page) return;
+      const entry = page.entries.find((item) => item.experienceId === experienceId);
+      if (entry) {
+        dispatch({
+          type: "removeEntry",
+          personId: person.id,
+          resumeId: resume.id,
+          pageId: page.id,
+          entryId: entry.id,
+        });
+        return;
+      }
+      dispatch({
+        type: "addEntry",
+        personId: person.id,
+        resumeId: resume.id,
+        pageId: page.id,
+        experienceId,
       });
     },
     [dispatch, person, resume, page],

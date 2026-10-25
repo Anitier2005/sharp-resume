@@ -10,16 +10,20 @@ import { PAGE_KIND_LABEL, type PageKind } from "@/types";
 import { LibraryDrawer } from "@/components/library/drawer";
 import { Paper } from "./paper";
 import { Portfolio } from "./portfolio";
+import { ResumeForm } from "./form";
 import { cx } from "@/lib/cx";
 import styles from "./resume.module.css";
 import paperStyles from "./paper.module.css";
 
 const KIND_OPTIONS: PageKind[] = ["zh", "en", "portfolio"];
 
+type ViewMode = "edit" | "preview";
+
 export function ResumePanel() {
   const { state, person, resume, page, activePageId, setActivePageId, dispatch, saveState } =
     useWorkspace();
   const toast = useToast();
+  const [mode, setMode] = useState<ViewMode>("edit");
   const [zoom, setZoom] = useState(100);
   const [libOpen, setLibOpen] = useState(false);
   const [sheets, setSheets] = useState(1);
@@ -28,7 +32,9 @@ export function ResumePanel() {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
-  // 窗口变窄时自动缩小，保证纸面完整
+  const preview = mode === "preview";
+
+  // 窗口变窄时自动缩小，保证纸面完整（只在预览态有纸面，所以要跟着 mode 重跑）
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
@@ -41,7 +47,7 @@ export function ResumePanel() {
     const observer = new ResizeObserver(fit);
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [mode]);
 
   // 按 A4 比例估算这份内容占几页：纸张按宽度自适应，所以用宽高比换算，缩放不影响结果
   useEffect(() => {
@@ -59,7 +65,7 @@ export function ResumePanel() {
     const observer = new ResizeObserver(measure);
     observer.observe(paper);
     return () => observer.disconnect();
-  }, [page?.id]);
+  }, [mode, page?.id]);
 
   if (!person || !resume || !page) {
     return (
@@ -82,18 +88,14 @@ export function ResumePanel() {
       patch,
     });
 
-  const patchBullet = (expId: string, bulletIndex: number, text: string) => {
-    const exp = person.experiences.find((item) => item.id === expId);
-    if (!exp) return;
-    const key = page.kind === "en" && exp.bulletsEn ? "bulletsEn" : "bullets";
-    const list = [...(exp[key] ?? exp.bullets)];
-    list[bulletIndex] = text;
-    dispatch({
-      type: "updateExperience",
-      personId: person.id,
-      expId,
-      patch: { [key]: list },
-    });
+  /** 预览与导出必须是同一份 DOM：打印前先切到预览，避免用户在编辑态按 Ctrl+P 打出空白 */
+  const handlePrint = () => {
+    if (mode === "preview") {
+      printPage();
+      return;
+    }
+    setMode("preview");
+    requestAnimationFrame(() => requestAnimationFrame(printPage));
   };
 
   const saveLabel = saveState === "saving" ? "保存中…" : "已保存";
@@ -163,6 +165,27 @@ export function ResumePanel() {
 
         <span className={styles.fill} />
 
+        <div className={styles.seg} role="tablist" aria-label="编辑与预览">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "edit"}
+            className={cx(styles.segBtn, mode === "edit" && styles.segOn)}
+            onClick={() => setMode("edit")}
+          >
+            编辑
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "preview"}
+            className={cx(styles.segBtn, mode === "preview" && styles.segOn)}
+            onClick={() => setMode("preview")}
+          >
+            预览
+          </button>
+        </div>
+
         <Dropdown
           width={196}
           trigger={
@@ -172,7 +195,7 @@ export function ResumePanel() {
             </button>
           }
         >
-          <MenuItem label="打印 / 存为 PDF" hint="当前页" onSelect={printPage} />
+          <MenuItem label="打印 / 存为 PDF" hint="当前页" onSelect={handlePrint} />
           <MenuSep />
           <MenuItem
             label="Word · 当前页"
@@ -209,36 +232,112 @@ export function ResumePanel() {
         </Dropdown>
       </div>
 
-      <div className={styles.canvas} ref={canvasRef} data-print="flow">
-        <div className={paperStyles.wrap} data-print="page" ref={wrapRef} style={{ zoom: zoom / 100 }}>
-          {page.kind === "portfolio" ? (
-            <Portfolio person={person} page={page} onPatchPage={patchPage} />
-          ) : (
-            <Paper person={person} page={page} onPatchPage={patchPage} onPatchBullet={patchBullet} />
-          )}
-          {sheets > 1.02 && (
-            <div className={paperStyles.break} style={{ top: a4Height }} aria-hidden>
-              <span>A4</span>
-            </div>
-          )}
+      {preview ? (
+        <div className={styles.canvas} ref={canvasRef} data-print="flow">
+          <div
+            className={paperStyles.wrap}
+            data-print="page"
+            ref={wrapRef}
+            style={{ zoom: zoom / 100 }}
+          >
+            {page.kind === "portfolio" ? (
+              <Portfolio person={person} page={page} />
+            ) : (
+              <Paper person={person} page={page} />
+            )}
+            {sheets > 1.02 && (
+              <div className={paperStyles.break} style={{ top: a4Height }} aria-hidden>
+                <span>A4</span>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <ResumeForm
+          person={person}
+          page={page}
+          onPatchPage={patchPage}
+          onAddEntry={(experienceId) =>
+            dispatch({
+              type: "addEntry",
+              personId: person.id,
+              resumeId: resume.id,
+              pageId: page.id,
+              experienceId,
+            })
+          }
+          onRemoveEntry={(entryId) =>
+            dispatch({
+              type: "removeEntry",
+              personId: person.id,
+              resumeId: resume.id,
+              pageId: page.id,
+              entryId,
+            })
+          }
+          onMoveEntry={(entryId, dir) =>
+            dispatch({
+              type: "moveEntry",
+              personId: person.id,
+              resumeId: resume.id,
+              pageId: page.id,
+              entryId,
+              dir,
+            })
+          }
+          onUpdateEntry={(entryId, patch) =>
+            dispatch({
+              type: "updateEntry",
+              personId: person.id,
+              resumeId: resume.id,
+              pageId: page.id,
+              entryId,
+              patch,
+            })
+          }
+          onToggleProject={(itemId) =>
+            dispatch({
+              type: "togglePageItem",
+              personId: person.id,
+              resumeId: resume.id,
+              pageId: page.id,
+              field: "projectIds",
+              itemId,
+            })
+          }
+          onMoveProject={(itemId, dir) =>
+            dispatch({
+              type: "movePageItem",
+              personId: person.id,
+              resumeId: resume.id,
+              pageId: page.id,
+              field: "projectIds",
+              itemId,
+              dir,
+            })
+          }
+        />
+      )}
 
       <div className={styles.foot} data-print="hide">
         <span>
           第 {index + 1} 页 / 共 {resume.pages.length} 页
         </span>
         <span>{meta["字"]}</span>
-        <span
-          className={sheets > 1.02 ? styles.over : undefined}
-          title="按 A4 比例估算当前页占几页"
-        >
-          {sheets > 1.02 ? `≈ ${sheets.toFixed(1)} 页 A4` : "1 页 A4"}
-        </span>
+        {/* 页数与缩放只对预览有意义：编辑态没有纸面，估算出来的数字会过期 */}
+        {preview && (
+          <span
+            className={sheets > 1.02 ? styles.over : undefined}
+            title="按 A4 比例估算当前页占几页"
+          >
+            {sheets > 1.02 ? `≈ ${sheets.toFixed(1)} 页 A4` : "1 页 A4"}
+          </span>
+        )}
         <span className={styles.save}>
           <i />
           {saveLabel}
         </span>
+        {preview && (
         <div className={styles.zoomCtl}>
           <button
             type="button"
@@ -258,6 +357,7 @@ export function ResumePanel() {
             +
           </button>
         </div>
+        )}
       </div>
 
       <LibraryDrawer open={libOpen} onClose={() => setLibOpen(false)} />

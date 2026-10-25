@@ -136,7 +136,7 @@ export function ChatPanel() {
               flush(false);
             },
           });
-          const { content, changes } = splitReply(acc, snapshotPerson);
+          const { content, changes } = splitReply(acc, snapshotPerson, snapshotPage);
           patchReply(replyId, {
             content: content || "（模型没有返回正文）",
             tool: `${ai.model} · 完成`,
@@ -175,33 +175,38 @@ export function ChatPanel() {
         return;
       }
 
-      // 同一段经历的多处改写要合并成一次写入，否则后一次会覆盖前一次
+      // 改写只写回当前这一页的措辞（entry），不碰经历库里的记录。
+      // 同一条 entry 的多处改写合并成一次写入，否则后一次会覆盖前一次。
+      if (!page) return;
       const patches = new Map<string, { bullets?: string[]; bulletsEn?: string[] }>();
       for (const change of changes) {
         const target = change.target;
         if (!target) continue;
-        const exp = person.experiences.find((item) => item.id === target.experienceId);
-        if (!exp) continue;
-        const bucket = patches.get(exp.id) ?? {};
-        if (target.lang === "en") {
-          const list = bucket.bulletsEn ?? [...(exp.bulletsEn ?? [])];
-          list[target.bulletIndex] = change.after;
-          bucket.bulletsEn = list;
-        } else {
-          const list = bucket.bullets ?? [...exp.bullets];
-          list[target.bulletIndex] = change.after;
-          bucket.bullets = list;
-        }
-        patches.set(exp.id, bucket);
+        const entry = page.entries.find((item) => item.id === target.entryId);
+        if (!entry) continue;
+        const bucket = patches.get(entry.id) ?? {};
+        // 英文页写 bulletsEn，中文页写 bullets；落在哪边由当前页决定
+        const key = page.kind === "en" ? "bulletsEn" : "bullets";
+        const list = bucket[key] ?? [...(entry[key] ?? [])];
+        list[target.bulletIndex] = change.after;
+        bucket[key] = list;
+        patches.set(entry.id, bucket);
       }
 
       if (!patches.size) {
-        toast("找不到对应的经历，可能在经历库里删掉了");
+        toast("找不到对应的句子，可能这段经历已经从本页移除了");
         return;
       }
 
-      for (const [expId, patch] of patches) {
-        dispatch({ type: "updateExperience", personId: person.id, expId, patch });
+      for (const [entryId, patch] of patches) {
+        dispatch({
+          type: "updateEntry",
+          personId: person.id,
+          resumeId: resume.id,
+          pageId: page.id,
+          entryId,
+          patch,
+        });
       }
       dispatch({
         type: "patchMessage",
@@ -210,7 +215,7 @@ export function ChatPanel() {
         messageId: message.id,
         patch: {
           actions: undefined,
-          tool: `${message.tool ?? "改写"} · 已写入经历库`,
+          tool: `${message.tool ?? "改写"} · 已写入本页`,
         },
       });
       toast(`已写入 ${changes.length} 处，名下所有简历同步更新`);

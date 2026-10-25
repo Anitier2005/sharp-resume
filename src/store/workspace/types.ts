@@ -1,7 +1,16 @@
-import type { AccentKey, ChatMessage, Experience, PageKind, Person, ResumePage, Workspace } from "@/types";
+import type {
+  AccentKey,
+  ChatMessage,
+  Experience,
+  PageKind,
+  Person,
+  ResumeEntry,
+  ResumePage,
+  Workspace,
+} from "@/types";
 
-/** 页面引用字段：决定「这一页放哪些经历 / 作品」 */
-export type PageRefField = "experienceIds" | "projectIds";
+/** 页面引用字段：作品仍是「勾选 + 排序」的字符串列表；经历改由 entries 承载 */
+export type PageRefField = "projectIds";
 
 export type Action =
   | { type: "hydrate"; workspace: Workspace }
@@ -21,6 +30,33 @@ export type Action =
   | { type: "updateExperience"; personId: string; expId: string; patch: Partial<Experience> }
   | { type: "patchPerson"; personId: string; patch: Partial<Person> }
   | { type: "removeExperience"; personId: string; expId: string }
+  /** 把一段库经历加进这一页（同时开一条空措辞） */
+  | {
+      type: "addEntry";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      experienceId: string;
+      /** 起草用的初始措辞；不给就是空 */
+      bullets?: string[];
+    }
+  | { type: "removeEntry"; personId: string; resumeId: string; pageId: string; entryId: string }
+  | {
+      type: "moveEntry";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      entryId: string;
+      dir: -1 | 1;
+    }
+  | {
+      type: "updateEntry";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      entryId: string;
+      patch: Partial<ResumeEntry>;
+    }
   | {
       type: "togglePageItem";
       personId: string;

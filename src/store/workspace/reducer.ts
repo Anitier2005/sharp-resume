@@ -196,12 +196,74 @@ export function reducer(state: Workspace, action: Action): Workspace {
               ...resume,
               pages: resume.pages.map((page) => ({
                 ...page,
-                experienceIds: page.experienceIds.filter((id) => id !== action.expId),
+                entries: page.entries.filter((entry) => entry.experienceId !== action.expId),
               })),
             })),
           };
         }),
       };
+
+    /* ---------- 本页经历条目（措辞属于简历这一级） ---------- */
+
+    case "addEntry":
+      return mapResume(state, action.personId, action.resumeId, (resume) => ({
+        ...resume,
+        pages: resume.pages.map((page) => {
+          if (page.id !== action.pageId) return page;
+          // 同一段经历在一页里只出现一次
+          if (page.entries.some((entry) => entry.experienceId === action.experienceId)) return page;
+          return {
+            ...page,
+            entries: [
+              ...page.entries,
+              {
+                id: uid("en"),
+                experienceId: action.experienceId,
+                bullets: action.bullets ?? [],
+              },
+            ],
+          };
+        }),
+      }));
+
+    case "removeEntry":
+      return mapResume(state, action.personId, action.resumeId, (resume) => ({
+        ...resume,
+        pages: resume.pages.map((page) =>
+          page.id === action.pageId
+            ? { ...page, entries: page.entries.filter((entry) => entry.id !== action.entryId) }
+            : page,
+        ),
+      }));
+
+    case "moveEntry":
+      return mapResume(state, action.personId, action.resumeId, (resume) => ({
+        ...resume,
+        pages: resume.pages.map((page) => {
+          if (page.id !== action.pageId) return page;
+          const list = [...page.entries];
+          const from = list.findIndex((entry) => entry.id === action.entryId);
+          const to = from + action.dir;
+          if (from < 0 || to < 0 || to >= list.length) return page;
+          [list[from], list[to]] = [list[to], list[from]];
+          return { ...page, entries: list };
+        }),
+      }));
+
+    case "updateEntry":
+      return mapResume(state, action.personId, action.resumeId, (resume) => ({
+        ...resume,
+        pages: resume.pages.map((page) =>
+          page.id === action.pageId
+            ? {
+                ...page,
+                entries: page.entries.map((entry) =>
+                  entry.id === action.entryId ? { ...entry, ...action.patch } : entry,
+                ),
+              }
+            : page,
+        ),
+      }));
 
     case "togglePageItem":
       return mapResume(state, action.personId, action.resumeId, (resume) => ({

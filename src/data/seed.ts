@@ -15,6 +15,15 @@ const min = 60_000;
 const hour = 60 * min;
 const day = 24 * hour;
 
+/**
+ * 示例数据的措辞登记表。
+ *
+ * v2 起措辞不再存在经历库里，而是挂在每个页面的 entries 上。
+ * 示例代码写起来仍想「一段经历配一组句子」，所以 exp() 顺手登记一份，
+ * page() 生成 entries 时按 id 抄进去 —— 只影响这段开发期示例数据。
+ */
+const seedWording = new Map<string, { zh: string[]; en?: string[] }>();
+
 function exp(
   id: string,
   company: string,
@@ -24,7 +33,17 @@ function exp(
   bulletsEn?: string[],
   en?: { companyEn: string; roleEn: string },
 ): Experience {
-  return { id, company, role, period, bullets, bulletsEn, ...en };
+  seedWording.set(id, { zh: bullets, en: bulletsEn });
+  return {
+    id,
+    company,
+    role,
+    period,
+    // 示例里没有单独的详实记录，先用原来的句子铺一版，形式上是对的
+    notes: bullets.join("\n"),
+    facts: [],
+    ...en,
+  };
 }
 
 function proj(
@@ -70,7 +89,25 @@ function page(
   projectIds: string[],
   summary?: string,
 ): ResumePage {
-  return { id, kind, label, headline, role, meta, summary, experienceIds, projectIds };
+  return {
+    id,
+    kind,
+    label,
+    headline,
+    role,
+    meta,
+    summary,
+    entries: experienceIds.map((expId) => {
+      const src = seedWording.get(expId);
+      return {
+        id: `${id}-${expId}`,
+        experienceId: expId,
+        bullets: [...(src?.zh ?? [])],
+        bulletsEn: src?.en?.length ? [...src.en] : undefined,
+      };
+    }),
+    projectIds,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -189,7 +226,7 @@ const linMessages: ChatMessage[] = [
         label: "第 2 段 · 字节跳动",
         before: "负责投放平台的设计体系，主导 3 个核心模块重构。",
         after: "主导投放平台配置链路重构，把 11 步压缩到 4 步，客户自助率 ＋32%。",
-        target: { experienceId: "e-lin-1", bulletIndex: 0 },
+        target: { entryId: "pg-lin-1-e-lin-1", bulletIndex: 0 },
       },
     ],
     actions: [
@@ -485,7 +522,7 @@ function simplePerson(
 }
 
 export const SEED: Workspace = {
-  version: 1,
+  version: 2,
   people: [
     lin,
     chen,

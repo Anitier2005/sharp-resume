@@ -1,54 +1,27 @@
 import type { Person, ResumePage } from "@/types";
-import { Editable } from "@/components/ui/editable";
 import paper from "./paper.module.css";
 import styles from "./portfolio.module.css";
 
+/** 作品集纸面：与 paper.tsx 一样是只读成品，预览与导出共用 */
 interface PortfolioProps {
   person: Person;
   page: ResumePage;
-  onPatchPage: (patch: Partial<ResumePage>) => void;
 }
 
-export function Portfolio({ person, page, onPatchPage }: PortfolioProps) {
+export function Portfolio({ person, page }: PortfolioProps) {
+  const en = page.kind === "en";
   const projects = page.projectIds
     .map((id) => person.projects.find((item) => item.id === id))
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
   return (
     <article className={paper.paper} data-kind="portfolio" data-print="sheet">
-      <Editable
-        className={paper.name}
-        value={page.headline}
-        placeholder="姓名"
-        multiline={false}
-        onChange={(value) => onPatchPage({ headline: value })}
-      />
-      <Editable
-        className={paper.role}
-        value={page.role}
-        placeholder="作品集副标题"
-        multiline={false}
-        onChange={(value) => onPatchPage({ role: value })}
-      />
-      <Editable
-        className={paper.meta}
-        value={page.meta.join(" · ")}
-        placeholder="邮箱 · 城市"
-        multiline={false}
-        onChange={(value) =>
-          onPatchPage({ meta: value.split("·").map((item) => item.trim()).filter(Boolean) })
-        }
-      />
+      <h1 className={paper.name}>{page.headline}</h1>
+      {page.role && <div className={paper.role}>{page.role}</div>}
+      {page.meta.length > 0 && <div className={paper.meta}>{page.meta.join(" · ")}</div>}
       <div className={paper.rule} />
 
-      {page.summary !== undefined && (
-        <Editable
-          className={paper.summary}
-          value={page.summary}
-          placeholder="一段话说明这组作品的线索"
-          onChange={(value) => onPatchPage({ summary: value })}
-        />
-      )}
+      {page.summary ? <p className={paper.summary}>{page.summary}</p> : null}
 
       {projects.length === 0 && <div className={styles.empty}>这个人还没有共享作品，先去经历库补一件。</div>}
 
@@ -58,10 +31,10 @@ export function Portfolio({ person, page, onPatchPage }: PortfolioProps) {
             <div className={styles.body}>
               <div className={styles.head}>
                 <span className={styles.index}>{String(index + 1).padStart(2, "0")}</span>
-                <b>{project.title}</b>
+                <b>{en ? project.titleEn || project.title : project.title}</b>
                 <span className={styles.year}>{project.year}</span>
               </div>
-              <p className={styles.desc}>{project.desc}</p>
+              <p className={styles.desc}>{en ? project.descEn || project.desc : project.desc}</p>
               {project.tags.length > 0 && (
                 <div className={styles.tags}>
                   {project.tags.map((tag) => (

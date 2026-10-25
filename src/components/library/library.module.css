@@ -293,29 +293,66 @@
   border-color: var(--acc-line-2);
 }
 
-/* ---------- 经历的多句描述 ---------- */
-.bullets {
+/* ---------- 详实记录（经历库的核心：写给自己的素材） ---------- */
+.noteField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.noteK {
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  color: var(--fg-4);
+}
+.noteField textarea {
+  width: 100%;
+  min-height: 92px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  font: inherit;
+  font-size: 0.71875rem;
+  line-height: 1.72;
+  color: var(--fg-1);
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.noteField textarea::placeholder {
+  color: var(--fg-4);
+}
+.noteField textarea:hover {
+  border-color: var(--line-strong);
+}
+.noteField textarea:focus {
+  border-color: var(--acc-line-2);
+  background: var(--acc-softer);
+}
+
+/* ---------- 细节事实 ---------- */
+.facts {
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
-
-.bullet {
+.factsHead {
   display: flex;
-  align-items: flex-start;
+  align-items: baseline;
   gap: 6px;
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  color: var(--fg-4);
 }
-.bullet .dot {
-  width: 3px;
-  height: 3px;
-  margin-top: 9px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--fg-4);
+.factsHead span:first-child {
+  color: var(--fg-3);
 }
-.bullet input {
-  flex: 1;
-  min-width: 0;
+.factRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.factRow input {
   height: 24px;
   padding: 0 6px;
   border: 1px solid transparent;
@@ -325,49 +362,53 @@
   font-size: 0.71875rem;
   color: var(--fg-2);
   outline: none;
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
-.bullet input:hover {
+.factRow input::placeholder {
+  color: var(--fg-4);
+}
+.factRow input:hover {
   border-color: var(--line);
 }
-.bullet input:focus {
+.factRow input:focus {
   border-color: var(--acc-line-2);
   background: var(--acc-softer);
   color: var(--fg-1);
 }
-.bullet > button {
-  width: 16px;
-  height: 16px;
-  margin-top: 4px;
+.factLabel {
+  flex: none;
+  width: 64px;
+}
+.factText {
+  flex: 1;
+  min-width: 0;
+}
+.factRow button {
+  width: 18px;
+  height: 18px;
+  flex: none;
   display: grid;
   place-items: center;
   border-radius: 3px;
   color: var(--fg-4);
-  opacity: 0;
 }
-.bullet:hover > button {
-  opacity: 1;
-}
-.bullet > button:hover {
+.factRow button:hover {
   background: var(--bg-press);
   color: var(--danger);
 }
-
-.bulletFoot {
-  display: flex;
-  gap: 6px;
-  padding-left: 14px;
-}
-.bulletFoot button {
+.addFact {
+  align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 3px;
   height: 20px;
+  margin-top: 1px;
   padding: 0 5px;
   border-radius: 3px;
   font-size: 0.625rem;
   color: var(--fg-3);
 }
-.bulletFoot button:hover {
+.addFact:hover {
   background: var(--acc-softer);
   color: var(--acc-text);
 }

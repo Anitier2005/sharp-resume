@@ -1,15 +1,15 @@
 import type { PageKind, Person, ResumePage } from "@/types";
+import { resolveEntries, wordingOf } from "@/lib/entries";
 
 /** 当前页可见内容的字数（不含空白），用于状态栏 */
 export function countChars(person: Person, page: ResumePage | null): number {
   if (!page) return 0;
   const chunks: string[] = [page.headline, page.role, ...page.meta, page.summary ?? ""];
+  const en = page.kind === "en";
 
-  for (const id of page.experienceIds) {
-    const exp = person.experiences.find((item) => item.id === id);
-    if (!exp) continue;
+  for (const { entry, exp } of resolveEntries(person, page)) {
     chunks.push(exp.company, exp.role, exp.period);
-    chunks.push(...(page.kind === "en" ? exp.bulletsEn ?? exp.bullets : exp.bullets));
+    chunks.push(...wordingOf(entry, en));
   }
 
   for (const id of page.projectIds) {

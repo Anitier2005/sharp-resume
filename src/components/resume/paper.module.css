@@ -51,7 +51,10 @@
 }
 
 /* ---------- 抬头 ---------- */
+/* 纸面是只读成品，用真实语义标签（h1/p）；UA 的默认外边距必须清掉，
+   否则和原来 contentEditable 的 div 排版对不上 */
 .name {
+  margin: 0;
   font-size: 21px;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -131,7 +134,7 @@
 }
 
 .summary {
-  margin-top: 10px;
+  margin: 10px 0 0;
   font-size: 9.5px;
   line-height: 1.9;
   color: var(--paper-2);
@@ -175,15 +178,3 @@
   color: var(--paper-2);
 }
 
-/* ---------- 可直接编辑的字段 ---------- */
-/* 空态占位：用 data-ph 而不是 :empty，避免换行节点导致占位消失 */
-.paper [contenteditable][data-ph]:empty::before {
-  content: attr(data-ph);
-  color: var(--paper-3);
-  pointer-events: none;
-}
-.paper [contenteditable]:focus {
-  outline: none;
-  background: color-mix(in srgb, var(--acc-paper) 6%, transparent);
-  border-radius: 2px;
-}

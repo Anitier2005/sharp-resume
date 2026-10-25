@@ -3,6 +3,7 @@
  * Word / WPS / Pages 都能打开；版式对齐纸面：姓名、职位、分节、右对齐时间。
  */
 import type { AccentKey, Person, ResumePage } from "@/types";
+import { resolveEntries, wordingOf } from "@/lib/entries";
 
 const ACCENT_HEX: Record<AccentKey, string> = {
   white: "242422",
@@ -173,18 +174,15 @@ function pageBody(person: Person, page: ResumePage, accent: string): string {
       opts: { size: 17, color: FAINT },
     })}</w:p>`;
 
-  const experiences = page.experienceIds
-    .map((id) => person.experiences.find((item) => item.id === id))
-    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const experiences = resolveEntries(person, page);
 
   if (experiences.length) {
     out.push(sectionTitle(label.experience));
-    for (const exp of experiences) {
+    for (const { entry, exp } of experiences) {
       const company = en ? exp.companyEn || exp.company : exp.company;
       const role = en ? exp.roleEn || exp.role : exp.role;
-      const bullets = (en ? exp.bulletsEn?.length ? exp.bulletsEn : exp.bullets : exp.bullets) ?? [];
       out.push(lineWithPeriod(`${company} · ${role}`, exp.period));
-      for (const bullet of bullets) {
+      for (const bullet of wordingOf(entry, en)) {
         out.push(
           `<w:p><w:pPr><w:spacing w:after="16" w:line="300" w:lineRule="auto"/><w:ind w:left="227" w:hanging="227"/></w:pPr>${run(
             { text: `· ${bullet}`, opts: { size: 19, color: MUTED } },

@@ -37,7 +37,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     let alive = true;
     loadWorkspace().then((saved) => {
       if (!alive) return;
-      if (saved && saved.version === 1 && saved.people?.length) {
+      if (saved && saved.version === 2 && saved.people?.length) {
         dispatch({ type: "hydrate", workspace: saved });
         setSavedSnapshot(saved);
       } else {

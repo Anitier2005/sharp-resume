@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Person, ResumePage } from "@/types";
+import { resolveEntries, wordingOf } from "@/lib/entries";
 import { isTauri } from "@/lib/storage";
 
 const LABELS = {
@@ -17,17 +18,15 @@ export function pageToMarkdown(person: Person, page: ResumePage): string {
   if (page.meta.length) lines.push(page.meta.join(" · "), "");
   if (page.summary) lines.push(`> ${page.summary}`, "");
 
-  const experiences = page.experienceIds
-    .map((id) => person.experiences.find((item) => item.id === id))
-    .filter(Boolean);
+  const experiences = resolveEntries(person, page);
 
   if (experiences.length) {
     lines.push(`## ${label.experience}`, "");
-    for (const exp of experiences) {
-      if (!exp) continue;
-      lines.push(`### ${exp.company} · ${exp.role}\u3000\`${exp.period}\``, "");
-      const bullets = en ? exp.bulletsEn ?? exp.bullets : exp.bullets;
-      for (const bullet of bullets) lines.push(`- ${bullet}`);
+    for (const { entry, exp } of experiences) {
+      const company = en ? exp.companyEn || exp.company : exp.company;
+      const role = en ? exp.roleEn || exp.role : exp.role;
+      lines.push(`### ${company} · ${role}\u3000\`${exp.period}\``, "");
+      for (const bullet of wordingOf(entry, en)) lines.push(`- ${bullet}`);
       lines.push("");
     }
   }

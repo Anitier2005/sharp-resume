@@ -1,7 +1,20 @@
 /** 页面类型：中文简历 / 英文简历 / 作品集 */
 export type PageKind = "zh" | "en" | "portfolio";
 
-/** 共享经历：属于「人」，被这个人名下所有简历引用 */
+/** 库里的细节事实：一条一个点（背景 / 动作 / 结果 / 数据…），供改简历时挑着用 */
+export interface ExperienceFact {
+  id: string;
+  /** 事实类型，自由文本，常见值见 FACT_LABELS */
+  label: string;
+  text: string;
+}
+
+/**
+ * 共享经历：属于「人」，被这个人名下所有简历共享。
+ *
+ * 注意这里**没有** bullets —— 经历库是「详实记录」，不是简历输出。
+ * 简历上的措辞在 ResumeEntry 里，每份简历、每个岗位各写一版。
+ */
 export interface Experience {
   id: string;
   company: string;
@@ -9,9 +22,23 @@ export interface Experience {
   role: string;
   roleEn?: string;
   period: string;
-  /** 中文描述，按句存，便于单独改写 */
+  /** 详实记录：用户母语自由书写，可以很长、很碎、很口语，不进简历 */
+  notes: string;
+  /** 结构化细节，一条一个点 */
+  facts: ExperienceFact[];
+}
+
+/**
+ * 简历页里对某段经历的措辞：拿库里的记录改写成这个岗位要强调的说法。
+ * 库里不留副本，所以同一段经历在不同简历里可以写得完全不同。
+ */
+export interface ResumeEntry {
+  id: string;
+  /** 引用哪段库经历（公司 / 职位 / 时间从库里取） */
+  experienceId: string;
+  /** 本简历的措辞，按句存，便于单句改写 */
   bullets: string[];
-  /** 英文描述，缺省时英文页回落到中文 */
+  /** 英文措辞，缺省时英文页回落到中文 */
   bulletsEn?: string[];
 }
 
@@ -85,8 +112,8 @@ export interface ResumePage {
   meta: string[];
   /** 一句话摘要，可选 */
   summary?: string;
-  /** 引用哪些共享经历，按顺序 */
-  experienceIds: string[];
+  /** 本页放哪几段经历，以及每一段在这个岗位下怎么讲 */
+  entries: ResumeEntry[];
   /** 引用哪些共享作品，按顺序 */
   projectIds: string[];
 }
@@ -103,8 +130,8 @@ export interface ChangeItem {
   label: string;
   before: string;
   after: string;
-  /** 绑定到某条经历的某一句，应用时写回共享库 */
-  target?: { experienceId: string; bulletIndex: number; lang?: "zh" | "en" };
+  /** 绑定到本页某条 entry 的某一句，应用时写回这一个页面（不碰经历库） */
+  target?: { entryId: string; bulletIndex: number };
 }
 
 export interface ChatAction {
@@ -126,7 +153,8 @@ export interface ChatMessage {
 }
 
 export interface Workspace {
-  version: 1;
+  /** 2 起：经历库与简历措辞分离（见 lib/migrate.ts） */
+  version: 2;
   people: Person[];
   ui: {
     accent: AccentKey;
@@ -145,6 +173,23 @@ export interface Workspace {
 }
 
 export type AccentKey = "white" | "indigo" | "pine" | "clay";
+
+/** 细节事实的常用类型，只是输入提示，可以自己填 */
+export const FACT_LABELS = ["背景", "动作", "结果", "数据", "团队", "技术栈", "难点"];
+
+/** 新建一段经历时的空白骨架 */
+export function blankExperience(id: string): Experience {
+  return {
+    id,
+    company: "",
+    companyEn: "",
+    role: "",
+    roleEn: "",
+    period: "",
+    notes: "",
+    facts: [],
+  };
+}
 
 /** UI 字号档位。semantic 值直接作为 CSS 的 --text-scale。 */
 export const TEXT_SCALES: { key: string; label: string; value: number }[] = [

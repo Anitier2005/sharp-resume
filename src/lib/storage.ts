@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Workspace } from "@/types";
+import { migrateWorkspace } from "@/lib/migrate";
 
+/** 键名不随版本变：版本号存在数据里的 `version` 字段，换了键名等于把用户数据弄丢 */
 const KEY = "sharp-resume:workspace:v1";
 
 export function isTauri(): boolean {
@@ -13,10 +15,10 @@ export async function loadWorkspace(): Promise<Workspace | null> {
     if (isTauri()) {
       const raw = await invoke<string | null>("read_state");
       if (!raw) return null;
-      return JSON.parse(raw) as Workspace;
+      return migrateWorkspace(JSON.parse(raw));
     }
     const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as Workspace) : null;
+    return raw ? migrateWorkspace(JSON.parse(raw)) : null;
   } catch (error) {
     console.warn("[storage] 读取失败，使用种子数据", error);
     return null;

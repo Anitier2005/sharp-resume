@@ -41,7 +41,12 @@ export function newPage(person: Person, kind: PageKind): ResumePage {
     role: isEn ? person.roleEn : person.role,
     meta: [person.email, isEn ? "Shanghai" : person.location, `${person.years} ${isEn ? "years" : "年经验"}`],
     summary: "",
-    experienceIds: person.experiences.map((item) => item.id),
+    // 新页默认把库里的经历都挂上，但不预填措辞：措辞要按岗位自己写（表单里有「起草」按钮）
+    entries: person.experiences.map((item) => ({
+      id: uid("en"),
+      experienceId: item.id,
+      bullets: [],
+    })),
     projectIds: person.projects.map((item) => item.id),
   };
 }
