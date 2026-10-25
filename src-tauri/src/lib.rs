@@ -1,3 +1,5 @@
+mod net;
+
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -378,7 +380,9 @@ pub fn run() {
             write_state,
             reveal_data_dir,
             save_text_file,
-            save_binary_file
+            save_binary_file,
+            net::chat_once,
+            net::chat_stream
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sharp Resume");

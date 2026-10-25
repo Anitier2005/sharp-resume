@@ -1,3 +1,4 @@
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { LOCAL_AI, MODELS } from "@/lib/model-config";
 
 /**
@@ -92,8 +93,8 @@ async function send(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
-/** 流式对话：逐段回调，返回完整文本 */
-export async function streamChat(options: {
+/** 浏览器里的实现（`npm run dev` 调试用；远端接口大多没有 CORS 头，可能失败） */
+async function streamViaFetch(options: {
   settings: AiSettings;
   messages: ChatMsg[];
   signal?: AbortSignal;
@@ -174,6 +175,9 @@ export async function testConnection(settings: AiSettings): Promise<string> {
  * 设置页用它验证 key / baseUrl / model 三件事是否对得上。
  */
 export async function testAi(settings: AiSettings): Promise<string> {
+  if (inTauri()) {
+    return invoke<string>("chat_once", { req: wire(settings, [{ role: "user", content: "ping" }]) });
+  }
   const response = await send(endpoint(settings.baseUrl), {
     method: "POST",
     headers: headers(settings.apiKey),
@@ -195,4 +199,65 @@ export async function testAi(settings: AiSettings): Promise<string> {
   const text = json.choices?.[0]?.message?.content?.trim() ?? "(空回复)";
   const tokens = json.usage?.total_tokens;
   return tokens ? `${text} · ${tokens} tokens` : text;
+}
+
+/* ==========================================================================
+   通讯层调度：桌面端走 Rust（不经过 WebView，因此没有 CORS、key 不进 localStorage
+   之外的 JS 内存），浏览器端保留 fetch 以便 `npm run dev` 里调界面。
+   ========================================================================== */
+
+function inTauri(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/** 前端设置 → Rust 侧 AiRequest（camelCase，和 net.rs 的 serde 对齐） */
+function wire(settings: AiSettings, messages: ChatMsg[]) {
+  return {
+    baseUrl: settings.baseUrl,
+    apiKey: settings.apiKey,
+    model: settings.model,
+    messages: messages.map((item) => ({ role: item.role, content: item.content })),
+    temperature: settings.temperature,
+    reasoning: settings.reasoning ?? null,
+    maxTokens: null,
+  };
+}
+
+interface StreamChunk {
+  kind: "delta" | "reasoning" | "done" | "error";
+  delta?: string;
+  reasoning?: string;
+  message?: string;
+}
+
+/**
+ * 流式对话统一入口。
+ * 桌面端用 Tauri Channel 接收 Rust 解好的 SSE 增量；浏览器端退回 fetch。
+ */
+export async function streamChat(options: {
+  settings: AiSettings;
+  messages: ChatMsg[];
+  signal?: AbortSignal;
+  onDelta: (delta: string) => void;
+  /** 思维链增量（部分模型才有） */
+  onReasoning?: (delta: string) => void;
+}): Promise<string> {
+  const { settings, messages, signal, onDelta, onReasoning } = options;
+
+  if (!inTauri()) return streamViaFetch(options);
+
+  const channel = new Channel<StreamChunk>();
+  let full = "";
+  channel.onmessage = (chunk) => {
+    if (chunk.kind === "delta" && chunk.delta) {
+      full += chunk.delta;
+      onDelta(chunk.delta);
+    } else if (chunk.kind === "reasoning" && chunk.reasoning) {
+      onReasoning?.(chunk.reasoning);
+    }
+  };
+
+  void signal; // 暂不支持中断：invoke 一旦发出无法取消，后续用 cancel 命令补
+  await invoke("chat_stream", { req: wire(settings, messages), onEvent: channel });
+  return full;
 }
