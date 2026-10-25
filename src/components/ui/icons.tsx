@@ -125,3 +125,17 @@ export const WinClose = () => (
     <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1" />
   </svg>
 );
+
+/* 面板显隐：外框 + 一条分割线，表示左/右栏 */
+export const PanelLeft = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.6, ...p })}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M9 4v16" />
+  </svg>
+);
+export const PanelRight = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.6, ...p })}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M15 4v16" />
+  </svg>
+);

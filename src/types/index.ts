@@ -86,17 +86,18 @@ export interface Person {
   projects: ProjectItem[];
   education: EducationItem[];
   skills: SkillGroup[];
+  /** 会话属于「人」：换岗位简历不换会话，问过的话不会凭空消失 */
+  messages: ChatMessage[];
   resumes: Resume[];
 }
 
-/** 二级：简历，一份简历 = 一条独立会话 + 一组页面 */
+/** 二级：简历，一份简历 = 一组页面（会话在人这一级，见 Person.messages） */
 export interface Resume {
   id: string;
   personId: string;
   title: string;
   updatedAt: number;
   pages: ResumePage[];
-  messages: ChatMessage[];
 }
 
 /** 页面：同一份简历下的中文 / 英文 / 作品集 */
@@ -153,8 +154,8 @@ export interface ChatMessage {
 }
 
 export interface Workspace {
-  /** 2 起：经历库与简历措辞分离（见 lib/migrate.ts） */
-  version: 2;
+  /** 3 起：经历库与简历措辞分离、会话归到「人」（见 lib/migrate.ts） */
+  version: 3;
   people: Person[];
   ui: {
     accent: AccentKey;
@@ -169,6 +170,12 @@ export interface Workspace {
      * 用户在外观里选过档位后存入具体数值，之后不再受系统设置影响。
      */
     textScale?: number | null;
+    /** 三栏宽度（px）。拖分隔条改变，持久化在这里 */
+    sideW?: number;
+    docW?: number;
+    /** 左栏 / 右侧简历区是否显示 */
+    showSide?: boolean;
+    showDoc?: boolean;
   };
 }
 

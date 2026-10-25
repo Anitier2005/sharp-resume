@@ -3,7 +3,7 @@ import { useWorkspace } from "@/store/workspace";
 import { isTauri } from "@/lib/storage";
 import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuLabel, MenuSep } from "@/components/ui/menu";
-import { WinClose, WinMax, WinMin } from "@/components/ui/icons";
+import { PanelLeft, PanelRight, WinClose, WinMax, WinMin } from "@/components/ui/icons";
 import styles from "./title-bar.module.css";
 import menu from "@/components/ui/menu.module.css";
 
@@ -21,6 +21,8 @@ export function TitleBar() {
   const desktop = isTauri();
   const { accent, mode } = state.ui;
   const autoScale = state.ui.textScale == null;
+  const showSide = state.ui.showSide !== false;
+  const showDoc = state.ui.showDoc !== false;
 
   const run = (action: "minimize" | "maximize" | "close") => {
     if (!desktop) {
@@ -42,6 +44,26 @@ export function TitleBar() {
       <span>— Sharp Resume</span>
 
       <div className={styles.right}>
+        {/* 面板显隐：两栏都能收起来，专心看会话或专心看简历 */}
+        <button
+          type="button"
+          className={styles.toggle}
+          aria-pressed={showSide}
+          title={showSide ? "隐藏候选人与经历库" : "显示候选人与经历库"}
+          onClick={() => dispatch({ type: "patchUi", patch: { showSide: !showSide } })}
+        >
+          <PanelLeft size={12} />
+        </button>
+        <button
+          type="button"
+          className={styles.toggle}
+          aria-pressed={showDoc}
+          title={showDoc ? "隐藏右侧简历区" : "显示右侧简历区"}
+          onClick={() => dispatch({ type: "patchUi", patch: { showDoc: !showDoc } })}
+        >
+          <PanelRight size={12} />
+        </button>
+
         <Dropdown
           width={222}
           trigger={

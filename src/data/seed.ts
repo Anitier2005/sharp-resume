@@ -242,7 +242,6 @@ const linResumes: Resume[] = [
     personId: "p-lin",
     title: "字节 · 产品设计师",
     updatedAt: now - 2 * min,
-    messages: linMessages,
     pages: [
       page(
         "pg-lin-1",
@@ -284,21 +283,6 @@ const linResumes: Resume[] = [
     personId: "p-lin",
     title: "通用版 · 产品设计师",
     updatedAt: now - day,
-    messages: [
-      {
-        id: "m-lin-g1",
-        role: "user",
-        content: "做一份不针对具体公司的通用版，重点讲方法论。",
-        time: now - day,
-      },
-      {
-        id: "m-lin-g2",
-        role: "assistant",
-        content: "已经按「问题 → 判断 → 结果」重排了三条经历，把公司名放到次要位置。你看下摘要那句是否要再收一点。",
-        time: now - day + 30_000,
-        tool: "已重排 3 段经历 · 新增摘要",
-      },
-    ],
     pages: [
       page(
         "pg-lin-4",
@@ -318,7 +302,6 @@ const linResumes: Resume[] = [
     personId: "p-lin",
     title: "英文投递版",
     updatedAt: now - 3 * day,
-    messages: [],
     pages: [
       page(
         "pg-lin-5",
@@ -348,6 +331,7 @@ const lin: Person = {
   projects: linProjects,
   education: linEducation,
   skills: linSkills,
+  messages: linMessages,
   resumes: linResumes,
 };
 
@@ -410,13 +394,13 @@ const chen: Person = {
       valueEn: "Payments / clearing and settlement / high concurrency",
     }),
   ],
+  messages: [],
   resumes: [
     {
       id: "r-chen-1",
       personId: "p-chen",
       title: "腾讯 · 后端工程师",
       updatedAt: now - 26 * hour,
-      messages: [],
       pages: [
         page(
           "pg-chen-1",
@@ -445,7 +429,6 @@ const chen: Person = {
       personId: "p-chen",
       title: "通用版 · 后端",
       updatedAt: now - 4 * day,
-      messages: [],
       pages: [
         page(
           "pg-chen-3",
@@ -489,7 +472,6 @@ function simplePerson(
     personId: pid,
     title,
     updatedAt: now - (i + 1) * day,
-    messages: [],
     pages: [
       page(
         `pg-${id}-${i + 1}`,
@@ -517,12 +499,13 @@ function simplePerson(
     projects: prjs,
     education: [edu(`ed-${id}-1`, "某大学", "学士", "2014 — 2018")],
     skills: [skill(`sk-${id}-1`, "技能", "待补充")],
+    messages: [],
     resumes,
   };
 }
 
 export const SEED: Workspace = {
-  version: 2,
+  version: 3,
   people: [
     lin,
     chen,

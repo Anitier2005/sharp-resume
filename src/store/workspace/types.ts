@@ -74,5 +74,9 @@ export type Action =
       itemId: string;
       dir: -1 | 1;
     }
-  | { type: "appendMessage"; personId: string; resumeId: string; message: ChatMessage }
-  | { type: "patchMessage"; personId: string; resumeId: string; messageId: string; patch: Partial<ChatMessage> };
+  /** 会话属于「人」，所以这两个动作不认 resumeId */
+  | { type: "appendMessage"; personId: string; message: ChatMessage }
+  | { type: "patchMessage"; personId: string; messageId: string; patch: Partial<ChatMessage> }
+  | { type: "deletePerson"; personId: string }
+  /** 通用 UI 状态补丁：栏宽、面板显隐等零散偏好都走这里 */
+  | { type: "patchUi"; patch: Partial<Workspace["ui"]> };

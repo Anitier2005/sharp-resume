@@ -3,22 +3,82 @@
 
    保持全局：`.app` 是唯一的布局根，只有一个实例，模块化没有收益；
    而打印规则与窄屏断点都需要稳定的选择器。
+
+   两侧栏宽由 CSS 变量驱动（--w-side / --w-doc），值来自 workspace 的 ui 状态，
+   拖动分隔条时实时改写 —— 所以这里不再写死像素，也不再需要窄屏断点改列宽。
    ========================================================================== */
 
 .app {
+  position: relative; /* 分隔条按列的接缝绝对定位 */
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 420px;
+  grid-template-columns: var(--w-side, 240px) minmax(0, 1fr) var(--w-doc, 420px);
   grid-template-rows: minmax(0, 1fr);
 }
 
-/* 窄窗口：侧栏与纸面各让出 20 / 40px，给会话留出可读宽度 */
+/* 显式指定列：面板可以被隐藏（不渲染），若靠自动排列，
+   侧栏一收起，会话就掉进 0 宽的第一列，被挤成一条竖缝。 */
+.app > [data-col="side"] {
+  grid-column: 1;
+}
+.app > [data-col="chat"] {
+  grid-column: 2;
+}
+.app > [data-col="doc"] {
+  grid-column: 3;
+}
+
+/* ---------- 拖拽分隔条 ---------- */
+/* 命中区 7px、视觉只有 1px：太细抓不住，太粗会挡住两栏的边线 */
+.gutter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  z-index: 30;
+  cursor: col-resize;
+  touch-action: none;
+}
+.gutter[data-edge="side"] {
+  left: calc(var(--w-side, 240px) - 3px);
+}
+.gutter[data-edge="doc"] {
+  right: calc(var(--w-doc, 420px) - 3px);
+}
+.gutter::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.gutter:hover::after {
+  background: var(--acc-line-2);
+}
+
+/* 拖动中：全局禁止选中、统一光标，避免拖出蓝框和闪烁的文本光标 */
+body.dragging {
+  cursor: col-resize;
+  user-select: none;
+}
+body.dragging * {
+  cursor: col-resize !important;
+}
+
+/* 窄窗口只收窄会话区的内边距，栏宽交还给用户 */
 @media (max-width: 1160px) {
-  .app {
-    grid-template-columns: 220px minmax(0, 1fr) 380px;
-  }
   .note {
+    display: none;
+  }
+}
+
+/* 打印时三栏按内容流展开，分隔条不该出现 */
+@media print {
+  .gutter {
     display: none;
   }
 }

@@ -60,6 +60,7 @@ export function reducer(state: Workspace, action: Action): Workspace {
         projects: [],
         education: [],
         skills: [],
+        messages: [],
         resumes: [],
       };
       const resume: Resume = {
@@ -67,7 +68,6 @@ export function reducer(state: Workspace, action: Action): Workspace {
         personId: id,
         title: "通用版",
         updatedAt: Date.now(),
-        messages: [],
         pages: [newPage(person, "zh")],
       };
       person.resumes = [resume];
@@ -91,7 +91,6 @@ export function reducer(state: Workspace, action: Action): Workspace {
         personId: person.id,
         title: `新简历 ${person.resumes.length + 1}`,
         updatedAt: Date.now(),
-        messages: [],
         pages: [newPage(person, "zh"), newPage(person, "en")],
       };
       return {
@@ -292,19 +291,51 @@ export function reducer(state: Workspace, action: Action): Workspace {
         }),
       }));
 
+    /* ---------- 会话：挂在这一级的人身上，换岗位简历不换会话 ---------- */
+
     case "appendMessage":
-      return mapResume(state, action.personId, action.resumeId, (resume) => ({
-        ...resume,
-        messages: [...resume.messages, action.message],
-      }));
+      return {
+        ...state,
+        people: state.people.map((person) =>
+          person.id !== action.personId
+            ? person
+            : { ...person, messages: [...person.messages, action.message] },
+        ),
+      };
 
     case "patchMessage":
-      return mapResume(state, action.personId, action.resumeId, (resume) => ({
-        ...resume,
-        messages: resume.messages.map((message) =>
-          message.id === action.messageId ? { ...message, ...action.patch } : message,
+      return {
+        ...state,
+        people: state.people.map((person) =>
+          person.id !== action.personId
+            ? person
+            : {
+                ...person,
+                messages: person.messages.map((message) =>
+                  message.id === action.messageId ? { ...message, ...action.patch } : message,
+                ),
+              },
         ),
-      }));
+      };
+
+    case "deletePerson": {
+      const remaining = state.people.filter((person) => person.id !== action.personId);
+      const wasActive = state.ui.activePersonId === action.personId;
+      if (!wasActive) return { ...state, people: remaining };
+      const next = remaining[0] ?? null;
+      return {
+        ...state,
+        people: remaining,
+        ui: {
+          ...state.ui,
+          activePersonId: next?.id ?? null,
+          activeResumeId: next?.resumes[0]?.id ?? null,
+        },
+      };
+    }
+
+    case "patchUi":
+      return { ...state, ui: { ...state.ui, ...action.patch } };
 
     default:
       return state;

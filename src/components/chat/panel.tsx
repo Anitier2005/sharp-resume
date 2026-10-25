@@ -35,7 +35,7 @@ export function ChatPanel() {
   const configured = aiReady(ai);
   const modelLabel = configured ? ai.model : "未配置模型 · 点此设置";
 
-  const messages = useMemo(() => resume?.messages ?? [], [resume]);
+  const messages = useMemo(() => person?.messages ?? [], [person]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -75,7 +75,7 @@ export function ChatPanel() {
         time: Date.now(),
         attachments: attachments.length ? attachments : undefined,
       };
-      dispatch({ type: "appendMessage", personId: person.id, resumeId: resume.id, message: userMessage });
+      dispatch({ type: "appendMessage", personId: person.id, message: userMessage });
 
       const snapshotPerson = person;
       const snapshotResume = resume;
@@ -84,7 +84,6 @@ export function ChatPanel() {
         dispatch({
           type: "patchMessage",
           personId: snapshotPerson.id,
-          resumeId: snapshotResume.id,
           messageId,
           patch,
         });
@@ -95,7 +94,6 @@ export function ChatPanel() {
       dispatch({
         type: "appendMessage",
         personId: snapshotPerson.id,
-        resumeId: snapshotResume.id,
         message: {
           id: replyId,
           role: "assistant",
@@ -120,7 +118,7 @@ export function ChatPanel() {
 
       const messagesForApi = toApiMessages(
         buildSystemPrompt(snapshotPerson, snapshotPage, snapshotResume.title),
-        snapshotResume.messages.map((item) => ({ role: item.role, content: item.content })),
+        snapshotPerson.messages.map((item) => ({ role: item.role, content: item.content })),
         text,
         attachments.map((file) => ({ name: file.name, text: attachmentText(file.id) })),
       );
@@ -211,7 +209,6 @@ export function ChatPanel() {
       dispatch({
         type: "patchMessage",
         personId: person.id,
-        resumeId: resume.id,
         messageId: message.id,
         patch: {
           actions: undefined,
@@ -238,7 +235,7 @@ export function ChatPanel() {
 
   if (!person || !resume) {
     return (
-      <section className={styles.chat} data-print="hide">
+      <section className={styles.chat} data-col="chat" data-print="hide">
         <div className={styles.empty}>左侧还没有简历，先新建一份。</div>
       </section>
     );
@@ -247,6 +244,7 @@ export function ChatPanel() {
   return (
     <section
       className={styles.chat}
+      data-col="chat"
       data-print="hide"
       onDragOver={(event) => {
         event.preventDefault();

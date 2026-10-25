@@ -67,7 +67,7 @@ export function ResumePanel() {
 
   if (!person || !resume || !page) {
     return (
-      <section className={styles.doc}>
+      <section className={styles.doc} data-col="doc">
         <div className={styles.empty}>还没有简历。左侧点「新建简历」开始。</div>
       </section>
     );
@@ -99,7 +99,7 @@ export function ResumePanel() {
   const saveLabel = saveState === "saving" ? "保存中…" : "已保存";
 
   return (
-    <section className={styles.doc}>
+    <section className={styles.doc} data-col="doc">
       <div className={styles.tabs} data-print="hide">
         {resume.pages.map((item) => (
           <button

@@ -4,6 +4,9 @@ import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem, MenuSep } from "@/components/ui/menu";
 import { ChevronRight, Layers, Plus, Search, User } from "@/components/ui/icons";
 import { LibraryDrawer } from "@/components/library/drawer";
+import { ContextMenu } from "@/components/ui/context-menu";
+import { Confirm } from "@/components/ui/confirm";
+import { MenuItem as CtxItem, MenuSep as CtxSep } from "@/components/ui/menu";
 import { pageShort, type Person, type Resume } from "@/types";
 import { cx } from "@/lib/cx";
 import styles from "./sidebar.module.css";
@@ -20,6 +23,14 @@ export function Sidebar() {
   const [renaming, setRenaming] = useState<string | null>(null);
   /** 经历库属于「人」，抽屉也开在这里；面板自己从 store 取当前人 */
   const [libOpen, setLibOpen] = useState(false);
+  /** 右键菜单：记下坐标与目标，null 表示关闭 */
+  const [ctx, setCtx] = useState<
+    | { x: number; y: number; kind: "person"; personId: string }
+    | { x: number; y: number; kind: "resume"; personId: string; resumeId: string }
+    | null
+  >(null);
+  /** 删候选人要二次确认（不可撤销） */
+  const [pendingDelete, setPendingDelete] = useState<{ personId: string; name: string } | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -46,7 +57,7 @@ export function Sidebar() {
   };
 
   return (
-    <aside className={styles.side} data-print="hide">
+    <aside className={styles.side} data-col="side" data-print="hide">
       {/* 搜索置顶：找人是这个侧栏最高频的动作 */}
       <div className={cx(styles.row, styles.search)}>
         <Search size={12} />
@@ -90,6 +101,13 @@ export function Sidebar() {
               <button
                 type="button"
                 className={cx(styles.row, styles.person, open && styles.personOpen)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  if (person?.id !== item.id) {
+                    dispatch({ type: "selectPerson", personId: item.id });
+                  }
+                  setCtx({ x: event.clientX, y: event.clientY, kind: "person", personId: item.id });
+                }}
                 onClick={() => {
                   if (!open) {
                     dispatch({ type: "selectPerson", personId: item.id });
@@ -161,6 +179,17 @@ export function Sidebar() {
                       <li
                         key={target.id}
                         className={cx(styles.item, active && styles.itemOn)}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          selectResume(item, target);
+                          setCtx({
+                            x: event.clientX,
+                            y: event.clientY,
+                            kind: "resume",
+                            personId: item.id,
+                            resumeId: target.id,
+                          });
+                        }}
                         onClick={() => selectResume(item, target)}
                       >
                         <span className={styles.it}>{target.title}</span>
@@ -227,6 +256,74 @@ export function Sidebar() {
         <span className={styles.live} />
         本地工作区 · 自动保存
       </div>
+
+      {ctx && (
+        <ContextMenu x={ctx.x} y={ctx.y} onClose={() => setCtx(null)}>
+          {ctx.kind === "person" ? (
+            <>
+              <CtxItem
+                label="新建简历"
+                onSelect={() => {
+                  dispatch({ type: "createResume", personId: ctx.personId });
+                  toast("已新建简历");
+                }}
+              />
+              <CtxItem label="编辑经历库" onSelect={() => setLibOpen(true)} />
+              <CtxSep />
+              <CtxItem
+                label="删除候选人"
+                danger
+                onSelect={() => {
+                  const owner = state.people.find((row) => row.id === ctx.personId);
+                  setPendingDelete({ personId: ctx.personId, name: owner?.name ?? "这位候选人" });
+                }}
+              />
+            </>
+          ) : (
+            <>
+              <CtxItem label="重命名" onSelect={() => setRenaming(ctx.resumeId)} />
+              <CtxItem
+                label="复制一份"
+                onSelect={() => {
+                  dispatch({ type: "createResume", personId: ctx.personId });
+                  toast("已新建简历");
+                }}
+              />
+              <CtxSep />
+              <CtxItem
+                label="删除简历"
+                danger
+                onSelect={() => {
+                  const owner = state.people.find((row) => row.id === ctx.personId);
+                  if ((owner?.resumes.length ?? 0) <= 1) {
+                    toast("至少保留一份简历");
+                    return;
+                  }
+                  dispatch({
+                    type: "deleteResume",
+                    personId: ctx.personId,
+                    resumeId: ctx.resumeId,
+                  });
+                  toast("已删除简历");
+                }}
+              />
+            </>
+          )}
+        </ContextMenu>
+      )}
+
+      {pendingDelete && (
+        <Confirm
+          title={`删除「${pendingDelete.name}」？`}
+          desc="这个人的简历、经历、作品和会话会一起删掉，无法撤销。"
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => {
+            dispatch({ type: "deletePerson", personId: pendingDelete.personId });
+            setPendingDelete(null);
+            toast("已删除候选人");
+          }}
+        />
+      )}
 
       <LibraryDrawer open={libOpen} onClose={() => setLibOpen(false)} />
     </aside>

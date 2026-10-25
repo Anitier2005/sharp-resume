@@ -1,0 +1,56 @@
+/* 确认框：只用于不可撤销的操作（删候选人等），刻意做得窄而克制 */
+
+.box {
+  width: 320px;
+  padding: 16px 18px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(20, 20, 15, 0.06),
+    0 24px 60px -24px rgba(20, 20, 15, 0.45);
+}
+
+.title {
+  font-size: 0.78125rem;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+
+.desc {
+  margin: 8px 0 0;
+  font-size: 0.6875rem;
+  line-height: 1.7;
+  color: var(--fg-3);
+}
+
+.acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.acts button {
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  color: var(--fg-2);
+}
+.acts button:hover {
+  border-color: var(--line-strong);
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+.acts .danger {
+  border-color: transparent;
+  background: var(--danger);
+  color: #fff;
+}
+.acts .danger:hover {
+  background: var(--danger);
+  filter: brightness(0.94);
+  color: #fff;
+}

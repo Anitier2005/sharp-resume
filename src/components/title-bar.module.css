@@ -87,3 +87,25 @@
 .dot[data-accent="clay"] {
   background: #b2452c;
 }
+
+/* 面板显隐开关：按下=该栏可见 */
+.toggle {
+  width: 22px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--fg-4);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.toggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+.toggle[aria-pressed="true"] {
+  color: var(--fg-2);
+}
+.toggle[aria-pressed="false"] {
+  color: var(--fg-4);
+  opacity: 0.55;
+}

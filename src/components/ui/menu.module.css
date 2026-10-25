@@ -135,3 +135,17 @@
   background: var(--acc-soft);
   color: var(--acc-text);
 }
+
+/* ---------- 右键上下文菜单 ----------
+   与 .menu 同视觉，但定位在鼠标处（fixed），所以不复用 .menu 的 absolute 定位。 */
+.ctx {
+  position: fixed;
+  z-index: 200;
+  min-width: 156px;
+  padding: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(20, 20, 15, 0.06),
+    0 14px 30px -18px rgba(20, 20, 15, 0.38);
+}
