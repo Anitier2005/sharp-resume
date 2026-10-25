@@ -52,10 +52,11 @@
   color: var(--fg-2);
 }
 
-/* 主操作行：新建简历。
+/* 主操作行：新增候选人（紧跟搜索，和「候选人」分节同级）。
    用 .row.em 复合选择器（而不是单独的 .em）：原 CSS 就是复合写法，
    特异度 (0,2,0) 必须高于 `.row:hover` 的 (0,1,1)，否则 hover 会盖掉强调色。 */
 .row.em {
+  margin-top: 4px;
   background: var(--acc-soft);
   color: var(--acc-text);
 }
@@ -98,7 +99,7 @@
 .sec {
   display: flex;
   align-items: center;
-  margin: 14px 0 4px;
+  margin: 10px 0 4px;
   padding: 0 7px;
   font-size: 0.625rem;
   letter-spacing: 0.04em;
@@ -113,20 +114,6 @@
   margin-right: 6px;
   opacity: 0.85;
 }
-.sec button {
-  margin-left: auto;
-  color: var(--fg-4);
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-}
-.sec button:hover {
-  background: var(--bg-hover);
-  color: var(--acc-text);
-}
-
 /* ---------- 候选人列表 ---------- */
 .people {
   flex: 1;

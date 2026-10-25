@@ -47,26 +47,7 @@ export function Sidebar() {
 
   return (
     <aside className={styles.side} data-print="hide">
-      <button
-        type="button"
-        className={cx(styles.row, styles.em)}
-        onClick={() => {
-          const target = person ?? state.people[0];
-          // 全新安装时一个人都没有，直接建简历会无处挂载 —— 改为建第一位候选人
-          // （createPerson 会连带创建「通用版」简历与首页），用户不会点了没反应。
-          if (!target) {
-            dispatch({ type: "createPerson" });
-            toast("已新建第一位候选人与简历");
-            return;
-          }
-          dispatch({ type: "createResume", personId: target.id });
-          toast("已新建简历");
-        }}
-      >
-        <Plus size={12} />
-        新建简历
-      </button>
-
+      {/* 搜索置顶：找人是这个侧栏最高频的动作 */}
       <div className={cx(styles.row, styles.search)}>
         <Search size={12} />
         <input
@@ -85,19 +66,21 @@ export function Sidebar() {
         <span className={styles.kbd}>Ctrl K</span>
       </div>
 
-      <div className={styles.sec}>
-        候选人
-        <button
-          type="button"
-          aria-label="新建候选人"
-          onClick={() => {
-            dispatch({ type: "createPerson" });
-            toast("已新建候选人");
-          }}
-        >
-          <Plus size={11} />
-        </button>
-      </div>
+      {/* 新增候选人：与「候选人」同级的一行，紧跟搜索。
+          createPerson 会连带建「通用版」简历和首页，空库点它也不会没反应。 */}
+      <button
+        type="button"
+        className={cx(styles.row, styles.em)}
+        onClick={() => {
+          dispatch({ type: "createPerson" });
+          toast(state.people.length === 0 ? "已新建第一位候选人与简历" : "已新建候选人");
+        }}
+      >
+        <Plus size={12} />
+        新增候选人
+      </button>
+
+      <div className={styles.sec}>候选人</div>
 
       <div className={styles.people}>
         {people.map((item) => {
@@ -234,7 +217,7 @@ export function Sidebar() {
         {people.length === 0 && (
           <div className={styles.empty}>
             {state.people.length === 0
-              ? "还没有候选人。点上方「新建简历」写下第一份。"
+              ? "还没有候选人。点上方「新增候选人」开始。"
               : "没有匹配的结果"}
           </div>
         )}
