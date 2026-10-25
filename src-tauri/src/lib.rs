@@ -1,4 +1,5 @@
 mod net;
+mod session;
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -382,8 +383,15 @@ pub fn run() {
             save_text_file,
             save_binary_file,
             net::chat_once,
-            net::chat_stream
+            net::chat_stream,
+            session::chat_history,
+            session::chat_push,
+            session::chat_patch,
+            session::chat_clear,
+            session::chat_cancel,
+            session::chat_send
         ])
+        .manage(session::Sessions::default())
         .run(tauri::generate_context!())
         .expect("error while running Sharp Resume");
 }

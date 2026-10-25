@@ -9,7 +9,9 @@ import { toAttachment, attachmentText } from "@/lib/attach";
 import { AiSettingsSheet } from "./ai-settings";
 import { AssistantTurn, EmptyTurn, TypingTurn, UserTurn } from "./message";
 import { aiReady, loadAi, saveAi, streamChat, type AiSettings } from "@/lib/ai";
-import { buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
+import { buildContext, buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
+import { isTauri } from "@/lib/storage";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import styles from "./chat.module.css";
 
 /**
@@ -31,11 +33,35 @@ export function ChatPanel() {
   const [dragging, setDragging] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** 消息真相源在 Rust（chat_history 拉投影）；浏览器调试模式才退回工作区 */
+  const [remote, setRemote] = useState<ChatMessage[]>([]);
+  const [reasoning, setReasoning] = useState("");
+  const desktop = isTauri();
 
   const configured = aiReady(ai);
   const modelLabel = configured ? ai.model : "未配置模型 · 点此设置";
 
-  const messages = useMemo(() => person?.messages ?? [], [person]);
+  const messages = useMemo(
+    () => (desktop ? remote : person?.messages ?? []),
+    [desktop, remote, person],
+  );
+
+  const personId = person?.id ?? null;
+
+  // 切人/启动时从 Rust 拉一次（只给要显示的那一段，Rust 已按 token 预算裁剪过）
+  useEffect(() => {
+    if (!desktop || !personId) {
+      setRemote([]);
+      return;
+    }
+    let alive = true;
+    void invoke<ChatMessage[]>("chat_history", { key: personId })
+      .then((list) => alive && setRemote(list))
+      .catch(() => alive && setRemote([]));
+    return () => {
+      alive = false;
+    };
+  }, [desktop, personId]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -50,6 +76,11 @@ export function ChatPanel() {
   }, [resume?.id]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  /** 本地投影打补丁（Tauri 模式下消息真相在 Rust，这里只是显示） */
+  const patchLocal = useCallback((id: string, patch: Partial<ChatMessage>) => {
+    setRemote((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }, []);
 
   const send = useCallback(
     (text: string, attachments: Attachment[]) => {
@@ -75,94 +106,181 @@ export function ChatPanel() {
         time: Date.now(),
         attachments: attachments.length ? attachments : undefined,
       };
-      dispatch({ type: "appendMessage", personId: person.id, message: userMessage });
-
-      const snapshotPerson = person;
-      const snapshotResume = resume;
-      const snapshotPage = targetPage;
-      const patchReply = (messageId: string, patch: Partial<ChatMessage>) =>
-        dispatch({
-          type: "patchMessage",
-          personId: snapshotPerson.id,
-          messageId,
-          patch,
-        });
-
-      // ---- 流式回答：到这里一定已配置模型，且当前有页面 ----
-      setBusy(true);
       const replyId = uid("m");
-      dispatch({
-        type: "appendMessage",
-        personId: snapshotPerson.id,
-        message: {
-          id: replyId,
-          role: "assistant",
-          time: Date.now(),
-          content: "",
-          tool: `${ai.model} · 正在读简历`,
-        },
-      });
-
-      const controller = new AbortController();
-      abortRef.current?.abort();
-      abortRef.current = controller;
-
-      let acc = "";
-      let flushedAt = 0;
-      const flush = (force: boolean) => {
-        const now = Date.now();
-        if (!force && now - flushedAt < 70) return;
-        flushedAt = now;
-        patchReply(replyId, { content: acc });
+      const draft: ChatMessage = {
+        id: replyId,
+        role: "assistant",
+        time: Date.now(),
+        content: "",
+        tool: `${ai.model} · 正在读简历`,
       };
 
-      const messagesForApi = toApiMessages(
-        buildSystemPrompt(snapshotPerson, snapshotPage, snapshotResume.title),
-        snapshotPerson.messages.map((item) => ({ role: item.role, content: item.content })),
-        text,
-        attachments.map((file) => ({ name: file.name, text: attachmentText(file.id) })),
-      );
+      setBusy(true);
+      setReasoning("");
+      abortRef.current = new AbortController();
+
+      /* ---------- 浏览器调试模式：保持原有工作区流程 ---------- */
+      if (!desktop) {
+        dispatch({ type: "appendMessage", personId: person.id, message: userMessage });
+        dispatch({ type: "appendMessage", personId: person.id, message: draft });
+        const controller = abortRef.current;
+        let acc = "";
+        void (async () => {
+          try {
+            await streamChat({
+              settings: ai,
+              messages: toApiMessages(
+                buildSystemPrompt(person, targetPage, resume.title),
+                person.messages.map((item) => ({ role: item.role, content: item.content })),
+                text,
+                attachments.map((file) => ({ name: file.name, text: attachmentText(file.id) })),
+              ),
+              signal: controller.signal,
+              onDelta: (delta) => {
+                acc += delta;
+                dispatch({
+                  type: "patchMessage",
+                  personId: person.id,
+                  messageId: replyId,
+                  patch: { content: acc },
+                });
+              },
+            });
+            const { content, changes } = splitReply(acc, person, targetPage);
+            dispatch({
+              type: "patchMessage",
+              personId: person.id,
+              messageId: replyId,
+              patch: {
+                content: content || "（模型没有返回正文）",
+                tool: `${ai.model} · 完成`,
+                changes: changes.length ? changes : undefined,
+              },
+            });
+          } catch (error) {
+            if (controller.signal.aborted) return;
+            const reason = error instanceof Error ? error.message : String(error);
+            dispatch({
+              type: "patchMessage",
+              personId: person.id,
+              messageId: replyId,
+              patch: { content: `调用失败：${reason}`, tool: `${ai.model} · 调用失败` },
+            });
+          } finally {
+            setBusy(false);
+          }
+        })();
+        return;
+      }
+
+      /* ---------- 桌面：消息交给 Rust，上下文与裁剪也在那边 ---------- */
+      setRemote((prev) => [...prev, userMessage, draft]);
 
       void (async () => {
         try {
-          await streamChat({
-            settings: ai,
-            messages: messagesForApi,
-            signal: controller.signal,
-            onDelta: (delta) => {
-              acc += delta;
-              flush(false);
+          await invoke("chat_push", { key: person.id, message: userMessage });
+
+          const channel = new Channel<{
+            kind: string;
+            delta?: string;
+            reasoning?: string;
+            message?: string;
+          }>();
+          let acc = "";
+          let flushed = 0;
+          channel.onmessage = (chunk) => {
+            if (chunk.kind === "delta" && chunk.delta) {
+              acc += chunk.delta;
+              const now = Date.now();
+              if (now - flushed > 70) {
+                flushed = now;
+                patchLocal(replyId, { content: acc });
+              }
+            } else if (chunk.kind === "reasoning" && chunk.reasoning) {
+              setReasoning((prev) => prev + chunk.reasoning);
+            }
+          };
+
+          const id = await invoke<string>("chat_send", {
+            args: {
+              key: person.id,
+              context: buildContext(person, targetPage),
+              baseUrl: ai.baseUrl,
+              apiKey: ai.apiKey,
+              model: ai.model,
+              temperature: ai.temperature,
+              reasoning: ai.reasoning ?? null,
+              contextWindow: ai.contextWindow ?? null,
+            },
+            onEvent: channel,
+          });
+
+          const { content, changes } = splitReply(acc, person, targetPage);
+          await invoke("chat_patch", {
+            key: person.id,
+            id,
+            patch: {
+              content: content || "（模型没有返回正文）",
+              tool: `${ai.model} · 完成`,
+              changes: changes.length ? changes : null,
+              actions: changes.length
+                ? [
+                    { id: uid("a"), label: `应用 ${changes.length} 处改写`, kind: "apply" },
+                    { id: uid("a"), label: "再收一收", kind: "hint" },
+                  ]
+                : null,
             },
           });
-          const { content, changes } = splitReply(acc, snapshotPerson, snapshotPage);
-          patchReply(replyId, {
-            content: content || "（模型没有返回正文）",
-            tool: `${ai.model} · 完成`,
-            changes: changes.length ? changes : undefined,
-            actions: changes.length
-              ? [
-                  { id: uid("a"), label: `应用 ${changes.length} 处改写`, kind: "apply" },
-                  { id: uid("a"), label: "再收一收", kind: "hint" },
-                ]
-              : undefined,
-          });
+
+          // 用 Rust 的历史覆盖本地投影：draft 换成正式消息，顺手拿到裁剪后的列表
+          setRemote(await invoke<ChatMessage[]>("chat_history", { key: person.id }));
         } catch (error) {
-          if (controller.signal.aborted) return;
           const reason = error instanceof Error ? error.message : String(error);
-          patchReply(replyId, {
-            content: `调用失败：${reason}`,
-            tool: `${ai.model} · 调用失败`,
-            actions: [{ id: uid("a"), label: "去检查设置", kind: "hint" }],
-          });
-          toast("模型调用失败，检查接口地址与密钥");
+          if (reason.includes("已中断")) {
+            setRemote((prev) => prev.filter((item) => item.id !== replyId));
+            toast("已停止");
+          } else {
+            patchLocal(replyId, {
+              content: `调用失败：${reason}`,
+              tool: `${ai.model} · 调用失败`,
+            });
+            toast("模型调用失败，检查接口地址与密钥");
+          }
         } finally {
           setBusy(false);
           abortRef.current = null;
         }
       })();
     },
-    [person, resume, page, dispatch, ai, configured, toast],
+    [person, resume, page, dispatch, ai, configured, toast, desktop, patchLocal],
   );
+
+  /** 统一补丁入口：桌面端消息真相在 Rust，浏览器端在工作区 */
+  const patchMessage = useCallback(
+    (id: string, patch: Partial<ChatMessage>) => {
+      if (!person) return;
+      if (!desktop) {
+        dispatch({ type: "patchMessage", personId: person.id, messageId: id, patch });
+        return;
+      }
+      patchLocal(id, patch);
+      // undefined 序列化会丢字段，Rust 侧用 null 表示"清空"
+      const wire: Record<string, unknown> = {};
+      for (const [field, value] of Object.entries(patch)) {
+        wire[field] = value === undefined ? null : value;
+      }
+      void invoke("chat_patch", { key: person.id, id, patch: wire });
+    },
+    [person, desktop, dispatch, patchLocal],
+  );
+
+  /** 中断当前请求（只有桌面模式有效：命令层能置取消标记） */
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+    if (desktop && person) {
+      void invoke("chat_cancel", { key: person.id });
+    }
+  }, [desktop, person]);
 
   const handleAction = (message: ChatMessage, action: ChatAction) => {
     if (!person || !resume) return;
@@ -206,14 +324,9 @@ export function ChatPanel() {
           patch,
         });
       }
-      dispatch({
-        type: "patchMessage",
-        personId: person.id,
-        messageId: message.id,
-        patch: {
-          actions: undefined,
-          tool: `${message.tool ?? "改写"} · 已写入本页`,
-        },
+      patchMessage(message.id, {
+        actions: undefined,
+        tool: `${message.tool ?? "改写"} · 已写入本页`,
       });
       toast(`已写入 ${changes.length} 处，名下所有简历同步更新`);
       return;
@@ -277,9 +390,23 @@ export function ChatPanel() {
               <AssistantTurn key={message.id} message={message} onAction={(action) => handleAction(message, action)} />
             ),
           )}
+          {busy && reasoning && (
+            <details className={styles.think}>
+              <summary>思考过程 · {reasoning.length} 字</summary>
+              <pre>{reasoning}</pre>
+            </details>
+          )}
           {busy && <TypingTurn />}
         </div>
       </div>
+
+      {busy && (
+        <div className={styles.stopRow}>
+          <button type="button" className={styles.stopBtn} onClick={stop}>
+            停止生成
+          </button>
+        </div>
+      )}
 
       <Composer
         model={modelLabel}

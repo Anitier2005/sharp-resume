@@ -70,6 +70,17 @@ function experienceBlock(person: Person, page: ResumePage): string {
   return lines.join("\n");
 }
 
+/** 只产出「材料」部分：模板与规则在 prompts/system.md，由 Rust 拼装 */
+export function buildContext(person: Person, page: ResumePage): string {
+  return [
+    `页头：${page.headline} · ${page.role} · ${page.meta.join(" / ")}`,
+    `摘要：${page.summary?.trim() || "（空）"}`,
+    "",
+    "材料：",
+    experienceBlock(person, page),
+  ].join("\n");
+}
+
 export function buildSystemPrompt(person: Person, page: ResumePage, resumeTitle: string): string {
   return `你是一位资深简历顾问，正在帮 ${person.name} 改简历。这个工作台里，「经历库」属于人这一级，被名下所有简历共享；当前打开的是「${resumeTitle} · ${page.label}」（${KIND_LABEL[page.kind]}）。
 

@@ -162,13 +162,20 @@ pub async fn chat_once(req: AiRequest) -> Result<String, String> {
     })
 }
 
-/// 流式请求：按 SSE 解出 delta，逐块推给前端
-#[tauri::command]
-pub async fn chat_stream(req: AiRequest, on_event: Channel<StreamChunk>) -> Result<(), String> {
+/// 流式请求：按 SSE 解出 delta，逐块推给前端，返回累加后的全文。
+///
+/// `cancel` 由上层（session）持有：置位后在下一块就会退出，连接随 Response 释放而关闭。
+pub async fn stream(
+    req: &AiRequest,
+    cancel: &std::sync::atomic::AtomicBool,
+    on_event: &Channel<StreamChunk>,
+) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+
     let response = client()
         .post(endpoint(&req.base_url))
         .bearer_auth(req.api_key.trim())
-        .json(&body(&req, true))
+        .json(&body(req, true))
         .send()
         .await
         .map_err(|error| format!("请求失败：{error}"))?;
@@ -183,8 +190,12 @@ pub async fn chat_stream(req: AiRequest, on_event: Channel<StreamChunk>) -> Resu
 
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
+    let mut full = String::new();
 
     while let Some(chunk) = stream.next().await {
+        if cancel.load(Ordering::SeqCst) {
+            return Ok(full);
+        }
         let bytes = chunk.map_err(|error| format!("读取流失败：{error}"))?;
         buffer.push_str(&String::from_utf8_lossy(&bytes));
 
@@ -201,7 +212,7 @@ pub async fn chat_stream(req: AiRequest, on_event: Channel<StreamChunk>) -> Resu
             }
             if payload == "[DONE]" {
                 let _ = on_event.send(StreamChunk::done());
-                return Ok(());
+                return Ok(full);
             }
             let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) else {
                 continue;
@@ -209,6 +220,7 @@ pub async fn chat_stream(req: AiRequest, on_event: Channel<StreamChunk>) -> Resu
             let delta = &json["choices"][0]["delta"];
             if let Some(text) = delta["content"].as_str() {
                 if !text.is_empty() {
+                    full.push_str(text);
                     let _ = on_event.send(StreamChunk::delta(text.to_string()));
                 }
             }
@@ -221,7 +233,14 @@ pub async fn chat_stream(req: AiRequest, on_event: Channel<StreamChunk>) -> Resu
     }
 
     let _ = on_event.send(StreamChunk::done());
-    Ok(())
+    Ok(full)
+}
+
+/// 无状态的一次性流式（设置页的直连测试用；正式对话走 session::chat_send）
+#[tauri::command]
+pub async fn chat_stream(req: AiRequest, on_event: Channel<StreamChunk>) -> Result<String, String> {
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    stream(&req, &cancel, &on_event).await
 }
 
 #[cfg(test)]
