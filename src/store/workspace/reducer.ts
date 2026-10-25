@@ -37,7 +37,7 @@ export function reducer(state: Workspace, action: Action): Workspace {
       };
 
     case "setAccent":
-      return { ...state, ui: { ...state.ui, accent: action.accent } };
+      return { ...state, ui: { ...state.ui, accent: action.accent, accentHex: action.accentHex } };
 
     case "setMode":
       return { ...state, ui: { ...state.ui, mode: action.mode } };

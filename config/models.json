@@ -1,0 +1,46 @@
+{
+  "$comment": "模型清单：打包时静态引入并硬编码进 bundle。改这里 → 刷新即生效（dev）/ 重新打包（release）。contextWindow 与 reasoning 只是元数据，供 UI 与请求体使用。",
+  "models": [
+    {
+      "id": "minimax-m3.1-flash",
+      "label": "MiniMax M3.1 Flash",
+      "provider": "腾讯 TokenHub",
+      "baseUrl": "https://tokenhub.tencentmaas.com/v1",
+      "contextWindow": 128000,
+      "maxOutput": 8192,
+      "reasoning": ["off", "low", "medium", "high"],
+      "defaultTemperature": 0.4,
+      "note": "便宜快，适合日常改写与对齐 JD"
+    },
+    {
+      "id": "deepseek-chat",
+      "label": "DeepSeek Chat",
+      "provider": "DeepSeek",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "contextWindow": 64000,
+      "maxOutput": 8192,
+      "reasoning": [],
+      "defaultTemperature": 0.4
+    },
+    {
+      "id": "gpt-4o-mini",
+      "label": "GPT-4o mini",
+      "provider": "OpenAI",
+      "baseUrl": "https://api.openai.com/v1",
+      "contextWindow": 128000,
+      "maxOutput": 16384,
+      "reasoning": ["low", "medium", "high"],
+      "defaultTemperature": 0.4
+    },
+    {
+      "id": "qwen2.5:7b",
+      "label": "本地 Ollama · qwen2.5",
+      "provider": "本地",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "contextWindow": 32768,
+      "maxOutput": 4096,
+      "reasoning": [],
+      "defaultTemperature": 0.5
+    }
+  ]
+}

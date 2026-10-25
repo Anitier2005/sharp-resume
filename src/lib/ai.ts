@@ -1,6 +1,9 @@
+import { LOCAL_AI, MODELS } from "@/lib/model-config";
+
 /**
  * 模型接入：任何 OpenAI 兼容接口（DeepSeek / OpenAI / 本地 ollama / 自建网关）都能用。
  * 密钥只留在本机 localStorage，不写进工作区、不随简历同步。
+ * 模型清单与能力参数来自 config/models.json（打包时硬编码）。
  */
 
 export interface AiSettings {
@@ -8,22 +11,28 @@ export interface AiSettings {
   model: string;
   apiKey: string;
   temperature: number;
+  /** 思维强度档位，取值来自 config/models.json 里该模型的 reasoning 列表 */
+  reasoning?: string;
+  /** 上下文窗口（token），缺省取模型配置 */
+  contextWindow?: number;
 }
 
 const STORE_KEY = "sharp-resume:ai:v1";
 
+/** 默认值：优先用 `config/ai.local.json`（仅开发期），否则取模型清单第一条 */
 export const DEFAULT_AI: AiSettings = {
-  baseUrl: "https://api.deepseek.com/v1",
-  model: "deepseek-chat",
-  apiKey: "",
-  temperature: 0.4,
+  baseUrl: LOCAL_AI?.baseUrl ?? MODELS[0]?.baseUrl ?? "https://api.deepseek.com/v1",
+  model: LOCAL_AI?.model ?? MODELS[0]?.id ?? "deepseek-chat",
+  apiKey: LOCAL_AI?.apiKey ?? "",
+  temperature: LOCAL_AI?.temperature ?? MODELS[0]?.defaultTemperature ?? 0.4,
+  reasoning: LOCAL_AI?.reasoning ?? MODELS[0]?.reasoning[0],
+  contextWindow: MODELS[0]?.contextWindow,
 };
 
-export const AI_PRESETS: { label: string; baseUrl: string; model: string }[] = [
-  { label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
-  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
-  { label: "本地 Ollama", baseUrl: "http://127.0.0.1:11434/v1", model: "qwen2.5:7b" },
-];
+/** 兼容旧版设置弹窗里的快捷预设（设置页已经改成从模型清单选，这里留作兜底） */
+export const AI_PRESETS: { label: string; baseUrl: string; model: string }[] = MODELS.map(
+  (item) => ({ label: item.label, baseUrl: item.baseUrl, model: item.id }),
+);
 
 export function loadAi(): AiSettings {
   try {
@@ -158,4 +167,32 @@ export async function testConnection(settings: AiSettings): Promise<string> {
     choices?: { message?: { content?: string } }[];
   };
   return json.choices?.[0]?.message?.content ?? "已连通";
+}
+
+/**
+ * 连通性自检：非流式发一句最短请求，把回复或错误原样返回。
+ * 设置页用它验证 key / baseUrl / model 三件事是否对得上。
+ */
+export async function testAi(settings: AiSettings): Promise<string> {
+  const response = await send(endpoint(settings.baseUrl), {
+    method: "POST",
+    headers: headers(settings.apiKey),
+    body: JSON.stringify({
+      model: settings.model,
+      messages: [
+        { role: "system", content: "You are a connectivity probe. Reply with OK only." },
+        { role: "user", content: "ping" },
+      ],
+      stream: false,
+      temperature: 0,
+    }),
+  });
+  if (!response.ok) throw new Error(await explain(response));
+  const json = (await response.json()) as {
+    choices?: { message?: { content?: string } }[];
+    usage?: { total_tokens?: number };
+  };
+  const text = json.choices?.[0]?.message?.content?.trim() ?? "(空回复)";
+  const tokens = json.usage?.total_tokens;
+  return tokens ? `${text} · ${tokens} tokens` : text;
 }

@@ -17,7 +17,7 @@ export type Action =
   | { type: "selectPerson"; personId: string }
   | { type: "togglePerson"; personId: string }
   | { type: "selectResume"; personId: string; resumeId: string }
-  | { type: "setAccent"; accent: AccentKey }
+  | { type: "setAccent"; accent: AccentKey; accentHex?: string }
   | { type: "setMode"; mode: "light" | "dark" }
   | { type: "setTextScale"; textScale: number | null }
   | { type: "createPerson" }

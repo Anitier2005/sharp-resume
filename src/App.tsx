@@ -5,6 +5,7 @@ import { TitleBar } from "@/components/title-bar";
 import { Sidebar } from "@/components/sidebar";
 import { ChatPanel } from "@/components/chat/panel";
 import { ResumePanel } from "@/components/resume/panel";
+import { readableOn } from "@/lib/color";
 
 /** 栏宽取值范围；中间会话区永远留够可读宽度 */
 const SIDE_MIN = 180;
@@ -20,6 +21,7 @@ function Shell() {
   const { state, dispatch } = useWorkspace();
   const { accent, mode } = state.ui;
 
+  const accentHex = state.ui.accentHex;
   const sideW = state.ui.sideW ?? 240;
   const docW = state.ui.docW ?? 420;
   const showSide = state.ui.showSide !== false;
@@ -85,7 +87,15 @@ function Shell() {
     //    `html[data-accent="x"] .win{--acc}` 必须能选中它，哈希后主题会失效；
     // 2) .app 是唯一的布局根，只有一个实例，模块化没有收益，
     //    而窄屏断点与打印规则需要稳定选择器。
-    <div className="win" data-mode={mode}>
+    <div
+      className="win"
+      data-mode={mode}
+      style={
+        accentHex
+          ? ({ "--acc": accentHex, "--acc-fg": readableOn(accentHex) } as React.CSSProperties)
+          : undefined
+      }
+    >
       <TitleBar />
       <div
         className="app"

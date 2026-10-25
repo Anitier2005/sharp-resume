@@ -29,3 +29,6 @@ dist-ssr
 # Tauri / Rust
 src-tauri/target
 src-tauri/gen/schemas
+
+# 本机密钥：绝不进仓库，也绝不进 release 包（package.mjs 会检查）
+config/ai.local.json

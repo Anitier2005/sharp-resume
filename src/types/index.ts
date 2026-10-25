@@ -159,6 +159,8 @@ export interface Workspace {
   people: Person[];
   ui: {
     accent: AccentKey;
+    /** 自定义强调色（#rrggbb）。有值时覆盖 accent 预设色 */
+    accentHex?: string;
     mode: "light" | "dark";
     activePersonId: string | null;
     activeResumeId: string | null;

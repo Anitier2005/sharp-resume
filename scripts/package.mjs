@@ -60,6 +60,17 @@ if (fs.existsSync(DIST_HTML)) {
   }
 }
 
+// —— 密钥保护：本机密钥文件绝不能被打进发行版 ——
+// 它在 dev 下是默认配置，若打包时还在，会被 vite 静态引入进 bundle。
+const LOCAL_KEY = path.resolve('config/ai.local.json')
+if (fs.existsSync(LOCAL_KEY)) {
+  fail(
+    '发现 config/ai.local.json（本机密钥）。\n' +
+      '       它会被编进前端 bundle，发行版等于把 key 送出去。\n' +
+      '       打包前先把它移走（例如 mv config/ai.local.json ~/ai.local.json.bak）。',
+  )
+}
+
 // —— 数据保护：交付目录里的 SharpResumeData 是真实运行数据 ——
 const dataDir = path.join(target, 'SharpResumeData')
 if (fs.existsSync(dataDir) && !force) {

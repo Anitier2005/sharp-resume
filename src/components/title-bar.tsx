@@ -1,11 +1,11 @@
-import { ACCENTS, TEXT_SCALES } from "@/types";
+import { useState } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { isTauri } from "@/lib/storage";
 import { useToast } from "@/components/ui/toast-context";
-import { Dropdown, MenuLabel, MenuSep } from "@/components/ui/menu";
+import { Logo } from "@/components/ui/logo";
 import { PanelLeft, PanelRight, WinClose, WinMax, WinMin } from "@/components/ui/icons";
+import { SettingsSheet } from "@/components/settings/sheet";
 import styles from "./title-bar.module.css";
-import menu from "@/components/ui/menu.module.css";
 
 async function windowAction(action: "minimize" | "maximize" | "close") {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
@@ -16,11 +16,11 @@ async function windowAction(action: "minimize" | "maximize" | "close") {
 }
 
 export function TitleBar() {
-  const { state, resume, dispatch, textScale, systemTextScale, setTextScale } = useWorkspace();
+  const { state, resume, dispatch } = useWorkspace();
   const toast = useToast();
   const desktop = isTauri();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { accent, mode } = state.ui;
-  const autoScale = state.ui.textScale == null;
   const showSide = state.ui.showSide !== false;
   const showDoc = state.ui.showDoc !== false;
 
@@ -39,7 +39,9 @@ export function TitleBar() {
       data-print="hide"
       onDoubleClick={() => run("maximize")}
     >
-      <span className={styles.glyph} />
+      <span className={styles.glyph} data-tauri-drag-region>
+        <Logo size={14} />
+      </span>
       <span className={styles.docName}>{resume?.title ?? "未选择简历"}</span>
       <span>— Sharp Resume</span>
 
@@ -64,75 +66,15 @@ export function TitleBar() {
           <PanelRight size={12} />
         </button>
 
-        <Dropdown
-          width={222}
-          trigger={
-            <button type="button" className={styles.appearance} aria-label="外观">
-              <span
-                className={styles.dot}
-                data-accent={accent}
-                data-mode={mode}
-              />
-              外观
-            </button>
-          }
+        <button
+          type="button"
+          className={styles.appearance}
+          aria-label="设置"
+          onClick={() => setSettingsOpen(true)}
         >
-          <MenuLabel>明暗</MenuLabel>
-          <div className={menu.seg}>
-            <button
-              type="button"
-              aria-pressed={mode === "light"}
-              onClick={() => dispatch({ type: "setMode", mode: "light" })}
-            >
-              浅色
-            </button>
-            <button
-              type="button"
-              aria-pressed={mode === "dark"}
-              onClick={() => dispatch({ type: "setMode", mode: "dark" })}
-            >
-              深色
-            </button>
-          </div>
-          <MenuSep />
-          <MenuLabel>强调色</MenuLabel>
-          <div className={menu.swatches}>
-            {ACCENTS.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                className={menu.sw}
-                aria-pressed={accent === item.key}
-                onClick={() => dispatch({ type: "setAccent", accent: item.key })}
-              >
-                <i style={{ background: item.color }} />
-                {item.label}
-              </button>
-            ))}
-          </div>
-          <MenuSep />
-          <MenuLabel>字号 · {Math.round(textScale * 100)}%</MenuLabel>
-          <div className={menu.seg}>
-            <button
-              type="button"
-              aria-pressed={autoScale}
-              onClick={() => setTextScale(null)}
-              title={`跟随系统文本大小（当前 ${Math.round(systemTextScale * 100)}%）`}
-            >
-              自动
-            </button>
-            {TEXT_SCALES.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                aria-pressed={state.ui.textScale === item.value}
-                onClick={() => setTextScale(item.value)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-        </Dropdown>
+          <span className={styles.dot} data-accent={accent} data-mode={mode} />
+          设置
+        </button>
 
         <div className={styles.winbtns}>
           <button type="button" aria-label="最小化" onClick={() => run("minimize")}>
@@ -146,6 +88,8 @@ export function TitleBar() {
           </button>
         </div>
       </div>
+
+      <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }
