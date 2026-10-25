@@ -128,7 +128,10 @@ fn resolve_data_dir(app: &tauri::AppHandle) -> Result<(PathBuf, bool), String> {
 }
 
 /// 取数据目录（带缓存）。
-fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+///
+/// `pub(crate)`：会话文件也要落在同一个目录 —— 便携版拷走整个 SharpResumeData
+/// 时，简历和对话必须一起走，不能一个在 exe 旁边、一个在 %APPDATA%。
+pub(crate) fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     if let Some(dir) = DATA_DIR.get() {
         return Ok(dir.clone());
     }

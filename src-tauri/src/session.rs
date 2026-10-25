@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::Channel;
-use tauri::Manager;
 
 use crate::net::{self, AiRequest, ChatMessage, StreamChunk};
 
@@ -42,11 +41,9 @@ impl Sessions {
     fn path(&self, app: &tauri::AppHandle) -> PathBuf {
         self.file
             .get_or_init(|| {
-                let dir = app
-                    .path()
-                    .app_data_dir()
-                    .unwrap_or_else(|_| PathBuf::from("."));
-                dir.join("sessions.json")
+                // 与 workspace.json 同目录：便携版整目录拷走时对话跟着走
+                crate::data_dir(app).unwrap_or_else(|_| PathBuf::from("."))
+                    .join("sessions.json")
             })
             .clone()
     }
