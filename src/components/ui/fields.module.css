@@ -1,14 +1,46 @@
-/* 字段列表：标签 96px + 自适应值 + 行内操作 */
+/* 字段行：把手 14px + 字段名 96px + 值（自适应、可换行）+ 删除 */
 .list {
   display: flex;
   flex-direction: column;
   gap: 5px;
 }
+
 .row {
   display: flex;
   align-items: flex-start;
   gap: 6px;
+  border-radius: 5px;
+  transition: background 0.12s ease;
 }
+/* 拖动中的那一行：轻微抬起感，让「我正在搬它」可见 */
+.rowDragging {
+  background: var(--acc-softer);
+  box-shadow: 0 0 0 1px var(--acc-line);
+}
+
+/* 左侧拖拽把手：平时很淡，hover 才明显 */
+.handle {
+  flex: none;
+  width: 14px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--fg-4);
+  opacity: 0.45;
+  cursor: grab;
+  touch-action: none;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.row:hover .handle {
+  opacity: 0.9;
+}
+.handle:hover {
+  color: var(--fg-2);
+}
+.handle:active {
+  cursor: grabbing;
+}
+
 .row input,
 .row textarea {
   padding: 5px 7px;
@@ -35,49 +67,87 @@
   border-color: var(--acc-line-2);
   background: var(--acc-softer);
 }
+
 .label {
   flex: none;
   width: 96px;
   height: 28px;
 }
-.value {
+
+/* 值的容器：负责托住那条「整条下边框都能拖」的感应区 */
+.valueWrap {
+  position: relative;
   flex: 1;
   min-width: 0;
+  display: block;
+}
+
+/* 多行值：自动换行、随内容长高；关掉原生 resize（右下角那条斜线） */
+.value {
+  display: block;
+  width: 100%;
   min-height: 28px;
-  resize: vertical;
+  padding-bottom: 9px;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
-.acts {
+
+/* 下边框拖拽感应区：贴住输入框底部整条，宽出来 6px 便于命中 */
+.resizer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 7px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.resizer::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 3px;
+  height: 1px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.valueWrap:hover .resizer::after {
+  background: var(--acc-line);
+}
+.resizer:hover::after {
+  background: var(--acc-line-2);
+}
+
+.rm {
   flex: none;
-  display: flex;
-  gap: 1px;
-  margin-top: 4px;
-}
-.acts button {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 28px;
   display: grid;
   place-items: center;
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--fg-4);
+  transition: background 0.12s ease, color 0.12s ease;
 }
-.acts button:hover {
+.rm:hover {
   background: var(--bg-press);
-  color: var(--fg-1);
+  color: var(--danger);
 }
-.acts button:disabled {
-  opacity: 0.3;
-  pointer-events: none;
-}
+
 .empty {
   font-size: 0.65625rem;
   color: var(--fg-4);
 }
+
 .add {
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   height: 22px;
+  margin-left: 20px;
   padding: 0 6px;
   border-radius: 4px;
   font-size: 0.65625rem;

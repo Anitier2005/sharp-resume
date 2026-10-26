@@ -147,3 +147,17 @@ export const Link = (p: IconProps) => (
     <path d="M14 10.5a4 4 0 0 0-5.66 0L6 12.84a4 4 0 1 0 5.66 5.66l1-1" />
   </svg>
 );
+
+/* 拖拽把手：两列小点 */
+export const Grip = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 0, ...p })}>
+    <g fill="currentColor" stroke="none">
+      <circle cx="9" cy="6" r="1.1" />
+      <circle cx="15" cy="6" r="1.1" />
+      <circle cx="9" cy="12" r="1.1" />
+      <circle cx="15" cy="12" r="1.1" />
+      <circle cx="9" cy="18" r="1.1" />
+      <circle cx="15" cy="18" r="1.1" />
+    </g>
+  </svg>
+);

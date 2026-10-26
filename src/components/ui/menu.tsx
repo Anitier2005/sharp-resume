@@ -2,6 +2,7 @@ import {
   cloneElement,
   isValidElement,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactElement,
@@ -19,7 +20,19 @@ interface DropdownProps {
 
 export function Dropdown({ trigger, children, align = "end", width }: DropdownProps) {
   const [open, setOpen] = useState(false);
+  /** 下方放不下时改为向上弹（输入框在窗口最底部，菜单一定会顶到边） */
+  const [flipUp, setFlipUp] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  // 展开后量一次：菜单底边超出视口就翻到上方
+  useLayoutEffect(() => {
+    if (!open) return;
+    const el = menuRef.current;
+    if (!el) return;
+    const box = el.getBoundingClientRect();
+    setFlipUp(box.bottom > window.innerHeight - 8);
+  }, [open, children]);
 
   useEffect(() => {
     if (!open) return;
@@ -46,7 +59,12 @@ export function Dropdown({ trigger, children, align = "end", width }: DropdownPr
       {node}
       {open && (
         <div
-          className={cx(styles.menu, align === "end" ? styles.end : styles.start)}
+          ref={menuRef}
+          className={cx(
+            styles.menu,
+            align === "end" ? styles.end : styles.start,
+            flipUp && styles.up,
+          )}
           role="menu"
           style={width ? { minWidth: width } : undefined}
           onClick={() => setOpen(false)}

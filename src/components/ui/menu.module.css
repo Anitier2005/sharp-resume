@@ -27,6 +27,14 @@
   left: 0;
 }
 
+/* 下方空间不够：翻到触发器上方，否则会被窗口边缘裁掉 */
+.up {
+  top: auto;
+  bottom: calc(100% + 5px);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
 /* ---------- 普通菜单项 ---------- */
 .item {
   display: flex;
