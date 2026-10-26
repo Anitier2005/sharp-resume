@@ -39,13 +39,26 @@ export function buildContext(person: Person, page: ResumePage): string {
   return lines.join("\n");
 }
 
-/** 浏览器调试模式仍需要完整 system prompt（桌面端由 Rust 拼模板） */
-export function buildSystemPrompt(person: Person): string {
+/**
+ * 浏览器调试模式仍需要完整 system prompt（桌面端由 Rust 拼 `prompts/system.md`）。
+ * 这里保持与那份模板同样的规则要点，避免两种模式的回答风格相差太远。
+ */
+export function buildSystemPrompt(context: string): string {
   return [
-    "你是一位资深简历顾问。先给一句判断，再给 2–3 条能立刻执行的建议；不要编造数字与事实。",
-    "给出可直接替换的改写时，在最后附 json 代码块：[{\"label\":\"…\",\"before\":\"原文逐字\",\"after\":\"改写\"}]",
+    "你是一位资深简历顾问，正在和一个候选人一起改他的简历。",
+    "用中文回答；先给一句判断（问题在哪），再给 2–3 条能立刻执行的建议。",
+    "绝对不要编造数字、公司、时间、奖项、证书；需要数据的地方用「__」留空并提醒补。",
+    "只讨论下面材料里真实存在的内容。",
     "",
-    buildContext(person, { id: "", label: "", header: [], sections: [] }),
+    "给出可直接替换的改写时，在回答最后附一个 json 代码块：",
+    '[{"label":"第 1 段 · 公司名","before":"原文逐字复制","after":"改写后的句子"}]',
+    "before 必须与原文逐字一致；没有可替换的句子就不要输出这个代码块。",
+    "",
+    "---",
+    "",
+    "## 当前材料",
+    "",
+    context,
   ].join("\n");
 }
 

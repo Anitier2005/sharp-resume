@@ -73,6 +73,8 @@ export interface Attachment {
   name: string;
   size: number;
   ext: string;
+  /** 图片的临时缩略图（object URL）。只在待发送时存在，落盘前会被剥掉 */
+  preview?: string;
 }
 
 /** AI 给出的一处改写 */

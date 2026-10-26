@@ -5,7 +5,9 @@ import { uid } from "@/lib/uid";
 import { useToast } from "@/components/ui/toast-context";
 import { ChevronDown, ChevronRight } from "@/components/ui/icons";
 import { Composer } from "./composer";
-import { toAttachment, attachmentText } from "@/lib/attach";
+import { toAttachment, stripPreview, attachmentText } from "@/lib/attach";
+import { modelById } from "@/lib/model-config";
+import { diff, flatten, renderDelta, type Flat } from "@/lib/changes";
 import { AiSettingsSheet } from "./ai-settings";
 import { AssistantTurn, EmptyTurn, TypingTurn, UserTurn } from "./message";
 import { aiReady, loadAi, saveAi, streamChat, type AiSettings } from "@/lib/ai";
@@ -34,6 +36,8 @@ export function ChatPanel() {
   const [dragging, setDragging] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** 上一轮发出时的页面快照（摊平后），用来算「这一轮之前你手改了什么」 */
+  const baseRef = useRef<{ key: string; flat: Flat } | null>(null);
   /** 消息真相源在 Rust（chat_history 拉投影）；浏览器调试模式才退回工作区 */
   const [remote, setRemote] = useState<ChatMessage[]>([]);
   const [reasoning, setReasoning] = useState("");
@@ -41,6 +45,23 @@ export function ChatPanel() {
 
   const configured = aiReady(ai);
   const modelLabel = configured ? ai.model : "未配置模型 · 点此设置";
+
+  /** 底栏直接换模型：baseUrl / 上下文窗口 / 温度都跟着清单里的默认值走 */
+  const pickModel = (id: string) => {
+    const config = modelById(id);
+    if (!config) return;
+    const next = {
+      ...ai,
+      model: id,
+      baseUrl: config.baseUrl,
+      contextWindow: config.contextWindow,
+      temperature: config.defaultTemperature,
+      reasoning: config.reasoning[0] ?? undefined,
+    };
+    setAi(next);
+    saveAi(next);
+    toast(`已切换到 ${config.label}`);
+  };
 
   const messages = useMemo(
     () => (desktop ? remote : person?.messages ?? []),
@@ -100,12 +121,21 @@ export function ChatPanel() {
         return;
       }
 
+      // 变更感知：把右侧手改的地方算成结构化差异，和材料一起交给模型
+      const sceneKey = `${person.id}::${targetPage.id}`;
+      const current = flatten(person, targetPage);
+      const deltas = baseRef.current?.key === sceneKey ? diff(baseRef.current.flat, current) : [];
+      baseRef.current = { key: sceneKey, flat: current };
+      const context = [buildContext(person, targetPage), renderDelta(deltas)]
+        .filter(Boolean)
+        .join("\n\n");
+
       const userMessage: ChatMessage = {
         id: uid("m"),
         role: "user",
         content: text,
         time: Date.now(),
-        attachments: attachments.length ? attachments : undefined,
+        attachments: attachments.length ? attachments.map(stripPreview) : undefined,
       };
       const replyId = uid("m");
       const draft: ChatMessage = {
@@ -131,7 +161,7 @@ export function ChatPanel() {
             await streamChat({
               settings: ai,
               messages: toApiMessages(
-                buildSystemPrompt(person),
+                buildSystemPrompt(context),
                 person.messages.map((item) => ({ role: item.role, content: item.content })),
                 text,
                 attachments.map((file) => ({ name: file.name, text: attachmentText(file.id) })),
@@ -205,7 +235,7 @@ export function ChatPanel() {
           const id = await invoke<string>("chat_send", {
             args: {
               key: person.id,
-              context: buildContext(person, targetPage),
+              context,
               baseUrl: ai.baseUrl,
               apiKey: ai.apiKey,
               model: ai.model,
@@ -409,6 +439,7 @@ export function ChatPanel() {
 
       <Composer
         model={modelLabel}
+        onPickModel={pickModel}
         onOpenSettings={() => setAiOpen(true)}
         onSend={send}
         busy={busy}

@@ -30,14 +30,27 @@ async function cacheBody(id: string, file: File): Promise<void> {
   }
 }
 
-/** 浏览器 File → 附件元数据（同时后台读取可读文本） */
+const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"]);
+
+export const isImage = (ext: string) => IMAGE_EXT.has(ext.toLowerCase());
+
+/** 落盘前剥掉临时预览，避免把 object URL 写进会话文件 */
+export const stripPreview = (file: Attachment): Attachment => {
+  const { preview, ...rest } = file;
+  void preview;
+  return rest;
+};
+
+/** 浏览器 File → 附件元数据（同时后台读取可读文本；图片附带缩略图） */
 export function toAttachment(file: File): Attachment {
   const id = `f-${crypto.randomUUID().slice(0, 8)}`;
   void cacheBody(id, file);
+  const ext = extOf(file.name);
   return {
     id,
     name: file.name,
     size: file.size,
+    preview: isImage(ext) ? URL.createObjectURL(file) : undefined,
     ext: extOf(file.name),
   };
 }

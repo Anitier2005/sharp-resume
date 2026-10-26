@@ -170,3 +170,25 @@
   background: var(--acc-softer);
   color: var(--fg-3);
 }
+
+/* ---------- 拖高把手：贴住输入框顶部，只有悬停才显形 ---------- */
+.grip {
+  height: 6px;
+  margin: -3px 0 1px;
+  cursor: ns-resize;
+  border-radius: 3px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.grip:hover {
+  background: var(--acc-line);
+}
+
+/* 粘贴进来的图片：小缩略图，认得出来就行 */
+.thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  object-fit: cover;
+  flex: none;
+}
