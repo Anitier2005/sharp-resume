@@ -8,6 +8,7 @@ import { Composer } from "./composer";
 import { toAttachment, stripPreview, attachmentText } from "@/lib/attach";
 import { modelById } from "@/lib/model-config";
 import { diff, flatten, renderDelta, type Flat } from "@/lib/changes";
+import { skillsPrompt } from "@/lib/skills";
 import { AiSettingsSheet } from "./ai-settings";
 import { AssistantTurn, EmptyTurn, TypingTurn, UserTurn } from "./message";
 import { aiReady, loadAi, saveAi, streamChat, type AiSettings } from "@/lib/ai";
@@ -236,6 +237,7 @@ export function ChatPanel() {
             args: {
               key: person.id,
               context,
+              extra: skillsPrompt(),
               baseUrl: ai.baseUrl,
               apiKey: ai.apiKey,
               model: ai.model,

@@ -1,6 +1,7 @@
 import type { ChangeItem, Person, ResumePage } from "@/types";
 import { fieldText } from "@/types";
 import type { ChatMsg } from "@/lib/ai";
+import { skillsPrompt } from "@/lib/skills";
 
 /** 材料：只描述"这一页现在有什么"，规则在 prompts/system.md 里 */
 export function buildContext(person: Person, page: ResumePage): string {
@@ -59,7 +60,11 @@ export function buildSystemPrompt(context: string): string {
     "## 当前材料",
     "",
     context,
-  ].join("\n");
+    "",
+    skillsPrompt(),
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function toApiMessages(

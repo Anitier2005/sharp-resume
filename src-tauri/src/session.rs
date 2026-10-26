@@ -204,6 +204,9 @@ pub struct SendArgs {
     pub key: String,
     /// 材料部分（由前端按当前页组装），模板由 Rust 拼
     pub context: String,
+    /// 技能库附加段（`prompts/skills/*.md`，构建时由前端 glob 进来）
+    #[serde(default)]
+    pub extra: String,
     pub base_url: String,
     pub api_key: String,
     pub model: String,
@@ -228,7 +231,11 @@ pub async fn chat_send(
     }
 
     // 组装：模板 + 材料，历史按预算裁剪
-    let system = SYSTEM_TEMPLATE.replace("{{context}}", &args.context);
+    let mut system = SYSTEM_TEMPLATE.replace("{{context}}", &args.context);
+    if !args.extra.trim().is_empty() {
+        system.push_str("\n\n");
+        system.push_str(args.extra.trim());
+    }
     let window = args.context_window.unwrap_or(64_000);
     let budget = window.saturating_sub(estimate_tokens(&system) + 2_000) * 6 / 10;
     let history = trim_history(&state.list(&args.key), budget);

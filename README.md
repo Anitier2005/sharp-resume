@@ -117,6 +117,16 @@ npm run dev            # 纯前端热更新，浏览器开 http://localhost:1420
 npm run package:clean  # 把 exe 放进 ../release-clean（清空、自检、单文件）
 ```
 
+## 可以自己加东西的两个目录
+
+| 目录 | 放什么 | 生效方式 |
+|---|---|---|
+| `config/models.json` | 模型清单：地址、上下文窗口、思维强度档位、默认温度 | 保存即生效（dev），发布版重新打包 |
+| `prompts/system.md` | system 模板，`{{context}}` 是材料占位 | 同上（`include_str!` 编进 Rust） |
+| `prompts/skills/*.md` | 技能：每个文件一段「什么时候用 / 怎么做 / 输出格式」 | 同上（vite glob 编进前端，自动带上新文件） |
+
+技能不需要注册：丢一个 `.md` 进 `prompts/skills/`，刷新界面对话时它就在 system 提示词里。
+
 热重载范围：
 
 | 改了什么 | 结果 |
