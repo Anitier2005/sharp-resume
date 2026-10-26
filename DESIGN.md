@@ -126,10 +126,14 @@ interface SectionItem {
 ```
 config/
   models.json       # 模型清单：id / 名称 / contextWindow / maxOutput / reasoning 档位 / 默认温度
-  ai.local.json     # 本机密钥（.gitignore，不进仓库）
 prompts/
   system.md         # 会话系统提示词
   skills/*.md       # 技能/资料，按文件注入
+testdata/
+  ai.json           # 测试环境（baseUrl / model / 参数），可进仓库
+  mock/*.json       # 各版本工作区样例，迁移回归用
+  secrets/          # 本机密钥，.gitignore 排除，打包时拦截
+    ai.local.json   # 只需要写 apiKey
 ```
 
 - 全部用 `import ... ?raw` / `import models from "../config/models.json"` 静态引入

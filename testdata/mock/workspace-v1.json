@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "people": [
+    {
+      "id": "p-lin",
+      "name": "林夏",
+      "role": "产品设计师",
+      "email": "lin@example.com",
+      "location": "深圳",
+      "years": 6,
+      "experiences": [
+        {
+          "id": "e-lin-1",
+          "company": "字节跳动",
+          "role": "产品设计师",
+          "period": "2023.03 – 至今",
+          "bullets": [
+            "主导设计系统落地，覆盖 30 条业务线",
+            "把发布周期从两周缩短到三天"
+          ],
+          "bulletsEn": [
+            "Led the design system rollout across 30 product lines"
+          ]
+        }
+      ],
+      "projects": [
+        {
+          "id": "pr-lin-1",
+          "title": "灰度平台",
+          "year": "2022",
+          "desc": "自建灰度发布平台，覆盖 30 条业务线",
+          "tags": [
+            "B 端",
+            "平台"
+          ]
+        }
+      ],
+      "education": [
+        {
+          "id": "ed-lin-1",
+          "school": "某大学",
+          "degree": "工业设计 本科",
+          "period": "2014 – 2018"
+        }
+      ],
+      "skills": [
+        {
+          "id": "sk-lin-1",
+          "label": "工具",
+          "value": "Figma、Sketch、ProtoPie"
+        }
+      ],
+      "resumes": [
+        {
+          "id": "r-lin-zh",
+          "personId": "p-lin",
+          "title": "通用版",
+          "updatedAt": 1700000000000,
+          "messages": [],
+          "pages": [
+            {
+              "id": "pg-lin-zh",
+              "kind": "zh",
+              "label": "中文",
+              "headline": "林夏",
+              "role": "产品设计师",
+              "meta": [
+                "深圳",
+                "6 年经验"
+              ],
+              "summary": "6 年 B 端产品设计经验，擅长把复杂业务收敛成可复用的组件与流程。",
+              "experienceIds": [
+                "e-lin-1"
+              ],
+              "projectIds": [
+                "pr-lin-1"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "ui": {
+    "accent": "white",
+    "mode": "light",
+    "activePersonId": "p-lin",
+    "activeResumeId": "r-lin-zh",
+    "expanded": [
+      "p-lin"
+    ]
+  }
+}

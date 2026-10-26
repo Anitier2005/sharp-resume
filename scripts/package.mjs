@@ -60,15 +60,42 @@ if (fs.existsSync(DIST_HTML)) {
   }
 }
 
-// —— 密钥保护：本机密钥文件绝不能被打进发行版 ——
-// 它在 dev 下是默认配置，若打包时还在，会被 vite 静态引入进 bundle。
-const LOCAL_KEY = path.resolve('config/ai.local.json')
-if (fs.existsSync(LOCAL_KEY)) {
+// —— 密钥保护：testdata/secrets/ 里的东西绝不能被打进发行版 ——
+// 它在 dev 下是默认配置的来源，若打包时还在，会被 vite 静态引入进 bundle。
+const SECRET_DIR = path.resolve('testdata/secrets')
+const secrets = fs.existsSync(SECRET_DIR)
+  ? fs.readdirSync(SECRET_DIR).filter((name) => name.endsWith('.json'))
+  : []
+if (secrets.length) {
   fail(
-    '发现 config/ai.local.json（本机密钥）。\n' +
-      '       它会被编进前端 bundle，发行版等于把 key 送出去。\n' +
-      '       打包前先把它移走（例如 mv config/ai.local.json ~/ai.local.json.bak）。',
+    `发现 testdata/secrets/ 下有 ${secrets.length} 个密钥文件（${secrets.join('、')}）。\n` +
+      '       它们会被编进前端 bundle，发行版等于把 key 送出去。\n' +
+      '       打包前先把整个目录移走（例如 mv testdata/secrets ~/secrets.bak）。',
   )
+}
+
+// 兼容旧位置：早先的密钥放在 config/ai.local.json
+if (fs.existsSync(path.resolve('config/ai.local.json'))) {
+  fail('发现旧位置的 config/ai.local.json，请把它并入 testdata/secrets/ 后再打包。')
+}
+
+// —— 产物自检：dist 里不许出现形如 sk-xxx 的密钥 ——
+// 光靠「打包前把 secrets 移走」不够：如果代码写错让配置进了 bundle，
+// 移走文件也救不回来（它已经在 dist 里了）。这里直接扫产物。
+const DIST = path.resolve('dist/assets')
+if (fs.existsSync(DIST)) {
+  const leaked = []
+  for (const name of fs.readdirSync(DIST)) {
+    if (!name.endsWith('.js')) continue
+    const text = fs.readFileSync(path.join(DIST, name), 'utf8')
+    if (/sk-[A-Za-z0-9_-]{16,}/.test(text)) leaked.push(name)
+  }
+  if (leaked.length) {
+    fail(
+      `dist 里发现了疑似密钥（${leaked.join('、')}）。\n` +
+        '       先查 src/lib/model-config.ts 里的 DEV 判断，修好再重新构建。',
+    )
+  }
 }
 
 // —— 数据保护：交付目录里的 SharpResumeData 是真实运行数据 ——

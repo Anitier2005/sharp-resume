@@ -1,0 +1,7 @@
+{
+  "$comment": "测试环境用的模型配置：只有地址与模型名，可以公开。真正的密钥放 secrets/ai.local.json，它会被覆盖合并。",
+  "baseUrl": "https://tokenhub.tencentmaas.com/v1",
+  "model": "minimax-m3.1-flash",
+  "temperature": 0.4,
+  "reasoning": "off"
+}

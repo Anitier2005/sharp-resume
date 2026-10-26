@@ -119,13 +119,23 @@ npm run package:clean  # 把 exe 放进 ../release-clean（清空、自检、单
 
 ## 可以自己加东西的两个目录
 
-| 目录 | 放什么 | 生效方式 |
-|---|---|---|
-| `config/models.json` | 模型清单：地址、上下文窗口、思维强度档位、默认温度 | 保存即生效（dev），发布版重新打包 |
-| `prompts/system.md` | system 模板，`{{context}}` 是材料占位 | 同上（`include_str!` 编进 Rust） |
-| `prompts/skills/*.md` | 技能：每个文件一段「什么时候用 / 怎么做 / 输出格式」 | 同上（vite glob 编进前端，自动带上新文件） |
+| 目录 | 放什么 | 进仓库 | 生效方式 |
+|---|---|---|---|
+| `config/models.json` | 模型清单：地址、上下文窗口、思维强度档位、默认温度 | ✅ | 保存即生效（dev），发布版重新打包 |
+| `prompts/system.md` | system 模板，`{{context}}` 是材料占位 | ✅ | 同上（`include_str!` 编进 Rust） |
+| `prompts/skills/*.md` | 技能：每个文件一段「什么时候用 / 怎么做 / 输出格式」 | ✅ | 同上（vite glob 编进前端，自动带上新文件） |
+| `testdata/ai.json` | 测试环境：baseUrl / model / 参数（**不含密钥**） | ✅ | dev 默认值 |
+| `testdata/mock/*.json` | 各版本的工作区样例，验证迁移用 | ✅ | 手塞 localStorage 即可 |
+| `testdata/secrets/*.json` | 本机密钥（`apiKey`） | ❌ **gitignore** | 覆盖 `ai.json` 的同名字段 |
 
 技能不需要注册：丢一个 `.md` 进 `prompts/skills/`，刷新界面对话时它就在 system 提示词里。
+
+密钥只放 `testdata/secrets/ai.local.json`，格式见该目录下的 `README.md`。三道保护：
+
+1. `.gitignore` 排除整个 `secrets/`（只留说明文件）；
+2. `scripts/package.mjs` 发现里面有 json 就**拒绝打包**；
+3. 打包前还会扫 `dist/assets/*.js`，发现形如 `sk-…` 的串同样拒绝 ——
+   防的是「代码写错把配置编进 bundle」这种更隐蔽的泄漏。
 
 热重载范围：
 

@@ -30,5 +30,7 @@ dist-ssr
 src-tauri/target
 src-tauri/gen/schemas
 
-# 本机密钥：绝不进仓库，也绝不进 release 包（package.mjs 会检查）
-config/ai.local.json
+# 密钥：绝不进仓库，也绝不进 release 包（package.mjs 会检查）
+# testdata/ 其余内容（ai.json、mock/）正常提交，只有 secrets 被排除
+testdata/secrets/*
+!testdata/secrets/README.md

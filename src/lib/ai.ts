@@ -20,7 +20,7 @@ export interface AiSettings {
 
 const STORE_KEY = "sharp-resume:ai:v1";
 
-/** 默认值：优先用 `config/ai.local.json`（仅开发期），否则取模型清单第一条 */
+/** 默认值：优先用 testdata 里的测试配置 + 本机密钥（仅开发期），否则取模型清单第一条 */
 export const DEFAULT_AI: AiSettings = {
   baseUrl: LOCAL_AI?.baseUrl ?? MODELS[0]?.baseUrl ?? "https://api.deepseek.com/v1",
   model: LOCAL_AI?.model ?? MODELS[0]?.id ?? "deepseek-chat",

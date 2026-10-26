@@ -23,7 +23,13 @@ export const MODELS: ModelConfig[] = (raw as { models: ModelConfig[] }).models;
 export const modelById = (id: string): ModelConfig | undefined =>
   MODELS.find((item) => item.id === id);
 
-/** 本机密钥草稿（`config/ai.local.json`，已 gitignore）：只作为开发期的默认值 */
+/**
+ * 开发期默认配置，两层合并：
+ *   `testdata/ai.json`           测试环境（baseUrl / model / 参数），**可进仓库**
+ *   `testdata/secrets/ai.local.json`  只放 apiKey 之类，**已被 .gitignore 排除**
+ *
+ * 用 glob 而不是 fs：构建期展开，新增文件自动带上；生产构建里 DEV 为 false 一律不读。
+ */
 export interface LocalAiDraft {
   baseUrl?: string;
   model?: string;
@@ -32,15 +38,38 @@ export interface LocalAiDraft {
   reasoning?: string;
 }
 
-const localModules = import.meta.glob<{ default: LocalAiDraft }>("../../config/ai.local.json", {
-  eager: true,
-});
+/** 只挑认识的字段：配置文件里的 `$comment` 之类不该混进运行时设置 */
+function pick(draft: LocalAiDraft | undefined): LocalAiDraft {
+  if (!draft) return {};
+  const out: LocalAiDraft = {};
+  if (draft.baseUrl) out.baseUrl = draft.baseUrl;
+  if (draft.model) out.model = draft.model;
+  if (draft.apiKey) out.apiKey = draft.apiKey;
+  if (typeof draft.temperature === "number") out.temperature = draft.temperature;
+  if (draft.reasoning) out.reasoning = draft.reasoning;
+  return out;
+}
+
+const secretModules = import.meta.glob<{ default: LocalAiDraft }>(
+  "../../testdata/secrets/ai.local.json",
+  { eager: true },
+);
+const testModules = import.meta.glob<{ default: LocalAiDraft }>(
+  "../../testdata/ai.json",
+  { eager: true },
+);
 
 /**
- * 只在 dev 读取。
- * 生产构建里即便这个文件存在也不使用 —— 而且 `scripts/package.mjs` 会在
- * 发现它时直接拒绝打包，避免把密钥打进发行版。
+ * 只在 dev 生效。
+ *
+ * 写法上必须把 `import.meta.env.DEV` 直接放进三元表达式里，且**不要在模块顶层**
+ * 先把 glob 结果取出来：那样两个 const 会变成有引用的顶层语句，摇树摇不掉，
+ * 密钥就被打进发行版了（实测：`grep sk-  dist/` 能命中）。
+ * 放在三元里时，生产构建下 DEV 为 false，整段（含 glob 引用）一起被消除。
  */
 export const LOCAL_AI: LocalAiDraft | undefined = import.meta.env.DEV
-  ? Object.values(localModules)[0]?.default
+  ? {
+      ...pick(Object.values(testModules)[0]?.default),
+      ...pick(Object.values(secretModules)[0]?.default),
+    }
   : undefined;
