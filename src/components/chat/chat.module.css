@@ -66,10 +66,9 @@
   background-clip: content-box;
 }
 
+/* 与输入框同宽：都铺满会话列，只留 .thread 的 26px 内边距 */
 .threadIn {
   width: 100%;
-  max-width: 620px;
-  margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 22px;

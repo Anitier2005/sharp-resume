@@ -3,10 +3,10 @@
   flex: none;
   padding: 10px 26px 12px;
 }
+/* 不再卡在 620px：那会在两侧留出 110px 的空白（用户报过「太宽了」）。
+   现在铺满会话列，左右各留 .composer 的 26px 内边距，与消息流的对齐方式一致。 */
 .composerIn {
   width: 100%;
-  max-width: 620px;
-  margin: 0 auto;
 }
 
 /* 输入框容器（注意：与抽屉里的复选框 `tick` 不是同一个东西） */
