@@ -1,8 +1,11 @@
 /* 下拉菜单：触发器 + 浮层 + 各类菜单项 */
 
+/* flex:none 必须写：作为 flex 子项时（页签栏、输入框底栏），
+   下拉的锚点不该被压缩 —— 否则里面的按钮会被裁掉一截 */
 .dd {
   position: relative;
   display: inline-flex;
+  flex: none;
 }
 
 .menu {

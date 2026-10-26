@@ -406,9 +406,6 @@ export function ChatPanel() {
           <ChevronRight size={9} className={styles.sep} />
           <b>{resume.title}</b>
         </div>
-        <button type="button" className={styles.modelStatic} onClick={() => setAiOpen(true)}>
-          {modelLabel}
-        </button>
       </header>
 
       <div className={styles.thread} ref={scrollRef}>

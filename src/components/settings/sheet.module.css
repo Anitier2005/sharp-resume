@@ -14,32 +14,47 @@
   overflow: hidden;
 }
 
+/* 头部就是一条页签栏：下划线与分隔线重合，像 IDE 的设置页 */
 .head {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 14px;
-  padding: 12px 14px;
+  height: 40px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--line);
+}
+.head > :last-child {
+  align-self: center;
 }
 
 .tabs {
   display: flex;
-  gap: 2px;
+  align-items: stretch;
+  gap: 16px;
 }
 .tabs button {
-  height: 24px;
-  padding: 0 9px;
-  border-radius: 5px;
-  font-size: 0.6875rem;
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 1px;
+  font-size: 0.75rem;
   color: var(--fg-3);
+  transition: color 0.12s ease;
 }
 .tabs button:hover {
-  background: var(--bg-hover);
   color: var(--fg-1);
 }
 .tabs button[aria-selected="true"] {
-  background: var(--acc-soft);
   color: var(--acc-text);
+}
+.tabs button[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--acc);
 }
 
 .body {

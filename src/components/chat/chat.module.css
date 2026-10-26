@@ -44,37 +44,6 @@
   color: var(--fg-4);
 }
 
-.model {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 7px;
-  border-radius: 5px;
-  font-size: 0.65625rem;
-  color: var(--fg-3);
-  transition: background 0.14s ease, color 0.14s ease;
-}
-.model:hover {
-  background: var(--acc-softer);
-  color: var(--acc-text);
-}
-
-/* 未配置模型时的静态占位（点击进入设置） */
-.modelStatic {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 7px;
-  font-size: 0.65625rem;
-  color: var(--fg-3);
-}
-.modelStatic:hover {
-  color: var(--fg-1);
-}
-
 /* ---------- 消息流 ---------- */
 .thread {
   flex: 1;

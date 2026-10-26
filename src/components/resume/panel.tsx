@@ -24,6 +24,9 @@ export function ResumePanel() {
   const [sheets, setSheets] = useState(1);
   const [a4Height, setA4Height] = useState(529);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const tabScrollRef = useRef<HTMLDivElement | null>(null);
+  /** 刚点了「+」，等 state 落地后把新页选中 */
+  const wantNewPage = useRef(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const preview = mode === "preview";
 
@@ -40,6 +43,24 @@ export function ResumePanel() {
     observer.observe(el);
     return () => observer.disconnect();
   }, [mode]);
+
+  // 刚新增的那一页：直接选中，并滚到最右端
+  useEffect(() => {
+    if (!wantNewPage.current || !resume?.pages.length) return;
+    wantNewPage.current = false;
+    setActivePageId(resume.pages[resume.pages.length - 1].id);
+    requestAnimationFrame(() => {
+      const box = tabScrollRef.current;
+      if (box) box.scrollLeft = box.scrollWidth;
+    });
+  }, [resume?.pages.length, resume, setActivePageId]);
+
+  // 切到别的页时把它的页签滚进视野（页签多了才不会出现「选了却看不见」）
+  useEffect(() => {
+    const box = tabScrollRef.current;
+    const active = box?.querySelector<HTMLElement>('[aria-current="page"]');
+    active?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activePageId]);
 
   useEffect(() => {
     const paper = wrapRef.current?.firstElementChild as HTMLElement | null;
@@ -84,43 +105,49 @@ export function ResumePanel() {
   return (
     <section className={styles.doc} data-col="doc">
       <div className={styles.tabs} data-print="hide">
-        {resume.pages.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={cx(styles.tab, item.id === page.id && styles.tabOn)}
-            onClick={() => setActivePageId(item.id)}
-          >
-            {item.label}
-            {resume.pages.length > 1 && (
-              <span
-                className={styles.tx}
-                role="button"
-                aria-label={`删除 ${item.label}`}
-                tabIndex={-1}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  dispatch({ type: "removePage", ...base, pageId: item.id });
-                  toast(`已删除「${item.label}」`);
-                }}
-              >
-                <Close size={8} />
-              </span>
-            )}
-          </button>
-        ))}
+        {/* 页签会越加越多，420px 装不下时必须自己滚，而不是把右边挤出去 */}
+        <div className={styles.tabScroll} ref={tabScrollRef}>
+          {resume.pages.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={cx(styles.tab, item.id === page.id && styles.tabOn)}
+              aria-current={item.id === page.id ? "page" : undefined}
+              title={item.label}
+              onClick={() => setActivePageId(item.id)}
+            >
+              <span className={styles.tabName}>{item.label}</span>
+              {resume.pages.length > 1 && (
+                <span
+                  className={styles.tx}
+                  role="button"
+                  aria-label={`删除 ${item.label}`}
+                  tabIndex={-1}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    dispatch({ type: "removePage", ...base, pageId: item.id });
+                    toast(`已删除「${item.label}」`);
+                  }}
+                >
+                  <Close size={8} />
+                </span>
+              )}
+            </button>
+          ))}
 
-        <button
-          type="button"
-          className={styles.tabAdd}
-          aria-label="新增页面"
-          onClick={() => {
-            dispatch({ type: "addPage", personId: person.id, resumeId: resume.id });
-            toast("已新增一页（空白，什么也没预置）");
-          }}
-        >
-          <Plus size={11} />
-        </button>
+          <button
+            type="button"
+            className={styles.tabAdd}
+            aria-label="新增页面"
+            onClick={() => {
+              wantNewPage.current = true;
+              dispatch({ type: "addPage", personId: person.id, resumeId: resume.id });
+              toast("已新增一页（空白，什么也没预置）");
+            }}
+          >
+            <Plus size={11} />
+          </button>
+        </div>
 
         <span className={styles.fill} />
 

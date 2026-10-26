@@ -26,10 +26,29 @@
   gap: 1px;
   padding: 0 6px;
   border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+
+/* 页签滚动区：只滚这一块，右边的「编辑|预览」和「导出」钉住不动。
+   min-width:0 是必须的，否则 flex 子项不会收缩，滚动条出不来。 */
+.tabScroll {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.tabScroll::-webkit-scrollbar {
+  display: none;
 }
 
 .tab {
   position: relative;
+  flex: none;
+  max-width: 128px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -57,6 +76,13 @@
   bottom: 0;
   height: 2px;
   background: var(--acc);
+}
+
+/* 页名过长用省略号，别把页签撑成一整条 */
+.tabName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 关闭页签的小叉：hover 才出现 */
