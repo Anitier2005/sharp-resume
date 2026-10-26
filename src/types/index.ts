@@ -8,6 +8,23 @@
  *   3. 新建简历 / 新建页不预置模板，从零开始
  */
 
+/**
+ * 材料：图片、链接、文件。
+ *
+ * 简历之外的东西都靠它进来 —— 证件照、证书扫描件、作品链接、补充材料 PDF。
+ * `stored` 在桌面端是 `<数据目录>/assets/` 里的文件名，浏览器调试模式是 data URL。
+ */
+export interface Asset {
+  id: string;
+  kind: "image" | "link" | "file";
+  /** 原始文件名或链接标题，只用于显示 */
+  name: string;
+  /** 桌面端：assets 下的存储名；浏览器：data URL；link 类型则是网址 */
+  stored: string;
+  /** 可选备注，比如「2024 年 6 月取得」 */
+  note?: string;
+}
+
 /** 字段：用户自己的键值对 */
 export interface Field {
   id: string;
@@ -19,6 +36,8 @@ export interface Field {
 export interface Person {
   id: string;
   fields: Field[];
+  /** 属于这个人的材料：证件照、证书、作品链接…所有简历共用 */
+  assets?: Asset[];
   /** 库：经历 / 作品 / 教育 / 证书…本质都是「一组字段 + 一段记录」 */
   items: LibraryItem[];
   /** 会话属于人 */
@@ -30,6 +49,8 @@ export interface Person {
 export interface LibraryItem {
   id: string;
   fields: Field[];
+  /** 这一条自己的材料：证书扫描件、作品截图、外链 */
+  assets?: Asset[];
   /** 详实记录：当时怎么聊就怎么写 */
   notes: string;
 }
@@ -64,6 +85,8 @@ export interface SectionEntry {
   /** 引用库条目 id；为空表示这一页临时写的 */
   refId?: string;
   fields: Field[];
+  /** 这一页这一条自己带的材料 */
+  assets?: Asset[];
   /** 本页措辞，按句存，供 AI 单句改写 */
   bullets: string[];
 }

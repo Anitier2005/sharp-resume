@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import type { Field, Person, ResumePage, SectionEntry } from "@/types";
 import { fieldText } from "@/types";
+import { photoOf, resolveUrl } from "@/lib/assets";
 import styles from "./paper.module.css";
 
 /**
@@ -21,17 +23,46 @@ function entryFields(person: Person, entry: SectionEntry): Field[] {
   return source?.fields ?? [];
 }
 
+/** 证件照：人物的第一张图片材料。没有就不占位置 */
+function Photo({ person }: { person: Person }) {
+  const asset = photoOf(person.assets);
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    // 没有照片就直接渲染空，不需要把 state 复位（复位也算 setState-in-effect）
+    if (!asset) return;
+    let alive = true;
+    void resolveUrl(asset).then((value) => alive && setUrl(value));
+    return () => {
+      alive = false;
+    };
+  }, [asset]);
+
+  if (!asset) return null;
+  return (
+    <div className={styles.photo}>
+      {url ? <img src={url} alt={asset.name} /> : <span>照片</span>}
+    </div>
+  );
+}
+
 export function Paper({ person, page }: PaperProps) {
   const [lead, ...rest] = page.header;
+  const hasPhoto = Boolean(photoOf(person.assets));
 
   return (
     <article className={styles.paper} data-print="sheet">
-      {lead && <h1 className={styles.name}>{lead.value || lead.label}</h1>}
-      {rest.map((field) => (
-        <div className={styles.meta} key={field.id}>
-          {fieldText(field)}
+      <div className={hasPhoto ? styles.headRow : undefined}>
+        <div className={styles.headText}>
+          {lead && <h1 className={styles.name}>{lead.value || lead.label}</h1>}
+          {rest.map((field) => (
+            <div className={styles.meta} key={field.id}>
+              {fieldText(field)}
+            </div>
+          ))}
         </div>
-      ))}
+        <Photo person={person} />
+      </div>
       {(lead || rest.length > 0) && <div className={styles.rule} />}
 
       {page.sections.map((section) => (

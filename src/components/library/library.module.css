@@ -434,3 +434,15 @@
 .foot .dim {
   color: var(--fg-4);
 }
+
+/* 面板里的小块（字段之后、记录之前）：标题 + 内容 */
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.blockK {
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  color: var(--fg-4);
+}

@@ -139,3 +139,11 @@ export const PanelRight = (p: IconProps) => (
     <path d="M15 4v16" />
   </svg>
 );
+
+/* 链接：链环 */
+export const Link = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.6, ...p })}>
+    <path d="M10 13.5a4 4 0 0 0 5.66 0l2.34-2.34a4 4 0 1 0-5.66-5.66l-1 1" />
+    <path d="M14 10.5a4 4 0 0 0-5.66 0L6 12.84a4 4 0 1 0 5.66 5.66l1-1" />
+  </svg>
+);

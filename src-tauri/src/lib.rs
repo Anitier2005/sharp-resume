@@ -1,3 +1,4 @@
+mod assets;
 mod net;
 mod session;
 
@@ -392,7 +393,10 @@ pub fn run() {
             session::chat_patch,
             session::chat_clear,
             session::chat_cancel,
-            session::chat_send
+            session::chat_send,
+            assets::asset_put,
+            assets::asset_get,
+            assets::asset_drop
         ])
         .manage(session::Sessions::default())
         .run(tauri::generate_context!())

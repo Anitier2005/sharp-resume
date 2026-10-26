@@ -3,6 +3,7 @@ import { useWorkspace } from "@/store/workspace";
 import { useToast } from "@/components/ui/toast-context";
 import { Close, Plus } from "@/components/ui/icons";
 import { FieldsEditor } from "@/components/ui/fields";
+import { AssetsEditor } from "@/components/ui/assets";
 import { displayName, type LibraryItem, type Person } from "@/types";
 import { uid } from "@/lib/uid";
 import { PaneHead } from "./parts";
@@ -81,6 +82,18 @@ export function FieldsPane({ person }: { person: Person }) {
                     write(person.items.map((row) => (row.id === item.id ? { ...row, fields } : row)))
                   }
                 />
+                <div className={styles.block}>
+                  <span className={styles.blockK}>材料 · 证书扫描件、作品截图、外链</span>
+                  <AssetsEditor
+                    assets={item.assets ?? []}
+                    onChange={(assets) =>
+                      write(
+                        person.items.map((row) => (row.id === item.id ? { ...row, assets } : row)),
+                      )
+                    }
+                  />
+                </div>
+
                 <label className={styles.noteField}>
                   <span className={styles.noteK}>详实记录 · 只存在这里，不会直接出现在简历上</span>
                   <textarea

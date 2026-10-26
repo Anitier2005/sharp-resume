@@ -4,6 +4,7 @@ import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem } from "@/components/ui/menu";
 import { ChevronRight, Close, Plus, ArrowUp, ArrowDown } from "@/components/ui/icons";
 import { FieldsEditor } from "@/components/ui/fields";
+import { AssetsEditor } from "@/components/ui/assets";
 import { uid } from "@/lib/uid";
 import { displayName, fieldText } from "@/types";
 import { cx } from "@/lib/cx";
@@ -228,6 +229,13 @@ export function ResumeForm({
                             <Plus size={9} /> 加一句
                           </button>
                         </div>
+
+                        {/* 这一条自己带的材料：证书扫描件、作品截图、外链 */}
+                        <AssetsEditor
+                          assets={entry.assets ?? []}
+                          onChange={(assets) => onEntryPatch(entry.id, { assets })}
+                          addLabel="加材料"
+                        />
                       </div>
                     );
                   })}

@@ -1,0 +1,102 @@
+import { invoke } from "@tauri-apps/api/core";
+import type { Asset } from "@/types";
+import { isTauri } from "@/lib/storage";
+import { uid } from "@/lib/uid";
+
+/**
+ * 材料的存取。
+ *
+ * 桌面端：文件写进 `<数据目录>/assets/`，state 里只留文件名；
+ * 浏览器（`npm run dev`）：没有文件系统，退化成 data URL 塞进 stored。
+ * 两条路对上层是同一个 `resolveUrl()`，界面不用关心自己在哪跑。
+ */
+
+const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif", "svg"]);
+const extOf = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
+
+/** 已解析过的显示地址：同一个文件不重复读盘，也不重复造 blob URL */
+const urlCache = new Map<string, string>();
+
+/** 单张图片上限 12MB：再大就不是身份证照片了，是设计稿 */
+const MAX_BYTES = 12 * 1024 * 1024;
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** 文件 → 材料。图片归 image，其余归 file（链接走 addLink） */
+export async function saveAsset(file: File): Promise<Asset> {
+  if (file.size > MAX_BYTES) {
+    throw new Error(`「${file.name}」超过 12MB，先压缩再放进来`);
+  }
+  const ext = extOf(file.name);
+  const kind: Asset["kind"] = IMAGE_EXT.has(ext) || file.type.startsWith("image/") ? "image" : "file";
+  const id = uid("a");
+
+  if (isTauri()) {
+    const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+    const stored = await invoke<string>("asset_put", { id, name: file.name, data: bytes });
+    return { id, kind, name: file.name, stored };
+  }
+
+  return { id, kind, name: file.name, stored: await readAsDataUrl(file) };
+}
+
+/** 链接型材料：没有文件，stored 就是网址 */
+export function addLink(url: string, name?: string): Asset {
+  const trimmed = url.trim();
+  return {
+    id: uid("a"),
+    kind: "link",
+    name: name?.trim() || trimmed.replace(/^https?:\/\//, "").slice(0, 40),
+    stored: trimmed,
+  };
+}
+
+/**
+ * 取一个可以直接放进 <img src> 或 <a href> 的地址。
+ * 读不出来返回 null（界面显示占位，不炸）。
+ */
+export async function resolveUrl(asset: Asset): Promise<string | null> {
+  if (asset.kind === "link") return asset.stored;
+  if (!isTauri() || asset.stored.startsWith("data:")) return asset.stored;
+
+  const cached = urlCache.get(asset.stored);
+  if (cached) return cached;
+
+  try {
+    const bytes = await invoke<number[]>("asset_get", { stored: asset.stored });
+    const blob = new Blob([new Uint8Array(bytes)]);
+    const url = URL.createObjectURL(blob);
+    urlCache.set(asset.stored, url);
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+/** 删除材料的底层文件（从 state 里摘掉之后调用） */
+export async function dropAsset(asset: Asset): Promise<void> {
+  if (!isTauri() || asset.kind === "link" || asset.stored.startsWith("data:")) return;
+  const cached = urlCache.get(asset.stored);
+  if (cached) {
+    URL.revokeObjectURL(cached);
+    urlCache.delete(asset.stored);
+  }
+  try {
+    await invoke("asset_drop", { stored: asset.stored });
+  } catch {
+    /* 文件不在也不该拦住用户 */
+  }
+}
+
+export const isImageAsset = (asset: Asset) => asset.kind === "image";
+
+/** 第一个图片材料：纸面上当成证件照用 */
+export const photoOf = (assets: Asset[] | undefined): Asset | undefined =>
+  assets?.find((asset) => asset.kind === "image");

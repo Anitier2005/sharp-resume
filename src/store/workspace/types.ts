@@ -1,5 +1,6 @@
 import type {
   AccentKey,
+  Asset,
   ChatMessage,
   Field,
   LibraryItem,
@@ -27,6 +28,8 @@ export type Action =
   /* ---------- 人的字段与库 ---------- */
   | { type: "personFields"; personId: string; fields: Field[] }
   | { type: "libraryItems"; personId: string; items: LibraryItem[] }
+  | { type: "personAssets"; personId: string; assets: Asset[] }
+  | { type: "itemAssets"; personId: string; itemId: string; assets: Asset[] }
   /* ---------- 页面 ---------- */
   | { type: "addPage"; personId: string; resumeId: string }
   | { type: "removePage"; personId: string; resumeId: string; pageId: string }

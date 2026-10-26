@@ -1,5 +1,6 @@
 import { useWorkspace } from "@/store/workspace";
 import { FieldsEditor } from "@/components/ui/fields";
+import { AssetsEditor } from "@/components/ui/assets";
 import type { Person } from "@/types";
 import { PaneHead } from "./parts";
 import styles from "./library.module.css";
@@ -20,6 +21,15 @@ export function PersonPane({ person }: { person: Person }) {
           addLabel="加一个字段"
           placeholderLabel="例如 姓名 / 邮箱 / 现居"
         />
+
+        <div className={styles.block}>
+          <span className={styles.blockK}>材料 · 证件照、证书、作品链接</span>
+          <AssetsEditor
+            assets={person.assets ?? []}
+            onChange={(assets) => dispatch({ type: "personAssets", personId: person.id, assets })}
+            addLabel="加材料"
+          />
+        </div>
       </div>
     </div>
   );

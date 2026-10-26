@@ -118,6 +118,17 @@ export function reducer(state: Workspace, action: Action): Workspace {
     case "libraryItems":
       return patchPerson(state, action.personId, (person) => ({ ...person, items: action.items }));
 
+    case "personAssets":
+      return patchPerson(state, action.personId, (person) => ({ ...person, assets: action.assets }));
+
+    case "itemAssets":
+      return patchPerson(state, action.personId, (person) => ({
+        ...person,
+        items: person.items.map((item) =>
+          item.id === action.itemId ? { ...item, assets: action.assets } : item,
+        ),
+      }));
+
     /* ---------- 页面 ---------- */
 
     case "addPage":

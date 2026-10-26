@@ -178,3 +178,35 @@
   color: var(--paper-2);
 }
 
+
+/* 页头分两栏：文字在左、证件照在右。没有照片时不套这层，
+   免得影响既有排版（headRow 只有真放了照片才出现） */
+.headRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.headText {
+  flex: 1;
+  min-width: 0;
+}
+.photo {
+  flex: none;
+  width: 56px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--paper-line);
+  border-radius: 2px;
+  overflow: hidden;
+  font-size: 7px;
+  color: var(--paper-3);
+  background: #fff;
+}
+.photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}

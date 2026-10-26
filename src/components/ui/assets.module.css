@@ -1,0 +1,158 @@
+/* 材料区：格子小、密度高，一眼能数清有几样东西 */
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.empty {
+  font-size: 0.65625rem;
+  color: var(--fg-4);
+}
+
+.grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 148px;
+  min-height: 40px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-elev);
+}
+.cell:hover {
+  border-color: var(--line-strong);
+}
+
+.thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 3px;
+  object-fit: cover;
+  display: block;
+}
+
+.placeholder {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  font-size: 0.625rem;
+  color: var(--fg-4);
+}
+
+.fileChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 132px;
+  padding: 0 4px;
+  font-size: 0.65625rem;
+  color: var(--fg-2);
+}
+.fileName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  text-decoration: none;
+}
+.fileName:hover {
+  color: var(--acc-text);
+  text-decoration: underline;
+}
+
+/* 移除按钮压在右上角，平时不显形 */
+.rm {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  color: var(--fg-4);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.cell:hover .rm {
+  opacity: 1;
+}
+.rm:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.row {
+  display: flex;
+  gap: 4px;
+}
+
+.add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 0.65625rem;
+  color: var(--fg-3);
+}
+.add:hover {
+  background: var(--acc-softer);
+  color: var(--acc-text);
+}
+.add:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.linkRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.linkRow input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  font: inherit;
+  font-size: 0.6875rem;
+  color: var(--fg-1);
+  outline: none;
+}
+.linkRow input:focus {
+  border-color: var(--acc-line-2);
+  background: var(--acc-softer);
+}
+.ok {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: var(--acc-soft);
+  font-size: 0.65625rem;
+  color: var(--acc-text);
+}
+.ok:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
