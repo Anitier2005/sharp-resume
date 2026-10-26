@@ -6,6 +6,7 @@ import { useToast } from "@/components/ui/toast-context";
 import { ChevronDown, ChevronRight } from "@/components/ui/icons";
 import { Composer } from "./composer";
 import { toAttachment, stripPreview, attachmentText } from "@/lib/attach";
+import { attachAtEnd } from "@/lib/inline-tokens";
 import { modelById } from "@/lib/model-config";
 import { diff, flatten, renderDelta, type Flat } from "@/lib/changes";
 import { skillsPrompt } from "@/lib/skills";
@@ -374,7 +375,13 @@ export function ChatPanel() {
     event.preventDefault();
     setDragging(false);
     const dropped = Array.from(event.dataTransfer.files ?? []).map(toAttachment);
-    if (dropped.length) setFiles((list) => [...list, ...dropped]);
+    if (!dropped.length) return;
+    // 拖放没有光标位置，追加到正文末尾（附件要以行内标记的形式存在）
+    setFiles((list) => {
+      const merged = attachAtEnd(input, list, dropped);
+      setInput(merged.text);
+      return merged.files;
+    });
   };
 
   if (!person || !resume) {

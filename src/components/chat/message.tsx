@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { ChatAction, ChatMessage } from "@/types";
 import { Check, FileIcon, Plus } from "@/components/ui/icons";
+import { segmentText } from "@/lib/inline-tokens";
 import { cx } from "@/lib/cx";
 import styles from "./message.module.css";
 
@@ -19,16 +20,36 @@ function highlight(text: string): ReactNode[] {
 }
 
 export function UserTurn({ message }: { message: ChatMessage }) {
+  const attachments = message.attachments ?? [];
+  // 有 token 的附件就长在正文里；没 token 的是旧消息，退回下面那排
+  const inline = attachments.filter((file) => file.token);
+  const legacy = attachments.filter((file) => !file.token);
+  const segments = segmentText(message.content ?? "", inline);
+
   return (
     <div className={styles.turnUser}>
-      {message.attachments?.map((file) => (
+      {message.content && (
+        <div className={styles.prompt}>
+          {segments.map((part, index) =>
+            part.file ? (
+              <span className={styles.inlineAsset} key={index} title={part.file.name}>
+                <FileIcon size={9} />
+                {part.file.name}
+              </span>
+            ) : (
+              <span key={index}>{part.text}</span>
+            ),
+          )}
+        </div>
+      )}
+
+      {legacy.map((file) => (
         <div className={styles.attach} key={file.id} title={file.name}>
           <FileIcon size={10} />
           <span className={styles.an}>{file.name}</span>
           <span className={styles.sz}>{formatSize(file.size)}</span>
         </div>
       ))}
-      {message.content && <div className={styles.prompt}>{message.content}</div>}
     </div>
   );
 }

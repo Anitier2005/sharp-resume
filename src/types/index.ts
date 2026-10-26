@@ -98,6 +98,8 @@ export interface Attachment {
   ext: string;
   /** 图片的临时缩略图（object URL）。只在待发送时存在，落盘前会被剥掉 */
   preview?: string;
+  /** 正文里的行内标记（如 `@截图.png`）。有它才知道「这句话指的是哪个附件」 */
+  token?: string;
 }
 
 /** AI 给出的一处改写 */

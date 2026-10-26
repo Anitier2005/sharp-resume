@@ -33,8 +33,9 @@
   min-height: 20px;
   max-height: 160px;
   padding: 0 0 6px;
+  position: relative;
   border: 0;
-  background: none;
+  background: transparent;
   outline: none;
   resize: none;
   overflow-y: auto;
@@ -53,44 +54,36 @@
   outline: none;
 }
 
-/* ---------- 已选附件 ---------- */
-.pendingFiles {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-bottom: 8px;
+/* ---------- 编辑区：高亮层 + 透明底 textarea ----------
+   两者字体、行高、内边距必须逐项一致，否则行内标记会和文字错位。
+   textarea 只负责输入与光标，标记的底色由下面那层 .mirror 画。 */
+.editor {
+  position: relative;
 }
-.pending {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 5px 0 7px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  font-size: 0.65625rem;
-  color: var(--fg-2);
+
+.mirror {
+  position: absolute;
+  inset: 0;
+  padding: 0 0 6px;
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.72;
+  color: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  pointer-events: none;
+  overflow: hidden;
 }
-.pending svg {
-  flex: none;
-  color: var(--acc-text);
-}
-.pending .sz {
-  color: var(--fg-4);
-  font-variant-numeric: tabular-nums;
-}
-.pending button {
-  width: 14px;
-  height: 14px;
-  display: grid;
-  place-items: center;
+
+/* 行内附件标记：只上底色和描边，不加内边距 —— 加宽就会把后面的字推歪 */
+.token {
   border-radius: 3px;
-  color: var(--fg-4);
+  background: var(--acc-soft);
+  box-shadow: 0 0 0 1px var(--acc-line);
 }
-.pending button:hover {
-  background: var(--bg-press);
-  color: var(--fg-1);
-}
+
+
 
 /* ---------- 工具条 ---------- */
 .bar {
@@ -116,11 +109,7 @@
   color: var(--acc-text);
 }
 
-/* 模型选择按钮。
-   原 app.css 里 composer 与 drawer 都定义了 .pick，后者在文件中位置更靠后因而胜出，
-   这个按钮长期沿用抽屉那套（height/padding/radius）尺寸。拆成 CSS Modules 后两者
-   已彻底分开；此处按原先的实际渲染值写死，保证纯重构不改变观感。
-   若想回到 composer 原本的设计意图，去掉 height/padding/border-radius 三行即可。 */
+/* 模型选择按钮：尺寸沿用抽屉那套，纯重构不改变观感 */
 .pick {
   display: flex;
   align-items: center;
@@ -137,7 +126,6 @@
 }
 
 .send {
-  margin-left: auto;
   width: 22px;
   height: 22px;
   display: grid;
@@ -149,6 +137,10 @@
 }
 .send:hover {
   background: var(--acc-hover);
+}
+.send:disabled {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 /* ---------- 快捷键提示 ---------- */
@@ -184,11 +176,20 @@
   background: var(--acc-line);
 }
 
-/* 粘贴进来的图片：小缩略图，认得出来就行 */
-.thumb {
-  width: 18px;
-  height: 18px;
-  border-radius: 3px;
-  object-fit: cover;
-  flex: none;
+/* 底栏里把发送键推到最右，计数贴在它左边 */
+.grow {
+  flex: 1;
+}
+
+.count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--acc-soft);
+  font-size: 0.59375rem;
+  color: var(--acc-text);
+  font-variant-numeric: tabular-nums;
 }

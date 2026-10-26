@@ -234,3 +234,26 @@
     transform: translateY(-2px);
   }
 }
+
+/* 正文里的行内附件：小一号的字 + 浅底，读起来仍是一句话的一部分 */
+.inlineAsset {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 220px;
+  margin: 0 1px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--acc-soft);
+  box-shadow: 0 0 0 1px var(--acc-line);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  color: var(--acc-text);
+  vertical-align: baseline;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inlineAsset svg {
+  flex: none;
+}
