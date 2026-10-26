@@ -9,8 +9,9 @@ import { toAttachment } from "@/lib/attach";
 
 /** 输入框高度偏好在本地记住：不同人写东西的姿势不一样 */
 const HEIGHT_KEY = "sharp-resume:composer:h";
-const MIN_H = 44;
-const MAX_H = 420;
+/** 这两个值现在直接是 textarea 的高度（早先是整块 box 的高度） */
+const MIN_H = 24;
+const MAX_H = 380;
 
 function readHeight(): number | null {
   const raw = localStorage.getItem(HEIGHT_KEY);
@@ -65,12 +66,13 @@ export function Composer({
     if (el && mirror) mirror.scrollTop = el.scrollTop;
   };
 
-  /** 拖顶部把手改高度，松手才落盘 */
+  /** 拖下边框改高度：直接改 textarea 自身的高度，松手才落盘 */
   const startResize = useCallback((event: React.PointerEvent) => {
     event.preventDefault();
+    const el = areaRef.current;
+    if (!el) return;
     const startY = event.clientY;
-    const box = (event.currentTarget as HTMLElement).parentElement;
-    const startH = box?.getBoundingClientRect().height ?? 96;
+    const startH = el.offsetHeight;
     let latest = startH;
 
     const onMove = (ev: PointerEvent) => {
@@ -176,21 +178,13 @@ export function Composer({
   };
 
   const options = useMemo(() => MODELS.map((item) => ({ id: item.id, label: item.label })), []);
-  const areaHeight = manual == null ? undefined : Math.max(MIN_H, manual - 46);
+  const areaHeight = manual == null ? undefined : Math.max(MIN_H, manual);
   const segments = useMemo(() => segmentText(text, files), [text, files]);
 
   return (
     <div className={styles.composer}>
       <div className={styles.composerIn}>
         <div className={styles.box}>
-          <div
-            className={styles.grip}
-            role="separator"
-            aria-label="拖动调整输入框高度（双击恢复自动）"
-            onPointerDown={startResize}
-            onDoubleClick={resetHeight}
-          />
-
           <div className={styles.editor}>
             {/* 高亮层：只画标记底色，正文仍然由 textarea 显示（字形位置完全一致） */}
             <div className={styles.mirror} aria-hidden ref={mirrorRef}>
@@ -223,6 +217,14 @@ export function Composer({
                   submit();
                 }
               }}
+            />
+            {/* 下边框即把手：整条都能拖，不再在顶部画一条像滚动条的东西 */}
+            <span
+              className={styles.resizer}
+              role="separator"
+              aria-label="拖动调整输入框高度（双击恢复自动）"
+              onPointerDown={startResize}
+              onDoubleClick={resetHeight}
             />
           </div>
 
@@ -283,7 +285,7 @@ export function Composer({
         </div>
         <div className={styles.hint}>
           <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>
-          <kbd>Enter</kbd> 换行 · 顶部把手拖动可调高度
+          <kbd>Enter</kbd> 换行 · 拖下边框可调高度
         </div>
       </div>
     </div>
