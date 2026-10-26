@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ChatAction, ChatMessage } from "@/types";
 import { Check, FileIcon, Plus } from "@/components/ui/icons";
 import { segmentText } from "@/lib/inline-tokens";
+import { Markdown } from "@/lib/markdown";
 import { cx } from "@/lib/cx";
 import styles from "./message.module.css";
 
@@ -69,7 +70,7 @@ export function AssistantTurn({
           {message.tool}
         </div>
       )}
-      {message.content && <p>{message.content}</p>}
+      {message.content && <Markdown text={message.content} />}
 
       {message.changes?.map((change, index) => (
         <div className={styles.change} key={index}>
