@@ -7,7 +7,7 @@ import type { Workspace } from "@/types";
  * 而不是别人的简历样板。示例数据只在开发构建里注入（见 store/workspace.tsx）。
  */
 export const EMPTY_WORKSPACE: Workspace = {
-  version: 3,
+  version: 4,
   people: [],
   ui: {
     accent: "white",

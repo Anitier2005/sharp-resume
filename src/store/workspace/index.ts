@@ -13,6 +13,6 @@
 export { WorkspaceProvider } from "./provider";
 export { useWorkspace } from "./use-workspace";
 export type { SaveState, WorkspaceContextValue } from "./context";
-export type { Action, PageRefField } from "./types";
+export type { Action } from "./types";
 export { reducer } from "./reducer";
 export { uid } from "@/lib/uid";

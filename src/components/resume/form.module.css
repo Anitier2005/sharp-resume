@@ -403,3 +403,118 @@
 .readonly .k {
   color: var(--fg-4);
 }
+
+/* ---------- v4 字段化新增 ---------- */
+.labelRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+.labelKey {
+  flex: none;
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  color: var(--fg-4);
+}
+.labelRow input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--fg-1);
+  outline: none;
+}
+.labelRow input:focus {
+  border-color: var(--acc-line-2);
+  background: var(--acc-softer);
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+}
+.sectionHead .head {
+  flex: 1;
+  min-width: 0;
+}
+.sectionTitle {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  font-size: 0.71875rem;
+  font-weight: 600;
+  color: var(--fg-1);
+  outline: none;
+}
+.sectionTitle:hover {
+  border-color: var(--line);
+}
+.sectionTitle:focus {
+  border-color: var(--acc-line-2);
+  background: var(--acc-softer);
+}
+.remove {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-right: 2px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--fg-4);
+}
+.remove:hover {
+  background: var(--bg-press);
+  color: var(--danger);
+}
+
+.addSection {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  margin: 12px 0 4px;
+  padding: 0 9px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 5px;
+  font-size: 0.6875rem;
+  color: var(--fg-3);
+}
+.addSection:hover {
+  border-color: var(--acc-line-2);
+  background: var(--acc-softer);
+  color: var(--acc-text);
+}
+
+/* 继承自库的字段：只读展示，避免「明明库里有、表单却说没有」 */
+.inherited {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 5px;
+  background: var(--bg-hover);
+}
+.inheritedK {
+  font-size: 0.59375rem;
+  color: var(--fg-4);
+}
+.inheritedRow {
+  font-size: 0.71875rem;
+  line-height: 1.6;
+  color: var(--fg-2);
+}

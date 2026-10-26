@@ -11,6 +11,7 @@ import { AssistantTurn, EmptyTurn, TypingTurn, UserTurn } from "./message";
 import { aiReady, loadAi, saveAi, streamChat, type AiSettings } from "@/lib/ai";
 import { buildContext, buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
 import { isTauri } from "@/lib/storage";
+import { displayName } from "@/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import styles from "./chat.module.css";
 
@@ -130,7 +131,7 @@ export function ChatPanel() {
             await streamChat({
               settings: ai,
               messages: toApiMessages(
-                buildSystemPrompt(person, targetPage, resume.title),
+                buildSystemPrompt(person),
                 person.messages.map((item) => ({ role: item.role, content: item.content })),
                 text,
                 attachments.map((file) => ({ name: file.name, text: attachmentText(file.id) })),
@@ -294,41 +295,39 @@ export function ChatPanel() {
       // 改写只写回当前这一页的措辞（entry），不碰经历库里的记录。
       // 同一条 entry 的多处改写合并成一次写入，否则后一次会覆盖前一次。
       if (!page) return;
-      const patches = new Map<string, { bullets?: string[]; bulletsEn?: string[] }>();
+      // v4：措辞只有一套，直接按 entryId 改本页那一条
+      const entries = page.sections.flatMap((section) => section.items);
+      const patches = new Map<string, string[]>();
       for (const change of changes) {
         const target = change.target;
         if (!target) continue;
-        const entry = page.entries.find((item) => item.id === target.entryId);
+        const entry = entries.find((item) => item.id === target.entryId);
         if (!entry) continue;
-        const bucket = patches.get(entry.id) ?? {};
-        // 英文页写 bulletsEn，中文页写 bullets；落在哪边由当前页决定
-        const key = page.kind === "en" ? "bulletsEn" : "bullets";
-        const list = bucket[key] ?? [...(entry[key] ?? [])];
+        const list = patches.get(entry.id) ?? [...entry.bullets];
         list[target.bulletIndex] = change.after;
-        bucket[key] = list;
-        patches.set(entry.id, bucket);
+        patches.set(entry.id, list);
       }
 
       if (!patches.size) {
-        toast("找不到对应的句子，可能这段经历已经从本页移除了");
+        toast("找不到对应的句子，可能这条已经从本页移除了");
         return;
       }
 
-      for (const [entryId, patch] of patches) {
+      for (const [entryId, bullets] of patches) {
         dispatch({
-          type: "updateEntry",
+          type: "entryPatch",
           personId: person.id,
           resumeId: resume.id,
           pageId: page.id,
           entryId,
-          patch,
+          patch: { bullets },
         });
       }
       patchMessage(message.id, {
         actions: undefined,
         tool: `${message.tool ?? "改写"} · 已写入本页`,
       });
-      toast(`已写入 ${changes.length} 处，名下所有简历同步更新`);
+      toast(`已写入 ${changes.length} 处`);
       return;
     }
 
@@ -371,7 +370,7 @@ export function ChatPanel() {
     >
       <header className={styles.head}>
         <div className={styles.crumb}>
-          <span className={styles.who}>{person.name}</span>
+          <span className={styles.who}>{displayName(person.fields)}</span>
           <ChevronRight size={9} className={styles.sep} />
           <b>{resume.title}</b>
         </div>

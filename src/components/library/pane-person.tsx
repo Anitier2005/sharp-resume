@@ -1,41 +1,25 @@
-import { Field, Grid, PaneHead } from "./parts";
-import { usePatchPerson } from "./use-library";
+import { useWorkspace } from "@/store/workspace";
+import { FieldsEditor } from "@/components/ui/fields";
+import type { Person } from "@/types";
+import { PaneHead } from "./parts";
 import styles from "./library.module.css";
-import type { PaneProps } from "./pane-experience";
 
-/** 人物基本信息：这一级字段被所有简历页共享 */
-export function PersonPane({ person }: PaneProps) {
-  const patch = usePatchPerson(person);
-
+/** 人物面板：这个人的信息同样只有字段，没有「姓名 / 邮箱 / 年限」这种预设 */
+export function PersonPane({ person }: { person: Person }) {
+  const { dispatch } = useWorkspace();
   return (
     <div className={styles.pane}>
-      <PaneHead title="基本信息" desc="新建简历时会用这里的姓名、职位与城市预填页头。" />
-      <div className={`${styles.itemBody} ${styles.plain}`}>
-        <Grid>
-          <Field label="姓名" value={person.name} onChange={(value) => patch({ name: value })} />
-          <Field
-            label="Name"
-            value={person.nameEn}
-            onChange={(value) => patch({ nameEn: value })}
-          />
-          <Field label="职位" value={person.role} onChange={(value) => patch({ role: value })} />
-          <Field
-            label="Role"
-            value={person.roleEn}
-            onChange={(value) => patch({ roleEn: value })}
-          />
-          <Field label="邮箱" value={person.email} onChange={(value) => patch({ email: value })} />
-          <Field
-            label="城市"
-            value={person.location}
-            onChange={(value) => patch({ location: value })}
-          />
-          <Field
-            label="年限"
-            value={String(person.years)}
-            onChange={(value) => patch({ years: Number(value.replace(/[^\d]/g, "")) || 0 })}
-          />
-        </Grid>
+      <PaneHead
+        title="人物"
+        desc="这里写的东西会出现在简历页头（如果那一页引用了它的话）。字段由你自己定。"
+      />
+      <div className={styles.itemBody}>
+        <FieldsEditor
+          fields={person.fields}
+          onChange={(fields) => dispatch({ type: "personFields", personId: person.id, fields })}
+          addLabel="加一个字段"
+          placeholderLabel="例如 姓名 / 邮箱 / 现居"
+        />
       </div>
     </div>
   );

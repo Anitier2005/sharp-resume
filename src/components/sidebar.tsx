@@ -7,13 +7,12 @@ import { LibraryDrawer } from "@/components/library/drawer";
 import { ContextMenu } from "@/components/ui/context-menu";
 import { Confirm } from "@/components/ui/confirm";
 import { MenuItem as CtxItem, MenuSep as CtxSep } from "@/components/ui/menu";
-import { pageShort, type Person, type Resume } from "@/types";
+import { displayName, type Person, type Resume } from "@/types";
 import { cx } from "@/lib/cx";
 import styles from "./sidebar.module.css";
 
 function pageBadges(resume: Resume): string {
-  const kinds = resume.pages.slice(0, 2).map((page) => pageShort(page.kind));
-  return kinds.join(" · ");
+  return resume.pages.length ? `${resume.pages.length} 页` : "空";
 }
 
 export function Sidebar() {
@@ -47,7 +46,7 @@ export function Sidebar() {
   const q = query.trim().toLowerCase();
   const people = state.people.filter((item) => {
     if (!q) return true;
-    if (item.name.toLowerCase().includes(q)) return true;
+    if (displayName(item.fields).toLowerCase().includes(q)) return true;
     return item.resumes.some((r) => r.title.toLowerCase().includes(q));
   });
 
@@ -118,7 +117,11 @@ export function Sidebar() {
                 }}
               >
                 <User size={12} />
-                <span className={styles.pname}>{item.name}</span>
+                <span className={styles.pname}>
+                  {displayName(item.fields) === "未命名"
+                    ? `候选人 ${state.people.indexOf(item) + 1}`
+                    : displayName(item.fields)}
+                </span>
                 <span className={styles.count}>{item.resumes.length}</span>
                 <ChevronRight size={9} className={styles.chev} />
               </button>
@@ -130,7 +133,7 @@ export function Sidebar() {
                     <button
                       type="button"
                       className={styles.libEntry}
-                      title={`编辑${item.name}的共享经历与作品，勾选进当前页`}
+                      title={`编辑${displayName(item.fields)}的字段与资料`}
                       onClick={() => {
                         if (person?.id !== item.id) {
                           dispatch({ type: "selectPerson", personId: item.id });
@@ -139,9 +142,9 @@ export function Sidebar() {
                       }}
                     >
                       <Layers size={10} />
-                      <span className={styles.libName}>经历库</span>
+                      <span className={styles.libName}>资料</span>
                       <span className={styles.libCount}>
-                        {item.experiences.length} 段 · {item.projects.length} 件
+                        {item.items.length} 条
                       </span>
                     </button>
                   </li>
@@ -268,14 +271,17 @@ export function Sidebar() {
                   toast("已新建简历");
                 }}
               />
-              <CtxItem label="编辑经历库" onSelect={() => setLibOpen(true)} />
+              <CtxItem label="编辑资料" onSelect={() => setLibOpen(true)} />
               <CtxSep />
               <CtxItem
                 label="删除候选人"
                 danger
                 onSelect={() => {
                   const owner = state.people.find((row) => row.id === ctx.personId);
-                  setPendingDelete({ personId: ctx.personId, name: owner?.name ?? "这位候选人" });
+                  setPendingDelete({
+                    personId: ctx.personId,
+                    name: owner ? displayName(owner.fields) : "这位候选人",
+                  });
                 }}
               />
             </>

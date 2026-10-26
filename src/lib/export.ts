@@ -1,67 +1,35 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Person, ResumePage } from "@/types";
-import { resolveEntries, wordingOf } from "@/lib/entries";
+import { displayName, fieldText } from "@/types";
 import { isTauri } from "@/lib/storage";
 
-const LABELS = {
-  zh: { experience: "工作经历", project: "项目", education: "教育", skill: "技能" },
-  en: { experience: "Experience", project: "Selected Projects", education: "Education", skill: "Skills" },
-};
-
+/** 一页 → Markdown：字段就是字段，标题就是用户写的标题 */
 export function pageToMarkdown(person: Person, page: ResumePage): string {
-  const en = page.kind === "en";
-  const label = LABELS[en ? "en" : "zh"];
   const lines: string[] = [];
+  const [lead, ...rest] = page.header;
 
-  lines.push(`# ${page.headline}`, "");
-  lines.push(`**${page.role}**`, "");
-  if (page.meta.length) lines.push(page.meta.join(" · "), "");
-  if (page.summary) lines.push(`> ${page.summary}`, "");
+  if (lead) lines.push(`# ${lead.value || lead.label}`, "");
+  for (const field of rest) lines.push(fieldText(field));
+  if (rest.length) lines.push("");
 
-  const experiences = resolveEntries(person, page);
-
-  if (experiences.length) {
-    lines.push(`## ${label.experience}`, "");
-    for (const { entry, exp } of experiences) {
-      const company = en ? exp.companyEn || exp.company : exp.company;
-      const role = en ? exp.roleEn || exp.role : exp.role;
-      lines.push(`### ${company} · ${role}\u3000\`${exp.period}\``, "");
-      for (const bullet of wordingOf(entry, en)) lines.push(`- ${bullet}`);
+  for (const section of page.sections) {
+    if (section.title.trim()) lines.push(`## ${section.title}`, "");
+    for (const entry of section.items) {
+      const source = person.items.find((item) => item.id === entry.refId);
+      const fields = entry.fields.length ? entry.fields : source?.fields ?? [];
+      if (fields.length) {
+        const [head, ...others] = fields;
+        lines.push(`### ${head.value || head.label}`, "");
+        for (const field of others) lines.push(`- ${fieldText(field)}`);
+      }
+      for (const bullet of entry.bullets) {
+        if (bullet.trim()) lines.push(`- ${bullet}`);
+      }
       lines.push("");
     }
   }
 
-  const projects = page.projectIds
-    .map((id) => person.projects.find((item) => item.id === id))
-    .filter(Boolean);
-
-  if (projects.length) {
-    lines.push(`## ${label.project}`, "");
-    for (const project of projects) {
-      if (!project) continue;
-      lines.push(`### ${project.title}\u3000\`${project.year}\``, "");
-      lines.push(en ? project.descEn ?? project.desc : project.desc, "");
-      if (project.tags.length) lines.push(`\`${project.tags.join("` `")}\``, "");
-    }
-  }
-
-  if (person.education.length) {
-    lines.push(`## ${label.education}`, "");
-    for (const item of person.education) {
-      lines.push(`- ${en ? item.schoolEn ?? item.school : item.school} · ${item.degree}\u3000\`${item.period}\``);
-    }
-    lines.push("");
-  }
-
-  if (person.skills.length) {
-    lines.push(`## ${label.skill}`, "");
-    for (const group of person.skills) {
-      lines.push(`- **${group.label}**：${group.value}`);
-    }
-    lines.push("");
-  }
-
-  return lines.join("\n");
+  return lines.join("\n").trimEnd() + "\n";
 }
 
 export function resumeToMarkdown(person: Person, pages: ResumePage[]): string {
@@ -122,3 +90,5 @@ export async function saveBytes(
 export function printPage(): void {
   window.print();
 }
+
+export const personTitle = (person: Person) => displayName(person.fields);

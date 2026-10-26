@@ -1,32 +1,28 @@
 import { useEffect, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { Close } from "@/components/ui/icons";
+import { displayName } from "@/types";
 import shared from "@/components/ui/shared.module.css";
 import styles from "./library.module.css";
-import { ExperiencePane } from "./pane-experience";
-import { ProjectPane } from "./pane-project";
-import { EducationPane } from "./pane-education";
-import { SkillPane } from "./pane-skill";
+import { FieldsPane } from "./pane-fields";
 import { PersonPane } from "./pane-person";
 
-type Tab = "person" | "experience" | "project" | "education" | "skill";
+type Tab = "person" | "items";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "person", label: "人物" },
-  { key: "experience", label: "经历" },
-  { key: "project", label: "作品" },
-  { key: "education", label: "教育" },
-  { key: "skill", label: "技能" },
+  { key: "items", label: "库" },
 ];
 
 /**
- * 经历库抽屉：只负责外壳（遮罩、导航、语言开关、底栏）。
- * 每个面板自己从 store 取数据，五块内容互不影响，也不再挤在同一个文件里。
+ * 资料抽屉：只有两个面板。
+ *
+ * v4 不再按「经历 / 作品 / 教育 / 技能」分类 —— 那只是同一件事的四种叫法。
+ * 也没了「中文 / EN」开关：记录当时用什么语言写就用什么语言，不做语言版本。
  */
 export function LibraryDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { person, resume, page } = useWorkspace();
-  const [tab, setTab] = useState<Tab>("experience");
-  const [en, setEn] = useState(false);
+  const [tab, setTab] = useState<Tab>("person");
 
   useEffect(() => {
     if (!open) return;
@@ -37,19 +33,9 @@ export function LibraryDrawer({ open, onClose }: { open: boolean; onClose: () =>
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  // 切人时抽屉保持原样：语言开关是使用习惯，不随人重置
   if (!open || !person) return null;
 
-  const counts: Record<Tab, number> = {
-    person: 0,
-    experience: person.experiences.length,
-    project: person.projects.length,
-    education: person.education.length,
-    skill: person.skills.length,
-  };
-
   const pageName = page ? `${resume?.title ?? ""} · ${page.label}` : "还没有打开简历";
-  const paneProps = { person, page, en };
 
   return (
     <div
@@ -57,28 +43,15 @@ export function LibraryDrawer({ open, onClose }: { open: boolean; onClose: () =>
       data-print="hide"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <div className={styles.drawer} role="dialog" aria-modal="true" aria-label="经历库">
+      <div className={styles.drawer} role="dialog" aria-modal="true" aria-label="资料">
         <header className={styles.head}>
           <div className={shared.overlayTitle}>
-            <b>经历库</b>
+            <b>资料</b>
             <span>
-              {person.name} · 名下 {person.resumes.length} 份简历共用
+              {displayName(person.fields)} · 名下 {person.resumes.length} 份简历共用
             </span>
           </div>
-          <div className={styles.switch} role="group" aria-label="编辑语言">
-            <button type="button" aria-pressed={!en} onClick={() => setEn(false)}>
-              中文
-            </button>
-            <button type="button" aria-pressed={en} onClick={() => setEn(true)}>
-              EN
-            </button>
-          </div>
-          <button
-            type="button"
-            className={shared.overlayClose}
-            aria-label="关闭"
-            onClick={onClose}
-          >
+          <button type="button" className={shared.overlayClose} aria-label="关闭" onClick={onClose}>
             <Close size={11} />
           </button>
         </header>
@@ -93,17 +66,13 @@ export function LibraryDrawer({ open, onClose }: { open: boolean; onClose: () =>
                 onClick={() => setTab(item.key)}
               >
                 {item.label}
-                {counts[item.key] > 0 && <i>{counts[item.key]}</i>}
+                {item.key === "items" && person.items.length > 0 && <i>{person.items.length}</i>}
               </button>
             ))}
           </nav>
 
           <div className={styles.main}>
-            {tab === "person" && <PersonPane {...paneProps} />}
-            {tab === "experience" && <ExperiencePane {...paneProps} />}
-            {tab === "project" && <ProjectPane {...paneProps} />}
-            {tab === "education" && <EducationPane {...paneProps} />}
-            {tab === "skill" && <SkillPane {...paneProps} />}
+            {tab === "person" ? <PersonPane person={person} /> : <FieldsPane person={person} />}
           </div>
         </div>
 
@@ -111,7 +80,7 @@ export function LibraryDrawer({ open, onClose }: { open: boolean; onClose: () =>
           <span className={styles.dim}>当前页</span>
           <span className={styles.cur}>{pageName}</span>
           <span className={styles.sp} />
-          <span className={styles.dim}>勾选「本页」只影响这一页，其余改动同步所有简历</span>
+          <span className={styles.dim}>库属于这个人；页面里引用后，措辞归页面</span>
         </footer>
       </div>
     </div>

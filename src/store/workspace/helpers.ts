@@ -1,4 +1,4 @@
-import type { PageKind, Person, Resume, ResumePage, Workspace } from "@/types";
+import type { Person, Resume, ResumePage, Workspace } from "@/types";
 import { uid } from "@/lib/uid";
 
 export function withExpanded(state: Workspace, personId: string): string[] {
@@ -31,22 +31,51 @@ export function mapResume(
   };
 }
 
-export function newPage(person: Person, kind: PageKind): ResumePage {
-  const isEn = kind === "en";
+/** 对某一页做变换 */
+export function mapPage(
+  state: Workspace,
+  personId: string,
+  resumeId: string,
+  pageId: string,
+  fn: (page: ResumePage) => ResumePage,
+): Workspace {
+  return mapResume(state, personId, resumeId, (resume) => ({
+    ...resume,
+    pages: resume.pages.map((page) => (page.id === pageId ? fn(page) : page)),
+  }));
+}
+
+/**
+ * 新建页面：**零预设**。
+ * 没有类型、没有语言、没有预置分区与字段 —— 用户自己起名、自己加字段。
+ */
+export function newPage(order: number): ResumePage {
   return {
     id: uid("pg"),
-    kind,
-    label: kind === "zh" ? "中文简历" : kind === "en" ? "English" : "作品集",
-    headline: isEn ? person.nameEn : person.name,
-    role: isEn ? person.roleEn : person.role,
-    meta: [person.email, isEn ? "Shanghai" : person.location, `${person.years} ${isEn ? "years" : "年经验"}`],
-    summary: "",
-    // 新页默认把库里的经历都挂上，但不预填措辞：措辞要按岗位自己写（表单里有「起草」按钮）
-    entries: person.experiences.map((item) => ({
-      id: uid("en"),
-      experienceId: item.id,
-      bullets: [],
-    })),
-    projectIds: person.projects.map((item) => item.id),
+    label: `第 ${order} 页`,
+    header: [],
+    sections: [],
+  };
+}
+
+export function newResume(personId: string): Resume {
+  return {
+    id: uid("r"),
+    personId,
+    title: "未命名简历",
+    updatedAt: Date.now(),
+    pages: [newPage(1)],
+  };
+}
+
+/** 新建人物：同样零预设，连「姓名」都不预置 */
+export function newPerson(): Person {
+  const id = uid("p");
+  return {
+    id,
+    fields: [],
+    items: [],
+    messages: [],
+    resumes: [newResume(id)],
   };
 }
