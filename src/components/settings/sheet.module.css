@@ -234,3 +234,11 @@
   color: var(--fg-3);
   font-variant-numeric: tabular-nums;
 }
+
+/* 底栏里的通讯层提示：说明这次请求到底走 Rust 还是 fetch */
+.route {
+  flex: none;
+  font-size: 0.59375rem;
+  color: var(--fg-4);
+  font-variant-numeric: tabular-nums;
+}

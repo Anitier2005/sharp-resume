@@ -82,14 +82,31 @@ async function explain(response: Response): Promise<string> {
   return `HTTP ${response.status}${detail ? ` · ${detail}` : ""}`;
 }
 
-/** fetch 在跨域被拒时只会抛 TypeError，这里换成能看懂的提示 */
+/**
+ * fetch 在跨域被拒时只会抛一个 TypeError：Failed to fetch —— 看不出是网断了、
+ * 地址写错了、还是被 CORS 拦了。这里补上判断，把「现在到底跑在哪种模式」说清楚。
+ */
 async function send(url: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`网络不可达，或该接口不允许跨域调用（${reason}）`);
+    const host = (() => {
+      try {
+        return new URL(url).host;
+      } catch {
+        return url;
+      }
+    })();
+    if (inTauri()) {
+      throw new Error(`连不上 ${host}（${reason}）`);
+    }
+    throw new Error(
+      `浏览器调试模式下连不上 ${host}：请求被跨域策略拦截。` +
+        `界面调试可以用浏览器，但真正对话要用桌面窗口（走 Rust 通讯层，不经 CORS）。` +
+        `原始信息：${reason}`,
+    );
   }
 }
 

@@ -5,6 +5,7 @@ import { ACCENTS, TEXT_SCALES } from "@/types";
 import { isHexColor } from "@/lib/color";
 import { loadAi, saveAi, testAi, type AiSettings } from "@/lib/ai";
 import { MODELS, modelById } from "@/lib/model-config";
+import { isTauri } from "@/lib/storage";
 import { cx } from "@/lib/cx";
 import shared from "@/components/ui/shared.module.css";
 import styles from "./sheet.module.css";
@@ -84,7 +85,11 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
     try {
       setProbe({ tone: "ok", text: `连上了：${await testAi(ai)}` });
     } catch (error) {
-      setProbe({ tone: "fail", text: error instanceof Error ? error.message : String(error) });
+      const reason = error instanceof Error ? error.message : String(error);
+      setProbe({
+        tone: "fail",
+        text: reason.includes("跨域") ? `${reason}（这是浏览器调试模式，桌面窗口里点同一个按钮才准）` : reason,
+      });
     }
   };
 
@@ -313,6 +318,10 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
       </div>
 
       <footer className={styles.foot}>
+        <span className={styles.route} title="桌面端请求走 Rust，浏览器调试走 fetch（会被跨域拦）">
+          通讯层：{isTauri() ? "Rust · 不经跨域" : "浏览器 fetch · 会被跨域拦"}
+        </span>
+
         <span
           className={cx(
             styles.probe,
