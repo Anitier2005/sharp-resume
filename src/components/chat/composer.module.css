@@ -163,9 +163,9 @@
   color: var(--fg-3);
 }
 
-/* ---------- 拖高：整条下边框都是把手 ----------
-   早先在顶部画了一条全宽的 hover 高亮，看起来像横向滚动条（用户报过）。
-   现在改成贴住输入框下边框的感应条，只在悬停时显一条 1px 细线。 */
+/* ---------- 拖高：整条下边框都是把手，但不画任何线 ----------
+   用户明确要求「无线」：悬停时只靠光标（ns-resize）提示，
+   不在界面上多出一条像分隔线/滚动条的东西。 */
 .resizer {
   position: absolute;
   left: 0;
@@ -176,24 +176,6 @@
   cursor: ns-resize;
   touch-action: none;
 }
-/* 细线压在编辑区底边（不是工具栏上沿）：top: 3px 正好是 bottom: -3 的零点 */
-.resizer::after {
-  content: "";
-  position: absolute;
-  left: 2px;
-  right: 2px;
-  top: 3px;
-  height: 1px;
-  background: transparent;
-  transition: background 0.12s ease;
-}
-.editor:hover .resizer::after {
-  background: var(--line);
-}
-.resizer:hover::after {
-  background: var(--acc-line-2);
-}
-
 /* 底栏里把发送键推到最右，计数贴在它左边 */
 .grow {
   flex: 1;
