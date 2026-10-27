@@ -29,53 +29,72 @@ const DISPLAY_LIMIT: usize = 80;
 
 #[derive(Default)]
 pub struct Sessions {
-    /// key = personId（会话按人隔离）
+    /// key = personId（会话按人隔离；`layout:` 前缀是页排版 agent 自己的会话）
     store: Mutex<HashMap<String, Vec<Value>>>,
     /// 正在跑的请求：key → 取消标记
     running: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    /// 落盘路径，首次访问时解析
+    /// 旧版 sessions.json：只在首次启动时读一次，导进数据库后改名归档
     file: OnceLock<PathBuf>,
+    /// 导入只做一次
+    booted: OnceLock<()>,
 }
 
 impl Sessions {
     fn path(&self, app: &tauri::AppHandle) -> PathBuf {
         self.file
             .get_or_init(|| {
-                // 与 workspace.json 同目录：便携版整目录拷走时对话跟着走
+                // 与 workspace 同目录：便携版整目录拷走时对话跟着走
                 crate::data_dir(app).unwrap_or_else(|_| PathBuf::from("."))
                     .join("sessions.json")
             })
             .clone()
     }
 
-    /// 首次访问时从磁盘载入（文件不存在就当空）
-    fn ensure_loaded(&self, app: &tauri::AppHandle) {
-        if self.store.lock().map(|s| !s.is_empty()).unwrap_or(false) {
-            return;
-        }
-        let path = self.path(app);
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            return;
-        };
-        let Ok(map) = serde_json::from_str::<HashMap<String, Vec<Value>>>(&raw) else {
-            return;
-        };
-        if let Ok(mut store) = self.store.lock() {
-            for (key, value) in map {
-                store.entry(key).or_insert(value);
-            }
-        }
+    /// 每次操作开一次连接。
+    ///
+    /// 会话是「一条消息写一次」，频率很低；反过来把连接长期挂在 Sessions 里，
+    /// 导出、资产池那些命令就得多一条路径去拿它，得不偿失。
+    fn with_db<T>(
+        &self,
+        app: &tauri::AppHandle,
+        f: impl FnOnce(&rusqlite::Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let path = crate::data_dir(app)?.join("app.db");
+        let conn = crate::db::open(&path)?;
+        f(&conn)
     }
 
-    fn save(&self, app: &tauri::AppHandle) {
-        let path = self.path(app);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(store) = self.store.lock() {
-            if let Ok(raw) = serde_json::to_string(&*store) {
-                let _ = std::fs::write(path, raw);
+    /// 把旧的 sessions.json 导进 chat 表，成功就改名归档。
+    ///
+    /// 必须归档：不改名的话每次启动都会把旧消息再插一遍，用户删掉的对话会复活。
+    fn bootstrap(&self, app: &tauri::AppHandle) {
+        self.booted.get_or_init(|| {
+            let path = self.path(app);
+            if !path.exists() {
+                return;
             }
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                return;
+            };
+            // 文件坏了就留在原地：用户还能自己捞，写库反而可能盖掉能用的数据
+            let saved = self.with_db(app, |conn| import_legacy(conn, &raw));
+            if saved.is_ok() {
+                let _ = std::fs::rename(&path, path.with_file_name("sessions.json.imported"));
+            }
+        });
+    }
+
+    /// 按 key 懒加载：一个 scope 只从库里读一次
+    fn ensure_loaded(&self, app: &tauri::AppHandle, key: &str) {
+        self.bootstrap(app);
+        if self.store.lock().map(|s| s.contains_key(key)).unwrap_or(false) {
+            return;
+        }
+        let loaded = self
+            .with_db(app, |conn| crate::db::chat_load(conn, key))
+            .unwrap_or_default();
+        if let Ok(mut store) = self.store.lock() {
+            store.entry(key.to_string()).or_insert(loaded);
         }
     }
 
@@ -87,26 +106,18 @@ impl Sessions {
             .unwrap_or_default()
     }
 
-    fn push(&self, key: &str, message: Value) {
+    /// 落一条消息：内存 + 库各一份。
+    ///
+    /// 库写失败只影响「重启后还在不在」，当前这轮对话照常继续，
+    /// 所以不让它冒泡成错误 —— 用户正在等回复，不该因为磁盘问题卡住。
+    fn push(&self, app: &tauri::AppHandle, key: &str, message: Value) {
         if let Ok(mut store) = self.store.lock() {
-            store.entry(key.to_string()).or_default().push(message);
+            store.entry(key.to_string()).or_default().push(message.clone());
         }
+        let _ = self.with_db(app, |conn| crate::db::chat_append(conn, key, &message));
     }
 
-    /// 页排版 agent 复用同一份存储，key 带 `layout:` 前缀隔离。
-    /// 不新开文件：会话本来就该「随工作台一起走」，分成两个文件反而容易漏备份。
-    pub(crate) fn history_of(&self, app: &tauri::AppHandle, key: &str) -> Vec<Value> {
-        self.ensure_loaded(app);
-        self.list(key)
-    }
-
-    pub(crate) fn append(&self, app: &tauri::AppHandle, key: &str, message: Value) {
-        self.ensure_loaded(app);
-        self.push(key, message);
-        self.save(app);
-    }
-
-    fn patch(&self, key: &str, id: &str, patch: Value) {
+    fn patch(&self, app: &tauri::AppHandle, key: &str, id: &str, patch: &Value) {
         if let Ok(mut store) = self.store.lock() {
             if let Some(list) = store.get_mut(key) {
                 for message in list.iter_mut() {
@@ -121,7 +132,45 @@ impl Sessions {
                 }
             }
         }
+        let _ = self.with_db(app, |conn| crate::db::chat_patch(conn, key, id, patch));
     }
+
+    fn clear(&self, app: &tauri::AppHandle, key: &str) {
+        if let Ok(mut store) = self.store.lock() {
+            store.remove(key);
+        }
+        let _ = self.with_db(app, |conn| crate::db::chat_clear(conn, key));
+    }
+
+    /// 页排版 agent 复用同一份存储，key 带 `layout:` 前缀隔离。
+    /// 不单开一张表：会话本来就该「随工作台一起走」，分两处反而容易漏备份。
+    pub(crate) fn history_of(&self, app: &tauri::AppHandle, key: &str) -> Vec<Value> {
+        self.ensure_loaded(app, key);
+        self.list(key)
+    }
+
+    pub(crate) fn append(&self, app: &tauri::AppHandle, key: &str, message: Value) {
+        self.ensure_loaded(app, key);
+        self.push(app, key, message);
+    }
+}
+
+/// 把 `sessions.json` 的内容搬进 chat 表。
+///
+/// 抽成独立函数是为了能测：它只认「连接 + 一段 JSON」，不碰 AppHandle。
+/// 幂等：库里已经有消息的 scope 直接跳过，所以重复调用不会让删掉的对话复活。
+fn import_legacy(conn: &rusqlite::Connection, raw: &str) -> Result<(), String> {
+    let map: HashMap<String, Vec<Value>> =
+        serde_json::from_str(raw).map_err(|error| format!("旧会话文件解析失败：{error}"))?;
+    for (key, messages) in &map {
+        if crate::db::chat_len(conn, key).unwrap_or(0) > 0 {
+            continue;
+        }
+        for message in messages {
+            crate::db::chat_append(conn, key, message)?;
+        }
+    }
+    Ok(())
 }
 
 /* ---------- 上下文裁剪 ---------- */
@@ -164,7 +213,7 @@ pub(crate) fn trim_history(history: &[Value], budget: usize) -> Vec<Value> {
 /// 前端进来先拉一次当前会话（只给要显示的一段）
 #[tauri::command]
 pub fn chat_history(app: tauri::AppHandle, state: tauri::State<'_, Sessions>, key: String) -> Vec<Value> {
-    state.ensure_loaded(&app);
+    state.ensure_loaded(&app, &key);
     let all = state.list(&key);
     let start = all.len().saturating_sub(DISPLAY_LIMIT);
     all[start..].to_vec()
@@ -173,9 +222,8 @@ pub fn chat_history(app: tauri::AppHandle, state: tauri::State<'_, Sessions>, ke
 /// 追加一条消息（前端负责构造完整结构：id/role/time/attachments…）
 #[tauri::command]
 pub fn chat_push(app: tauri::AppHandle, state: tauri::State<'_, Sessions>, key: String, message: Value) {
-    state.ensure_loaded(&app);
-    state.push(&key, message);
-    state.save(&app);
+    state.ensure_loaded(&app, &key);
+    state.push(&app, &key, message);
 }
 
 /// 合并字段（流式结束后补 content / tool / changes / actions）
@@ -187,18 +235,14 @@ pub fn chat_patch(
     id: String,
     patch: Value,
 ) {
-    state.ensure_loaded(&app);
-    state.patch(&key, &id, patch);
-    state.save(&app);
+    state.ensure_loaded(&app, &key);
+    state.patch(&app, &key, &id, &patch);
 }
 
 /// 清空某个人的会话
 #[tauri::command]
 pub fn chat_clear(app: tauri::AppHandle, state: tauri::State<'_, Sessions>, key: String) {
-    if let Ok(mut store) = state.store.lock() {
-        store.remove(&key);
-    }
-    state.save(&app);
+    state.clear(&app, &key);
 }
 
 /// 中断正在跑的请求：置标记，流循环下一块就退出，连接随之关闭
@@ -257,7 +301,7 @@ pub async fn chat_send(
     args: SendArgs,
     on_event: Channel<StreamChunk>,
 ) -> Result<SendResult, String> {
-    state.ensure_loaded(&app);
+    state.ensure_loaded(&app, &args.key);
 
     let flag = Arc::new(AtomicBool::new(false));
     if let Ok(mut running) = state.running.lock() {
@@ -330,6 +374,7 @@ pub async fn chat_send(
         Ok(turn) if !flag.load(Ordering::SeqCst) => {
             // 落一条 assistant 消息；content 由前端随后 patch（它还要解析改写块）
             state.push(
+                &app,
                 &args.key,
                 json!({
                     "id": reply_id,
@@ -343,7 +388,6 @@ pub async fn chat_send(
                     },
                 }),
             );
-            state.save(&app);
             Ok(SendResult { id: reply_id, actions: turn.actions })
         }
         Ok(_) | Err(_) if flag.load(Ordering::SeqCst) => Err("已中断".into()),
@@ -370,6 +414,7 @@ pub(crate) fn chrono_like() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn tokens_count_cjk_and_latin() {
@@ -393,5 +438,51 @@ mod tests {
     fn trim_always_keeps_one() {
         let history = vec![json!({ "role": "user", "content": "y".repeat(4000) })];
         assert_eq!(trim_history(&history, 10).len(), 1);
+    }
+    fn temp_db(tag: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir()
+            .join("sharp-resume-session-test")
+            .join(format!("{tag}-{stamp}"));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        dir.join("app.db")
+    }
+
+    #[test]
+    fn imports_legacy_json_once_and_is_idempotent() {
+        let path = temp_db("import");
+        let raw = r#"{
+            "p1": [{ "id": "m1", "role": "user", "content": "你好" }],
+            "layout:r1:pg1": [{ "id": "m2", "role": "user", "content": "排版这一页" }]
+        }"#;
+
+        {
+            let conn = crate::db::open(&path).expect("建库");
+            import_legacy(&conn, raw).expect("第一次导入");
+            assert_eq!(crate::db::chat_len(&conn, "p1").unwrap(), 1);
+            assert_eq!(crate::db::chat_len(&conn, "layout:r1:pg1").unwrap(), 1);
+        }
+        {
+            let conn = crate::db::open(&path).expect("再开一次库");
+            import_legacy(&conn, raw).expect("第二次导入");
+            // 幂等：不能插重复，否则用户删掉的对话会复活
+            assert_eq!(crate::db::chat_len(&conn, "p1").unwrap(), 1);
+            let list = crate::db::chat_load(&conn, "p1").unwrap();
+            assert_eq!(list[0].get("content").and_then(Value::as_str), Some("你好"));
+        }
+
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn broken_legacy_file_reports_error_instead_of_wiping() {
+        let path = temp_db("broken");
+        let conn = crate::db::open(&path).expect("建库");
+        assert!(import_legacy(&conn, "{ not json").is_err(), "坏文件要报错");
+        assert_eq!(crate::db::chat_len(&conn, "p1").unwrap(), 0);
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 }

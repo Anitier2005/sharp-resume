@@ -425,6 +425,9 @@ pub fn run() {
                         dir.display()
                     );
                 }
+                // 导出、资产池这些命令通过 State 拿连接。不注册的话，
+                // 命令一被调用就是「state not managed」panic —— 编译期看不出来。
+                app.manage(db::Shared::new(dir.join("app.db")));
                 let _ = DATA_DIR.set(dir);
             }
 
