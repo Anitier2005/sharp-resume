@@ -9,8 +9,6 @@ import {
 import { useWorkspace } from "@/store/workspace";
 import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem, MenuLabel, MenuSep } from "@/components/ui/menu";
-import { applyAgentActions } from "@/lib/agent-actions";
-import { requestLayout } from "@/lib/layout";
 import { ContextMenu } from "@/components/ui/context-menu";
 import { Confirm } from "@/components/ui/confirm";
 import { ChevronDown, Close, More, Plus } from "@/components/ui/icons";
@@ -48,37 +46,16 @@ export function ResumePanel() {
     closePage,
     dispatch,
     saveState,
+    layoutStatus,
   } = useWorkspace();
   const toast = useToast();
-  /** 视图进 store：会话要据此告诉模型「用户现在在预览」，页 agent 也靠切预览触发排版 */
+  /** 视图进 store：会话要据此告诉模型「用户现在在预览」 */
   const mode = state.ui.view ?? "edit";
   const setMode = (next: ViewMode) => dispatch({ type: "patchUi", patch: { view: next } });
 
-  /**
-   * 切到预览时让「页排版 agent」看一遍这一页。
-   *
-   * 只在真正进入预览时跑，不在编辑时跑：排版要花一次模型调用，
-   * 用户只是在改字的时候没必要惊动它。没配模型就直接跳过，不弹错误。
-   */
-  const refreshLayout = (brief: string) => {
-    if (!person || !resume || !page) return;
-    void requestLayout({ person, resume, page, state, brief })
-      .then((actions) => {
-        if (!actions?.length) return;
-        applyAgentActions(actions, {
-          openPage: () => {},
-          patchUi: (patch) => dispatch({ type: "patchUi", patch }),
-          ask: () => {},
-          pageStyle: (id, style) =>
-            dispatch({ type: "pageStyle", personId: person.id, resumeId: resume.id, pageId: id, style }),
-          requestLayout: () => {},
-        });
-      })
-      .catch((error: unknown) => {
-        const reason = error instanceof Error ? error.message : String(error);
-        toast(`排版没跑成：${reason}`);
-      });
-  };
+  // 排版不再由「切到预览」触发：内容一变就自动通知排版 agent，
+  // 归 provider 统一发起（那里是 state 的唯一汇聚点）。
+  // 预览只是一个看法，顺手烧一次模型调用既费钱又不是用户要的时机。
   const [zoom, setZoom] = useState(100);
   const [sheets, setSheets] = useState(1);
   const [a4Height, setA4Height] = useState(529);
@@ -438,10 +415,7 @@ export function ResumePanel() {
             role="tab"
             aria-selected={mode === "preview"}
             className={cx(styles.segBtn, mode === "preview" && styles.segOn)}
-            onClick={() => {
-              setMode("preview");
-              refreshLayout("");
-            }}
+            onClick={() => setMode("preview")}
           >
             预览
           </button>
@@ -519,6 +493,13 @@ export function ResumePanel() {
         {preview && (
           <span className={sheets > 1.02 ? styles.over : undefined} title="按 A4 比例估算">
             {sheets > 1.02 ? `≈ ${sheets.toFixed(1)} 页 A4` : "1 页 A4"}
+          </span>
+        )}
+        {/* 排版 agent 在干活：只看「这一页」的，别页在忙不该在这显示 */}
+        {layoutStatus?.pageId === page?.id && (
+          <span className={styles.layout} title="页排版 agent 正在处理这一页">
+            <i />
+            {layoutStatus.text}
           </span>
         )}
         <span className={styles.save}>

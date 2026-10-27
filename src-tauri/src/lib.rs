@@ -462,7 +462,7 @@ pub fn run() {
             session::chat_clear,
             session::chat_cancel,
             session::chat_send,
-            agent::layout::layout_send,
+            agent::layout::layout_submit,
             assets::asset_put,
             assets::asset_get,
             assets::asset_drop,
@@ -473,6 +473,9 @@ pub fn run() {
             pool::pool_list
         ])
         .manage(session::Sessions::default())
+        // 排版信箱：每页一份，跨命令存活。放在 manage 里而不是每次新建，
+        // 否则「同一个页面同时只跑一个」这个约束就不存在了
+        .manage(agent::layout::Layouts::default())
         .run(tauri::generate_context!())
         .expect("error while running Sharp Resume");
 }

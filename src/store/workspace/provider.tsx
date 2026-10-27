@@ -8,11 +8,16 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { listen } from "@tauri-apps/api/event";
 import type { Workspace } from "@/types";
 import { AUTO_TEXT_SCALE_FLOOR } from "@/types";
 import { SEED } from "@/data/seed";
 import { EMPTY_WORKSPACE } from "@/data/empty";
 import { loadWorkspace, saveWorkspace, isTauri } from "@/lib/storage";
+import { describeChange, diff, flatten, type Flat } from "@/lib/changes";
+import { submitLayout } from "@/lib/layout";
+import { applyAgentActions } from "@/lib/agent-actions";
+import { useToast } from "@/components/ui/toast-context";
 import { reducer } from "./reducer";
 import { WorkspaceContext, type WorkspaceContextValue, type SaveState } from "./context";
 
@@ -32,13 +37,24 @@ const wantsSeed =
   import.meta.env.DEV && new URLSearchParams(window.location.search).has("seed");
 const INITIAL_WORKSPACE: Workspace = wantsSeed ? SEED : EMPTY_WORKSPACE;
 
+/** 后端排版跑完后推回来的动作 */
+interface LayoutApplied {
+  personId: string;
+  resumeId: string;
+  pageId: string;
+  actions: unknown[];
+}
+
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, INITIAL_WORKSPACE);
   const [ready, setReady] = useState(false);
   // 上次落盘的快照：与 state 不是同一个对象即说明有未保存的改动，由它派生保存状态
   const [savedSnapshot, setSavedSnapshot] = useState<Workspace | null>(null);
   const [activePageId, setActivePageId] = useState<string | null>(null);
+  /** 排版 agent 正在忙的那一页与它手上的动作；纯界面状态，不落盘 */
+  const [layoutStatus, setLayoutStatus] = useState<{ pageId: string; text: string } | null>(null);
   const firstRun = useRef(true);
+  const toast = useToast();
 
   // 启动时载入
   useEffect(() => {
@@ -171,6 +187,114 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer);
   }, [state, ready]);
 
+  /**
+   * 这一页的内容一变就告诉排版 agent。
+   *
+   * 为什么挂在保存节拍上（500ms 防抖）：敲字过程中每个中间态都报一遍没有意义，
+   * 排版看的是这一页最终的形状，不是打字打到一半的样子。
+   *
+   * 为什么只报内容、不报样式：排版 agent 改完样式会触发一次 state 变化，
+   * 要是连样式一起报，它就会被自己的改动叫醒，一圈一圈转下去。
+   */
+  const layoutBaseline = useRef(new Map<string, Flat>());
+
+  useEffect(() => {
+    if (!ready || !person || !resume) return;
+    const timer = window.setTimeout(() => {
+      const alive = new Set(resume.pages.map((item) => item.id));
+      // 删掉的页连基线一起清，免得 id 被复用时误判成「改了一大堆」
+      for (const id of [...layoutBaseline.current.keys()]) {
+        if (!alive.has(id)) layoutBaseline.current.delete(id);
+      }
+
+      for (const target of resume.pages) {
+        const flat = flatten(person, target);
+        // 人物级字段不属于这一页：改个名字不该惊动每一页的重排
+        for (const key of Object.keys(flat)) {
+          if (key.startsWith("person:")) delete flat[key];
+        }
+        const before = layoutBaseline.current.get(target.id);
+        layoutBaseline.current.set(target.id, flat);
+        // 第一次见到这一页（刚打开工作区、刚切到这份简历）只记基线，不触发
+        if (!before) continue;
+
+        const deltas = diff(before, flat);
+        if (!deltas.length) continue;
+        void submitLayout({
+          person,
+          resume,
+          page: target,
+          state,
+          kind: "change",
+          text: describeChange(deltas),
+        });
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [state, ready, person, resume]);
+
+  /**
+   * 排版结果：后端跑完推过来，在这里落进 store。
+   *
+   * 放在 provider 而不是右侧面板：排版是后台跑的，用户很可能已经切到别的页，
+   * 面板卸载了也得收得到，否则这一轮就白跑了。
+   */
+  useEffect(() => {
+    if (!isTauri()) return;
+    let alive = true;
+    const stops: Array<() => void> = [];
+    const keep = (unlisten: () => void) => {
+      if (alive) stops.push(unlisten);
+      else unlisten();
+    };
+
+    void listen<LayoutApplied>("layout:applied", (event) => {
+      if (!alive) return;
+      const { personId, resumeId, actions } = event.payload;
+      if (!Array.isArray(actions) || !actions.length) return;
+      applyAgentActions(actions, {
+        openPage: () => {},
+        patchUi: (patch) => dispatch({ type: "patchUi", patch }),
+        ask: () => {},
+        pageStyle: (pageId, style) =>
+          dispatch({ type: "pageStyle", personId, resumeId, pageId, style }),
+        requestLayout: () => {},
+      });
+    }).then(keep);
+
+    void listen<{ pageId: string }>("layout:started", (event) => {
+      if (!alive) return;
+      const { pageId } = event.payload;
+      // 同一页已经在显示就别换对象：每轮都换会让状态栏闪一下
+      setLayoutStatus((prev) =>
+        prev?.pageId === pageId ? prev : { pageId, text: "正在看这一页的版式" },
+      );
+    }).then(keep);
+
+    void listen<{ pageId: string; detail?: string }>("layout:progress", (event) => {
+      if (!alive) return;
+      const { pageId, detail } = event.payload;
+      if (!detail) return;
+      setLayoutStatus({ pageId, text: detail });
+    }).then(keep);
+
+    void listen<{ pageId: string }>("layout:idle", (event) => {
+      if (!alive) return;
+      // 只清自己那一页：别页刚开始跑，不该被这里顺手抹掉
+      setLayoutStatus((prev) => (prev?.pageId === event.payload.pageId ? null : prev));
+    }).then(keep);
+
+    void listen<{ pageId: string; error: string }>("layout:failed", (event) => {
+      if (!alive) return;
+      toast(`排版没跑成：${event.payload.error}`);
+    }).then(keep);
+
+    return () => {
+      alive = false;
+      for (const stop of stops) stop();
+    };
+  }, [dispatch, toast]);
+
   // 系统文本缩放：Windows「辅助功能 → 文本大小」不会自动传给网页，主动问一次。
   // 非桌面端（浏览器预览）拿不到，用可读下限兜底。
   const [systemTextScale, setSystemTextScale] = useState(AUTO_TEXT_SCALE_FLOOR);
@@ -223,6 +347,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     toggleExpanded,
     saveState,
     ready,
+    layoutStatus,
     textScale,
     systemTextScale,
     setTextScale: (value: number | null) =>

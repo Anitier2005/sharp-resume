@@ -13,7 +13,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 use serde_json::Value;
-use tauri::ipc::Channel;
 
 use crate::net::{self, AiRequest, ChatMessage, StreamChunk};
 use crate::tools::{Scope, ToolCtx};
@@ -78,12 +77,16 @@ fn looks_like_tool_rejection(message: &str) -> bool {
         || lower.contains("unknown")
 }
 
-pub async fn run(
+/// 事件出口用闭包而不是 `Channel`：
+/// 会话是「前端发起、边跑边推给它」，排版是「后端自己发起、没人等着」，
+/// 后一种情况根本造不出 Channel（它需要一个 webview 端），
+/// 硬要一个就会逼出「伪造通道」这种假东西。
+pub async fn run<E: FnMut(StreamChunk) + Send>(
     template: &AiRequest,
     messages: Vec<ChatMessage>,
     ctx: &ToolCtx<'_>,
     cancel: &AtomicBool,
-    on_event: &Channel<StreamChunk>,
+    mut on_event: E,
     scope: Scope,
 ) -> Result<TurnResult, String> {
     use std::sync::atomic::Ordering;
@@ -110,13 +113,13 @@ pub async fn run(
             tools: if with_tools { Some(specs.clone()) } else { None },
         };
 
-        let outcome = match net::stream(&request, cancel, on_event).await {
+        let outcome = match net::stream_with(&request, cancel, &mut |chunk| on_event(chunk)).await {
             Ok(value) => value,
             Err(error) if with_tools && looks_like_tool_rejection(&error) => {
                 // 这个模型不认工具：这次及以后都不再带，退回纯对话
                 with_tools = false;
                 request.tools = None;
-                net::stream(&request, cancel, on_event).await?
+                net::stream_with(&request, cancel, &mut |chunk| on_event(chunk)).await?
             }
             Err(error) => return Err(error),
         };
@@ -137,7 +140,7 @@ pub async fn run(
             let args: Value = serde_json::from_str(&call.function.arguments)
                 .unwrap_or_else(|_| Value::Object(Default::default()));
 
-            let _ = on_event.send(StreamChunk::tool_event(
+            on_event(StreamChunk::tool_event(
                 "tool_start",
                 name.clone(),
                 describe(&name, &args),
@@ -148,7 +151,7 @@ pub async fn run(
                 Err(error) => format!("工具执行失败：{error}"),
             };
 
-            let _ = on_event.send(StreamChunk::tool_event(
+            on_event(StreamChunk::tool_event(
                 "tool_end",
                 name.clone(),
                 summarize(&result),

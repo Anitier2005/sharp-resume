@@ -22,6 +22,11 @@ export interface WorkspaceContextValue {
   toggleExpanded: (personId: string) => void;
   saveState: SaveState;
   ready: boolean;
+  /**
+   * 页排版 agent 此刻在忙哪一页、忙什么；null = 闲着。
+   * 纯界面状态，不落盘：它是「正在发生的事」，不是数据。
+   */
+  layoutStatus: { pageId: string; text: string } | null;
   /** 实际生效的 UI 字号倍率（已合并系统设置与用户档位） */
   textScale: number;
   /** 系统「文本大小」给出的倍率，已含可读下限 */

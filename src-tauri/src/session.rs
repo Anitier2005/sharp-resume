@@ -362,9 +362,18 @@ pub async fn chat_send(
     };
 
     let reply_id = format!("m-{}", uuid_like());
-    let result =
-        crate::agent::turn::run(&template, messages, &ctx, &flag, &on_event, crate::tools::Scope::Session)
-            .await;
+    // 会话这边有前端在等：把闭包转成通道推送，前端才有打字机效果
+    let result = crate::agent::turn::run(
+        &template,
+        messages,
+        &ctx,
+        &flag,
+        |chunk| {
+            let _ = on_event.send(chunk);
+        },
+        crate::tools::Scope::Session,
+    )
+    .await;
 
     if let Ok(mut running) = state.running.lock() {
         running.remove(&args.key);

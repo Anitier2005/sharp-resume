@@ -119,3 +119,28 @@ export function renderDelta(deltas: Delta[]): string {
   lines.push("（这些是你自己刚做的改动；请基于改动后的版本继续，不要重复建议已经改过的地方。）");
   return lines.join("\n");
 }
+
+/**
+ * 同一份差异，换个说法喂给排版 agent。
+ *
+ * 和 `renderDelta` 的区别只在语气：会话 agent 那边是「你自己刚改的，别重复建议」，
+ * 排版这边只需要事实 —— 要不要动、怎么动由它判断。
+ * 每次都催它调工具的话，改个错别字也会触发一次重排。
+ */
+export function describeChange(deltas: Delta[]): string {
+  return deltas
+    .map((item) => {
+      // 分区的「位置」本身就带着标题，再补一遍值就成了「分区 · 证书：证书」
+      const repeated = (text: string) => Boolean(text) && item.where.endsWith(text);
+      if (!item.before) {
+        return repeated(item.after) ? `+ ${item.where}` : `+ ${item.where}：${item.after}`;
+      }
+      if (!item.after) {
+        return repeated(item.before)
+          ? `- ${item.where}（删掉了）`
+          : `- ${item.where}（删掉了「${item.before}」）`;
+      }
+      return `~ ${item.where}：${item.before} → ${item.after}`;
+    })
+    .join("\n");
+}

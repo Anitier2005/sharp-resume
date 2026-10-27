@@ -17,7 +17,7 @@ import { aiReady, loadAi, saveAi, streamChat, type AiSettings } from "@/lib/ai";
 import { buildContext, buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
 import { isTauri } from "@/lib/storage";
 import { applyAgentActions, type AskQuestion } from "@/lib/agent-actions";
-import { requestLayout } from "@/lib/layout";
+import { submitLayout } from "@/lib/layout";
 import { AskForm } from "./ask-form";
 import { displayName } from "@/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -113,32 +113,27 @@ export function ChatPanel() {
   }, []);
 
   /**
-   * 会话 agent 说「这页要重排」时，转给页排版 agent，并把结果落回工作区。
-   * 排版本该由页 agent 负责，会话这边只传意图（brief），不碰样式。
+   * 会话 agent 说「这页要重排」时，交给页排版 agent。
+   *
+   * 只投递、不等结果：排版是常驻的后台工作，可能中途被更多输入打断，
+   * 也可能连着跑好几轮。结果通过 `layout:applied` 事件回到 provider。
+   * 排版本该由页 agent 负责，会话这边只传意图，不碰样式。
    */
   const runLayoutFor = useCallback(
     (pageId: string, brief: string) => {
       if (!person || !resume) return;
       const target = resume.pages.find((item) => item.id === pageId) ?? page;
       if (!target) return;
-      void requestLayout({ person, resume, page: target, state, brief })
-        .then((actions) => {
-          if (!actions?.length) return;
-          applyAgentActions(actions, {
-            openPage: () => {},
-            patchUi: (patch) => dispatch({ type: "patchUi", patch }),
-            ask: () => {},
-            pageStyle: (id, style) =>
-              dispatch({ type: "pageStyle", personId: person.id, resumeId: resume.id, pageId: id, style }),
-            requestLayout: () => {},
-          });
-        })
-        .catch((error: unknown) => {
-          const reason = error instanceof Error ? error.message : String(error);
-          toast(`排版没跑成：${reason}`);
-        });
+      void submitLayout({
+        person,
+        resume,
+        page: target,
+        state,
+        kind: "request",
+        text: brief.trim() || "请检查这一页的版式。",
+      });
     },
-    [person, resume, page, state, dispatch, toast],
+    [person, resume, page, state],
   );
 
   const send = useCallback(

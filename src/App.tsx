@@ -179,10 +179,12 @@ function Shell() {
 
 export default function App() {
   return (
-    <WorkspaceProvider>
-      <ToastProvider>
+    // Toast 在外层：工作区里也会弹提示（排版失败、保存出错），
+    // 反过来套的话 provider 拿不到 toast，只能 console.error
+    <ToastProvider>
+      <WorkspaceProvider>
         <Shell />
-      </ToastProvider>
-    </WorkspaceProvider>
+      </WorkspaceProvider>
+    </ToastProvider>
   );
 }
