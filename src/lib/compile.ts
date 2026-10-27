@@ -1,0 +1,73 @@
+import { invoke } from "@tauri-apps/api/core";
+import type { Asset, Person, ResumePage } from "@/types";
+import { resolveUrl } from "@/lib/assets";
+import { isTauri } from "@/lib/storage";
+
+/**
+ * 成品层：把一页编译成可直接渲染的 HTML。
+ *
+ * 版面规则全部在 Rust 侧（`src-tauri/src/render`）：生成器按块拼结构、
+ * 预设 CSS 提供样式、手写片段优先替换。前端只做两件事 ——
+ * 调一次编译、把 `asset:` 占位换成真地址。
+ *
+ * 为什么不在前端拼：预览、打印、Word 导出必须共用同一份成品，
+ * 否则三处各排各的，改装版等于要改三遍。
+ */
+export interface CompiledPage {
+  html: string;
+  css: string;
+  /** structured = 生成器拼的；manual = agent 整页手写 */
+  mode: "structured" | "manual";
+  preset: string;
+  /** 生成过程中发现的问题：未知块、死引用、找不到的图片 */
+  warnings: string[];
+}
+
+export async function compilePage(
+  page: ResumePage,
+  person: Person,
+): Promise<CompiledPage | null> {
+  if (!isTauri()) return null;
+  return invoke<CompiledPage>("compile_page", { page, person });
+}
+
+function findAsset(person: Person, id: string): Asset | undefined {
+  const own = person.assets?.find((asset) => asset.id === id);
+  if (own) return own;
+  for (const item of person.items) {
+    const hit = item.assets?.find((asset) => asset.id === id);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/**
+ * 把 `asset:<id>` 换成能直接加载的地址。
+ *
+ * 编译层只输出占位符：真地址怎么来（桌面端 blob URL、浏览器调试模式 data URL）
+ * 是前端的事，后端不该知道 —— 它也不该把图片字节塞进 HTML。
+ */
+export async function resolveAssetRefs(html: string, person: Person): Promise<string> {
+  const ids = new Set<string>();
+  for (const match of html.matchAll(/asset:([\w-]+)/g)) {
+    ids.add(match[1]);
+  }
+  if (!ids.size) return html;
+
+  const urls = new Map<string, string>();
+  await Promise.all(
+    [...ids].map(async (id) => {
+      const asset = findAsset(person, id);
+      if (!asset) return;
+      const url = await resolveUrl(asset);
+      if (url) urls.set(id, url);
+    }),
+  );
+
+  // split/join 而不是 replace：同一个 id 可能出现多次
+  let out = html;
+  for (const [id, url] of urls) {
+    out = out.split(`asset:${id}`).join(url);
+  }
+  return out;
+}

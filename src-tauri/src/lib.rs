@@ -6,6 +6,7 @@ mod export;
 mod model;
 mod net;
 mod pool;
+mod render;
 mod session;
 mod snapshot;
 mod storage;
@@ -463,6 +464,7 @@ pub fn run() {
             session::chat_cancel,
             session::chat_send,
             agent::layout::layout_submit,
+            render::compile_page,
             assets::asset_put,
             assets::asset_get,
             assets::asset_drop,

@@ -161,6 +161,12 @@ pub struct ResumePage {
     /// 排版参数由「页排版 agent」写，这里不拆开校验，保持前向兼容
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<Value>,
+    /// 成品层：版式预设 + 手写覆盖。结构与语义见 `render::PageLayout`。
+    ///
+    /// 与 `style` 并存而不是替换：`style` 是旧的三档疏密（读旧数据时映射成预设），
+    /// 这里是真正的成品 —— 可以整页手写，也可以只改某几个块。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<crate::render::PageLayout>,
     #[serde(default)]
     pub blocks: Vec<Block>,
     /// v4 遗留：页头字段。只在读旧数据时出现，`normalize` 会把它搬进 blocks

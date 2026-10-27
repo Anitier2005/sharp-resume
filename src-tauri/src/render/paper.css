@@ -1,0 +1,189 @@
+/* 纸面预设样式：只有一份，作用域全部挂在 .doc 下。
+ *
+ * 为什么用 class 而不是内联 style：
+ *   生成器要给每一页输出十几个块，内联样式会让 token 量翻三倍，
+ *   而这些样式对所有页都一样 —— 没有理由让模型每次都重写一遍。
+ *   agent 想改哪一块，给那个元素加 style 覆盖即可（内联优先级天然更高）。
+ *
+ * 变量是给 agent 的抓手：改 --gap 比逐个元素改 margin 省事，
+ * 但这不是「排版参数层」—— 它可以直接改任何元素的任何属性，这只是快捷方式。
+ */
+
+.doc {
+  --fs: 10px;
+  --lh: 1.7;
+  --gap: 13px;
+  --pad: 34px;
+  --ink: #1f1f1c;
+  --dim: #6b6b63;
+  --line: #e2e2dc;
+  --acc: #2c2c2a;
+
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: var(--fs);
+  line-height: var(--lh);
+  color: var(--ink);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  /* 页边距归内容层管：agent 想改就直接覆盖 .doc 的 padding，
+     不必再回到某个「参数」上去转一手 */
+  padding: var(--pad);
+}
+
+/* 预设只改四个量，不动结构：结构由生成器决定，agent 可以整块替换 */
+.doc[data-preset="compact"] {
+  --fs: 9.4px;
+  --lh: 1.55;
+  --gap: 10px;
+  --pad: 27px;
+}
+.doc[data-preset="roomy"] {
+  --fs: 10.6px;
+  --lh: 1.92;
+  --gap: 17px;
+  --pad: 40px;
+}
+
+/* 打印时页边距交给 @page，内容层不再重复留白 */
+@media print {
+  .doc {
+    padding: 0;
+  }
+}
+
+.doc * {
+  box-sizing: border-box;
+}
+.doc h1,
+.doc h2,
+.doc h3,
+.doc p,
+.doc ul,
+.doc ol,
+.doc figure {
+  margin: 0;
+}
+.doc ul,
+.doc ol {
+  padding-left: 14px;
+}
+.doc li {
+  margin: 0;
+}
+
+/* ---------- 页头 ---------- */
+
+.doc .head {
+  margin-bottom: var(--gap);
+}
+.doc .head .top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.doc .head .txt {
+  flex: 1;
+  min-width: 0;
+}
+.doc .head .name {
+  font-size: 1.92em;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+.doc .head .meta {
+  color: var(--dim);
+  font-size: 0.9em;
+  margin-top: 3px;
+}
+.doc .head .photo {
+  flex: none;
+  width: 62px;
+  height: 82px;
+  object-fit: cover;
+  border-radius: 2px;
+}
+.doc .head .rule {
+  height: 1px;
+  background: var(--line);
+  margin-top: 10px;
+}
+
+/* ---------- 补充字段组 ---------- */
+
+.doc .group {
+  margin-bottom: var(--gap);
+}
+.doc .group .meta {
+  color: var(--dim);
+  font-size: 0.9em;
+}
+
+/* ---------- 分区与条目 ---------- */
+
+.doc .sec {
+  margin-bottom: var(--gap);
+}
+.doc .sec > .t {
+  font-size: 1.06em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--acc);
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.doc .entry {
+  margin-bottom: 9px;
+  break-inside: avoid;
+}
+.doc .entry:last-child {
+  margin-bottom: 0;
+}
+.doc .entry > b {
+  display: block;
+  font-weight: 600;
+}
+.doc .entry .meta {
+  color: var(--dim);
+  font-size: 0.9em;
+}
+.doc .entry .bullets {
+  margin-top: 3px;
+}
+.doc .entry .bullets li {
+  margin-bottom: 1px;
+}
+
+/* ---------- 图片 ---------- */
+
+.doc .fig {
+  margin: 0 0 var(--gap);
+  break-inside: avoid;
+}
+.doc .fig img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 2px;
+}
+.doc .fig figcaption {
+  color: var(--dim);
+  font-size: 0.85em;
+  margin-top: 3px;
+}
+.doc .fig.missing {
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 3px;
+  color: var(--dim);
+  font-size: 0.9em;
+  text-align: center;
+}
+
+/* 整页原件：铺满，不参与排版 */
+.doc .full {
+  display: block;
+  width: 100%;
+  height: auto;
+}

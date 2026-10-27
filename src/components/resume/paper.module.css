@@ -19,13 +19,28 @@
   max-width: 374px;
   min-height: 528px;
   align-self: flex-start;
-  /* 页边距由排版 agent 决定（--p-margin 倍数，1 = 默认） */
-  padding: calc(32px * var(--p-margin, 1)) calc(34px * var(--p-margin, 1))
-    calc(34px * var(--p-margin, 1));
+  /* 页边距归内容层（预设 CSS 里的 .doc padding）：纸只负责尺寸、底色与边框。
+     以前这里用 --p-margin 写死内边距，等于把页边距锁在纸这一级，
+     agent 想改就得回去动参数层 —— 现在它直接覆盖 .doc 就行。 */
+  padding: 0;
   background: var(--paper);
   border: 1px solid var(--paper-line);
   border-radius: 3px;
   box-shadow: var(--shadow-paper);
+}
+
+/* 编译结果还没回来：留一块空白占位，避免先闪一下旧内容 */
+.pending {
+  min-height: 300px;
+}
+
+/* 编译失败：把原因写在纸上，不要变成一片空白 */
+.failed {
+  padding: 24px;
+  font-size: 9px;
+  line-height: 1.7;
+  color: var(--danger);
+  white-space: pre-wrap;
 }
 
 .paper ::selection {
