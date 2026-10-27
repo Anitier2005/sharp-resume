@@ -250,7 +250,7 @@ export function ResumePanel() {
   const exportDocx = (target: ResumePage) => {
     const bytes = pageToDocx(person, target, state.ui.accent);
     void saveBytes(
-      `${displayName(person.fields)}-${target.label}.docx`,
+      `${displayName(person.fields)}-${target.label || "未命名页"}.docx`,
       bytes,
       "Word 文档",
       ["docx"],
@@ -258,7 +258,7 @@ export function ResumePanel() {
     ).then((path) => path && toast("已导出 Word"));
   };
   const exportMd = (target: ResumePage) => {
-    void saveText(`${displayName(person.fields)}-${target.label}.md`, pageToMarkdown(person, target)).then(
+    void saveText(`${displayName(person.fields)}-${target.label || "未命名页"}.md`, pageToMarkdown(person, target)).then(
       (path) => path && toast("已导出 Markdown"),
     );
   };
@@ -301,7 +301,7 @@ export function ResumePanel() {
 
   const handleClose = (item: ResumePage) => {
     closePage(item.id);
-    toast(`已关闭「${item.label}」的标签，页还在`);
+    toast(`已关闭「${item.label || "未命名页"}」的标签，页还在`);
   };
 
   const handleDelete = (item: ResumePage) => {
@@ -309,7 +309,7 @@ export function ResumePanel() {
     // 顺手把死 id 从快速检索里清掉；删的是当前页时，closePage 会挑下一个落点
     closePage(item.id);
     setPendingDelete(null);
-    toast(`已删除「${item.label}」`);
+    toast(`已删除「${item.label || "未命名页"}」`);
   };
 
   const menuPage = menu ? pageMap.get(menu.pageId) ?? null : null;
@@ -328,8 +328,7 @@ export function ResumePanel() {
     return (
       <MenuItem
         key={id}
-        label={item.label}
-        hint={`第 ${pageIndex(resume, id) + 1} 页`}
+        label={item.label || "未命名页"}
         onSelect={() => openPage(id)}
         onContextMenu={(event) => openMenu(event, id, "fold")}
       />
@@ -352,11 +351,11 @@ export function ResumePanel() {
                 data-tab-id={id}
                 className={cx(styles.tab, id === page.id && styles.tabOn)}
                 aria-current={id === page.id ? "page" : undefined}
-                title={item.label}
+                title={item.label || "未命名页"}
                 onClick={() => openPage(id)}
                 onContextMenu={(event) => openMenu(event, id, "tab")}
               >
-                <span className={styles.tabName}>{item.label}</span>
+                <span className={styles.tabName}>{item.label || "未命名页"}</span>
                 {/* 最后一个标签不给关：关了也还得立刻放回来（当前页必须在检索栏里） */}
                 {openPages.length > 1 && (
                   <span

@@ -181,6 +181,11 @@ impl ResumePage {
         if self.kind.trim().is_empty() {
             self.kind = "native".into();
         }
+        // 页名不在这里动。
+        //
+        // 试过把「第 12 页」这类自动名清成空、界面显示「未命名页」，结果四五个页签
+        // 全叫「未命名页」，比原来的数字更难区分 —— 已经退回去了。
+        // 页名怎么显示是界面的事，别在数据层动手。
         // 只要旧的 header / sections 还在就搬；搬完它们会清空，所以反复调用不会重复插入
         if self.header.is_empty() && self.sections.is_empty() {
             return;
@@ -1085,5 +1090,18 @@ mod tests {
             serde_json::to_string(&twice).unwrap(),
             "连读两次结果必须一致，否则每次启动都会多插块"
         );
+    }
+    #[test]
+    fn normalize_keeps_page_labels_as_written() {
+        // 页名是用户数据：normalize 只补结构，不碰内容。
+        // 曾经想在这里把「第 7 页」这类自动名清成空，结果几个页签全叫「未命名页」，已回退。
+        let mut page: ResumePage = serde_json::from_value(json!({
+            "id": "pg1",
+            "label": "第 7 页",
+            "blocks": []
+        }))
+        .unwrap();
+        page.normalize();
+        assert_eq!(page.label, "第 7 页");
     }
 }

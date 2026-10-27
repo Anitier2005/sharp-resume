@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Person, ResumePage, Workspace } from "@/types";
 import { aiReady, loadAi } from "@/lib/ai";
 import { isTauri } from "@/lib/storage";
@@ -24,6 +24,12 @@ export async function requestLayout(input: {
   const ai = loadAi();
   if (!aiReady(ai)) return null;
 
+  // 命令签名里有 `onEvent: Channel<StreamChunk>`（它内部走的是和会话同一套流式循环），
+  // 不传就是 "missing required key onEvent"。排版结果是动作而不是正文，
+  // 所以这里不往对话里写，只收着；将来要显示「正在排版…」的进度可以从这里进。
+  const channel = new Channel<{ kind?: string; delta?: string; message?: string }>();
+  channel.onmessage = () => {};
+
   const result = await invoke<{ id: string; actions: unknown[] }>("layout_send", {
     args: {
       personId: input.person.id,
@@ -43,6 +49,7 @@ export async function requestLayout(input: {
       reasoning: ai.reasoning ?? null,
       contextWindow: ai.contextWindow ?? null,
     },
+    onEvent: channel,
   });
 
   return result.actions ?? [];

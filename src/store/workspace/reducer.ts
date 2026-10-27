@@ -134,7 +134,7 @@ export function reducer(state: Workspace, action: Action): Workspace {
     case "addPage":
       return mapResume(state, action.personId, action.resumeId, (resume) => ({
         ...resume,
-        pages: [...resume.pages, newPage(resume.pages.length + 1)],
+        pages: [...resume.pages, newPage()],
       }));
 
     // 排版只由「页排版 agent」写：会话 agent 想改排版得走 request_layout

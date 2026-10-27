@@ -48,12 +48,15 @@ export function mapPage(
 /**
  * 新建页面：**零预设**。
  * 没有类型、没有语言、没有预置分区与字段 —— 用户自己起名、自己加字段加块。
+ *
+ * 页名留空：自动叫「第 7 页」既没有信息量，又会和「它现在排在第几页」打架
+ * （见过一页叫「第 25 页」但排在第三位）。界面显示占位「未命名页」。
  */
-export function newPage(order: number): ResumePage {
+export function newPage(): ResumePage {
   return {
     id: uid("pg"),
     kind: "native",
-    label: `第 ${order} 页`,
+    label: "",
     blocks: [],
   };
 }
@@ -64,7 +67,7 @@ export function newResume(personId: string): Resume {
     personId,
     title: "未命名简历",
     updatedAt: Date.now(),
-    pages: [newPage(1)],
+    pages: [newPage()],
   };
 }
 
