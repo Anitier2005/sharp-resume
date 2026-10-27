@@ -1,4 +1,5 @@
-import type { PageLayout, PageStyle, Workspace } from "@/types";
+import type { BlockRole, PageLayout, PageNote, PageStyle, Workspace } from "@/types";
+import type { Action } from "@/store/workspace/types";
 
 /**
  * 执行会话 agent 下发的界面指令。
@@ -23,6 +24,13 @@ export interface AskQuestion {
 
 export interface AgentActionHooks {
   openPage: (pageId: string) => void;
+  /**
+   * 换候选人：简历也要跟着落到这个人的第一份 —— 只改 activePersonId 会让
+   * 右侧停在上一个人的简历上（模型以为切了，用户看到没动）。
+   */
+  openPerson: (personId: string) => void;
+  /** 换简历：同一个人的另一份，当前页落到它的第一页 */
+  openResume: (personId: string, resumeId: string) => void;
   patchUi: (patch: Partial<Workspace["ui"]>) => void;
   /** 模型要求填表时调用；由面板弹出表单 */
   ask: (questions: AskQuestion[]) => void;
@@ -32,6 +40,22 @@ export interface AgentActionHooks {
   pageLayout: (pageId: string, layout: PageLayout) => void;
   /** 会话 agent 要求某一页重新排版 */
   requestLayout: (pageId: string, brief: string) => void;
+  /**
+   * 内容写入通道。
+   *
+   * 后端不直接改库，它把「和用户点击一模一样」的 reducer action 装进 `mutate`
+   * 信封交回来，由工作区按顺序落地 —— 校验、确认窗、撤销、持久化全部复用同一套。
+   * 确认门（要不要先问用户）也在这个 hook 的实现里，不在校验层。
+   */
+  applyOps: (ops: Action[]) => void;
+  /** 排版 agent 在纸面上留的一条批注 */
+  pageNote: (pageId: string, note: PageNote) => void;
+  /**
+   * 排版 agent 向会话 agent 提问（前端负责追加消息并自动跑一轮）。
+   * `blockId` 有值时说明问的是某一块，要写进那条消息里，
+   * 否则会话 agent 得自己再去读一遍页面才能对上号。
+   */
+  askSession: (pageId: string, question: string, blockId?: string) => void;
 }
 
 const VIEWS = new Set(["edit", "preview"]);
@@ -121,6 +145,213 @@ function cleanPatch(input: unknown): Partial<Workspace["ui"]> {
   return patch as Partial<Workspace["ui"]>;
 }
 
+/* ==========================================================================
+   内容写入（mutate 信封）
+   ========================================================================== */
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+
+/** 非空字符串：id 类字段的唯一判据 */
+const text = (value: unknown): string =>
+  typeof value === "string" ? value.trim() : "";
+
+/**
+ * 允许透传的 op（契约 1.2）。
+ *
+ * 这里只核对「信封层面的形状」——类型在不在名单里、必填的 id 在不在、
+ * 该是数组/对象的位置对不对。字段内部的语义（比如 items 里每条长什么样）
+ * 由 Rust 侧同一份契约保证：前端再抄一遍只会多一份会腐烂的真相。
+ */
+interface OpSpec {
+  /** 必填、且必须是非空字符串的字段 */
+  ids: string[];
+  /**
+   * 选填、但一旦出现就必须是非空字符串的字段。
+   *
+   * `addSection.id` / `addPage.id` / `createResume.resumeId` 是工具侧预生成的容器 id：
+   * 同一轮里「先建容器、再往里写」全靠它对上，所以它不能是空串或数字。
+   */
+  optionalIds?: string[];
+  /** 必填、且必须是数组的字段 */
+  arrays?: string[];
+  /** 必填、且必须是对象的字段 */
+  objects?: string[];
+}
+
+const OP_SPEC: Record<string, OpSpec> = {
+  personFields: { ids: ["personId"], arrays: ["fields"] },
+  libraryItems: { ids: ["personId"], arrays: ["items"] },
+  personAssets: { ids: ["personId"], arrays: ["assets"] },
+  itemAssets: { ids: ["personId", "itemId"], arrays: ["assets"] },
+  // id 是新页 id（工具预生成）；同包里的 pageId 只是冗余的「当前页」，不看它
+  addPage: { ids: ["personId", "resumeId"], optionalIds: ["id"] },
+  removePage: { ids: ["personId", "resumeId", "pageId"] },
+  // label / title 允许是空串（用户可以先建页再起名），所以不进 ids
+  pageLabel: { ids: ["personId", "resumeId", "pageId"] },
+  pageHeader: { ids: ["personId", "resumeId", "pageId"], arrays: ["header"] },
+  pageStyle: { ids: ["personId", "resumeId", "pageId"], objects: ["style"] },
+  pageLayout: { ids: ["personId", "resumeId", "pageId"], objects: ["layout"] },
+  blockRole: { ids: ["personId", "resumeId", "pageId", "blockId"] },
+  addSection: {
+    ids: ["personId", "resumeId", "pageId"],
+    optionalIds: ["id", "afterBlockId"],
+  },
+  removeSection: { ids: ["personId", "resumeId", "pageId", "sectionId"] },
+  blockFields: { ids: ["personId", "resumeId", "pageId", "blockId"], arrays: ["fields"] },
+  removeBlock: { ids: ["personId", "resumeId", "pageId", "blockId"] },
+  sectionTitle: { ids: ["personId", "resumeId", "pageId", "sectionId"] },
+  sectionItems: { ids: ["personId", "resumeId", "pageId", "sectionId"], arrays: ["items"] },
+  entryPatch: { ids: ["personId", "resumeId", "pageId", "entryId"], objects: ["patch"] },
+  createResume: { ids: ["personId"], optionalIds: ["resumeId"] },
+  renameResume: { ids: ["personId", "resumeId"] },
+  deleteResume: { ids: ["personId", "resumeId"] },
+  deletePerson: { ids: ["personId"] },
+};
+
+const BLOCK_ROLES = new Set<BlockRole>([
+  "plain",
+  "tight",
+  "band",
+  "tags",
+  "kv",
+  "table",
+  "grid-2",
+  "grid-3",
+  "cols-2",
+  "cols-3",
+  "row",
+]);
+
+/** 批注的最小形状：没有 id 就无从去重，没有 text 就是空点 */
+function cleanNote(input: unknown): PageNote | null {
+  if (!isObject(input)) return null;
+  const id = text(input.id);
+  const body = text(input.text);
+  if (!id || !body) return null;
+  const at =
+    typeof input.at === "number" && Number.isFinite(input.at)
+      ? input.at
+      : Math.floor(Date.now() / 1000);
+  const note: PageNote = { id, text: body, at };
+  const blockId = text(input.blockId);
+  if (blockId) note.blockId = blockId;
+  return note;
+}
+
+function cleanOp(raw: unknown): Action | null {
+  if (!isObject(raw)) return null;
+  const type = text(raw.type);
+  const spec = OP_SPEC[type];
+  if (!spec) return null;
+  for (const key of spec.ids) {
+    if (!text(raw[key])) return null;
+  }
+  for (const key of spec.optionalIds ?? []) {
+    if (raw[key] !== undefined && !text(raw[key])) return null;
+  }
+  for (const key of spec.arrays ?? []) {
+    if (!Array.isArray(raw[key])) return null;
+  }
+  for (const key of spec.objects ?? []) {
+    if (!isObject(raw[key])) return null;
+  }
+  // role 省略 = 清掉提示；给了就必须是认识的，否则整条丢掉（别把未知字符串写进存档）
+  // split 前端也不放行：render 已经把它撤了，放进来只会出现「前端过、渲染层警告」的分裂
+  if (type === "blockRole" && raw.role !== undefined && !BLOCK_ROLES.has(raw.role as BlockRole)) {
+    return null;
+  }
+  return raw as Action;
+}
+
+/**
+ * 逐条校验，坏的那条丢掉、其余照常。
+ *
+ * 为什么不是「一条错整批丢」：后端 `apply_patch` 已经做过整批回滚，
+ * 到了这里说明它是合法的；能走到这里的脏数据多半是版本不一致（新字段、
+ * 老前端），把用户真正想要的那几十条一起丢掉伤害更大。
+ */
+export function cleanOps(input: unknown): Action[] {
+  if (!Array.isArray(input)) return [];
+  const out: Action[] = [];
+  for (const raw of input) {
+    const op = cleanOp(raw);
+    if (op) out.push(op);
+    else console.warn("[agent-actions] 丢弃不合法的写入动作", raw);
+  }
+  return out;
+}
+
+/**
+ * 删除类 op：不可撤销、且用户点 UI 也会被问的那几种。
+ *
+ * `removeSection` 在内：删掉一个含 5 条经历的分区比删一页还狠，
+ * 只是它的入口一直没做确认（那是 UI 的漏洞，不是标准）。
+ */
+const DESTRUCTIVE = new Set([
+  "removePage",
+  "deleteResume",
+  "deletePerson",
+  "removeBlock",
+  "removeSection",
+]);
+
+export function isDestructiveOp(op: Action): boolean {
+  return DESTRUCTIVE.has(op.type);
+}
+
+/**
+ * 确认门：这一批要不要先问用户。
+ *
+ * 判据只有一条：**用户点 UI 会被问的，agent 也要被问** —— 也就是这四种删除。
+ * 「整批挂起」是范围问题，不在这里判：`applyOps` 拿到 true 之后会把整批
+ * （包括同一批里不删除的改动）一起压住，等用户点头再按原顺序执行。
+ */
+export function needsConfirm(ops: Action[]): boolean {
+  const removals = ops.filter(isDestructiveOp).length;
+  return removals >= 1;
+}
+
+/* ==========================================================================
+   排版 ↔ 会话 的桥
+
+   排版 agent 的提问最终要让会话 agent 跑一轮，而「跑一轮」需要模型设置、
+   流式通道、工具事件 —— 全都在聊天面板里。provider 拿不到那些东西，
+   所以用一个极小的注册表把两边接起来：面板挂载时注册，卸载时注销。
+   ========================================================================== */
+
+export interface ChatBridge {
+  /** 把一条消息追加进当前会话并跑一轮（提问来自排版） */
+  turn: (pageId: string, content: string) => void;
+  /** 只追加一条系统提示，不触发模型 */
+  notice: (content: string) => void;
+}
+
+let bridge: ChatBridge | null = null;
+
+export function registerChatBridge(next: ChatBridge): () => void {
+  bridge = next;
+  return () => {
+    if (bridge === next) bridge = null;
+  };
+}
+
+export function chatBridge(): ChatBridge | null {
+  return bridge;
+}
+
+/**
+ * 排版提问在会话里的写法：「排版 · 关于第 2 页 · 块 b7：…」。
+ *
+ * 带上 blockId 是为了让会话 agent 不必为了对上号再读一遍整页；
+ * 它拿这个 id 直接调只读工具就能看到那一块。
+ */
+export function layoutQuestion(pageNo: number, question: string, blockId?: string): string {
+  const head = pageNo > 0 ? `排版 · 关于第 ${pageNo} 页` : "排版";
+  const where = blockId ? `${head} · 块 ${blockId}` : head;
+  return `${where}：${question.trim()}`;
+}
+
 /** 返回实际应用的条数，调用方据此决定要不要提示用户 */
 export function applyAgentActions(actions: unknown, hooks: AgentActionHooks): number {
   if (!Array.isArray(actions)) return 0;
@@ -135,6 +366,21 @@ export function applyAgentActions(actions: unknown, hooks: AgentActionHooks): nu
         const pageId = typeof action.pageId === "string" ? action.pageId.trim() : "";
         if (!pageId) break;
         hooks.openPage(pageId);
+        applied += 1;
+        break;
+      }
+      case "openPerson": {
+        const personId = text(action.personId);
+        if (!personId) break;
+        hooks.openPerson(personId);
+        applied += 1;
+        break;
+      }
+      case "openResume": {
+        const personId = text(action.personId);
+        const resumeId = text(action.resumeId);
+        if (!personId || !resumeId) break;
+        hooks.openResume(personId, resumeId);
         applied += 1;
         break;
       }
@@ -188,6 +434,30 @@ export function applyAgentActions(actions: unknown, hooks: AgentActionHooks): nu
         const questions = cleanQuestions(action.questions);
         if (!questions.length) break;
         hooks.ask(questions);
+        break;
+      }
+      case "mutate": {
+        // 内容写入：信封里是一串 reducer action。坏的那条丢掉，其余照常。
+        // 不计入 applied：调用方据此弹「已调整界面 N 处」，而内容写入的结果
+        // 要么已经出现在纸面上、要么还挂在确认窗里，报个数只会让人困惑
+        const ops = cleanOps(action.ops);
+        if (!ops.length) break;
+        hooks.applyOps(ops);
+        break;
+      }
+      case "pageNote": {
+        const pageId = text(action.pageId);
+        const note = cleanNote(action.note);
+        if (!pageId || !note) break;
+        hooks.pageNote(pageId, note);
+        break;
+      }
+      case "askSession": {
+        const pageId = text(action.pageId);
+        const question = text(action.question);
+        if (!pageId || !question) break;
+        const blockId = text(action.blockId);
+        hooks.askSession(pageId, question, blockId || undefined);
         break;
       }
       default:

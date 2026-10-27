@@ -7,6 +7,13 @@ export type SaveState = "idle" | "saving" | "saved";
 export interface WorkspaceContextValue {
   state: Workspace;
   dispatch: React.Dispatch<Action>;
+  /**
+   * 内容写入的唯一入口（agent 的 `mutate` 信封走这里，用户点击走 dispatch）。
+   *
+   * 它比 dispatch 多做三件事：把「删除类」整批挂起、弹确认窗、按原顺序落地。
+   * 会话面板与排版事件都必须调它，否则同一条行为会出现两种确认策略。
+   */
+  applyOps: (ops: Action[]) => void;
   person: Person | null;
   resume: Resume | null;
   page: ResumePage | null;
@@ -16,6 +23,10 @@ export interface WorkspaceContextValue {
   openPages: string[];
   /** 切到某页并把它顶到最前 */
   openPage: (id: string) => void;
+  /** 换候选人：同时把他的第一份简历设为当前简历 */
+  openPerson: (personId: string) => void;
+  /** 换简历（同一个人的另一份）：当前页落到它的第一页 */
+  openResume: (personId: string, resumeId: string) => void;
   /** 关标签：只从快速检索里移除，不删页 */
   closePage: (id: string) => void;
   expanded: Set<string>;

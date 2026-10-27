@@ -13,6 +13,11 @@
 //! 界面上的「预览」只是换个看法，不该顺手烧一次模型调用。
 //!
 //! 会话 key：`layout:<resumeId>:<pageId>`，与人的会话共用 app.db。
+//!
+//! **它不改内容**。要改字就 `ask_session` 交给会话 agent；拿不准就
+//! `note_on_page` 在纸面上留一句给用户看。这两样都只是普通 action，
+//! 随 `layout:applied` 的 `turn.actions` 一起回传，`drain` 里不用另做处理 ——
+//! 多一条专用通道就多一处会漏掉的分支。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -25,7 +30,11 @@ use crate::net::{AiRequest, ChatMessage};
 use crate::session::{self, Sessions};
 use crate::tools::{Scope, ToolCtx};
 
-/// 与会话 agent 共用一套「每轮注入定位」的做法：页面的形状每轮都可能变
+/// 与会话 agent 共用一套「每轮注入定位」的做法：页面的形状每轮都可能变。
+///
+/// 职责边界（只能改版面、不能改内容、一轮最多一条批注一个问题）写在
+/// `prompts/layout.md` 里 —— 提示词归提示词，这里只负责把 `{{page}}` 换成
+/// 这一页的形状。
 const SYSTEM: &str = include_str!("../../../prompts/layout.md");
 
 #[derive(Debug, Clone, Deserialize)]
@@ -201,11 +210,27 @@ fn fields_len(fields: &[Value]) -> usize {
         .sum()
 }
 
+/// 块的 role 写成一个短标记。没有 role 的块什么都不加 ——
+/// 缺失等同于 `plain`，说「role: plain」只是噪音。
+fn role_mark(block: &Value) -> String {
+    block
+        .get("role")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|role| !role.is_empty())
+        .map(|role| format!("〔role: {role}〕"))
+        .unwrap_or_default()
+}
+
 /// 把这一页的「形状」写成人话：模型据此判断挤还是空。
 ///
 /// 必须读 `blocks`。早先这里读的是 v4 的 `header` / `sections`，
 /// 模型升到 v5 之后那两个字段恒为空 —— 排版 agent 每轮看到的都是
 /// 「页头 0 个字段、0 个分区」，等于闭着眼睛排版。
+///
+/// 另一件必须交代的事：块的 `role`。结构化生成器按 role 选容器
+/// （tags / kv / table / grid-2…），排版 agent 不知道这一块已被接管成什么形态，
+/// 就会在 `parts` 里再手写一遍，两套排法叠在一起。
 fn describe_page(args: &LayoutArgs) -> String {
     let Some(person) = args
         .workspace
@@ -269,6 +294,7 @@ fn describe_page(args: &LayoutArgs) -> String {
     let mut header_fields = 0usize;
     let mut header_chars = 0usize;
     let mut header_block = String::new();
+    let mut header_role = String::new();
     let mut extra_groups = 0usize;
     let mut media = 0usize;
     let mut partition_lines: Vec<String> = Vec::new();
@@ -299,6 +325,7 @@ fn describe_page(args: &LayoutArgs) -> String {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string();
+                    header_role = role_mark(block);
                 }
             }
             "section" => {
@@ -335,12 +362,13 @@ fn describe_page(args: &LayoutArgs) -> String {
                 total_bullets += bullets;
                 chars += section_chars;
                 partition_lines.push(format!(
-                    "· 分区「{}」（块 {}）：{} 条，{} 句要点，约 {} 字",
+                    "· 分区「{}」（块 {}）：{} 条，{} 句要点，约 {} 字{}",
                     if title.is_empty() { "未命名" } else { &title },
                     block.get("id").and_then(Value::as_str).unwrap_or("?"),
                     items.len(),
                     bullets,
-                    section_chars
+                    section_chars,
+                    role_mark(block)
                 ));
             }
             "media" => media += 1,
@@ -355,7 +383,7 @@ fn describe_page(args: &LayoutArgs) -> String {
         pages.len()
     );
     if !header_block.is_empty() {
-        out.push_str(&format!("｜块 {header_block}"));
+        out.push_str(&format!("｜块 {header_block}{header_role}"));
     }
     if extra_groups > 0 {
         out.push_str(&format!("，另有 {extra_groups} 组补充字段"));
@@ -736,6 +764,19 @@ mod tests {
             json!({ "html": "<article>x</article>" });
         let text = describe_page(&args);
         assert!(text.contains("整页手写"), "{text}");
+    }
+
+    /// role 是排版 agent 判断「这一块已经被结构化生成接管成什么形态」的唯一线索。
+    /// 不显示的话，它会在 parts 里把 tags 再手写一遍 —— 两套排法叠在一起，
+    /// 用户看到的是错位，而模型以为自己只是「优化了一下」。
+    #[test]
+    fn page_brief_shows_block_roles() {
+        let mut args = sample();
+        args.workspace["people"][0]["resumes"][0]["pages"][1]["blocks"][0]["role"] = json!("kv");
+        args.workspace["people"][0]["resumes"][0]["pages"][1]["blocks"][1]["role"] = json!("tags");
+        let text = describe_page(&args);
+        assert!(text.contains("〔role: kv〕"), "页头的 role：{text}");
+        assert!(text.contains("〔role: tags〕"), "分区的 role：{text}");
     }
 
     #[test]

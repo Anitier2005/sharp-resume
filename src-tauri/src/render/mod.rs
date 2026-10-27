@@ -55,9 +55,24 @@ const TAGS: &[&str] = &[
 ];
 
 /// 允许出现在任意标签上的属性。
+///
+/// `data-block` 是块锚点：批注要贴到具体块上、以后「点纸面某段 → 跳到表单」
+/// 也要靠它。`data-*` 默认会被 ammonia 丢掉，所以必须显式放行。
 const GENERIC_ATTRS: &[&str] = &[
     "style", "class", "src", "alt", "width", "height", "href", "colspan", "rowspan", "viewbox",
+    "data-block",
 ];
+
+/// 契约第 5 节的 role 全集。认识的 role 才分派，其余回落 `plain` 并警告 ——
+/// 静默回落会让 agent 以为自己排好了，实际什么都没变。
+const ROLES: [&str; 12] = [
+    "plain", "tight", "band", "tags", "kv", "table", "grid-2", "grid-3", "cols-2", "cols-3",
+    "split", "row",
+];
+
+/// `split` 是「左栏元素 + 右栏元素」的双列结构，只有手写片段能保证这个 shape。
+/// 结构化条目永远长成 `<b> + .meta… + <ul>`，不警告就只剩一张挤扁的纸。
+const SPLIT_UNSUPPORTED: &str = "split 只适合手写片段（parts），结构化档不支持，已按 plain 处理";
 
 /// `style` 里允许的属性。
 ///
@@ -116,10 +131,14 @@ pub const GUIDE: &str = r#"【这一页默认长什么样】
 布局
   cols-2 / cols-3      多栏流式排布（技能、短要点），内容会自动分配到各栏
   grid-2 / grid-3      两列 / 三列网格，各块独立，不会被流断
-  split                左窄右宽两栏：左边放时间地点，右边放内容
-  row                  一行两端对齐：左边标题、右边 .end 放时间
+  row                  一行两端对齐：左边标题、右边放时间。逐条生效
   stack                条目之间不留空隙，靠虚线断开
   panel                浅底色块，适合把技能、证书独立出来
+
+手写片段（parts）专用，结构化档不支持
+  split                左窄右宽两栏：左边放时间地点，右边放内容
+                       要求里面正好是「一个左栏元素 + 一个右栏元素」；
+                       生成器产出的条目给不出这个形状，role=split 会被忽略
 
 分区标题（加在 section 上）
   sec.plain            去掉下划线
@@ -174,6 +193,10 @@ src 写 asset:<id>，id 从 read_person 的材料清单里取。
 - 用字数估容量：compact 950–1150 字、normal 700–900、roomy 550–700（含标点）
 - 超了就压一档或减少留白；压过头就放回来，落在区间内才算排好
 - 你改的只是版面：内容一个字都不会因为排版而丢，放手调
+
+【矢量与图表】
+曲线、流程图、时间轴、进度条一律用 <svg>（含 g/path/circle/rect/line/polyline/polygon/ellipse/text）。
+canvas 会被清洗掉，不要用；也不要写 <script>、事件属性（onclick 等）。
 "#;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -299,9 +322,9 @@ fn render_blocks(
         match block.kind.as_str() {
             "fields" => {
                 if Some(index) == first_fields {
-                    out.push_str(&render_head(&block.fields, person, warnings));
+                    out.push_str(&render_head(block, person, warnings));
                 } else if !block.fields.is_empty() {
-                    out.push_str(&render_group(&block.fields, person, warnings));
+                    out.push_str(&render_group(block, person, warnings));
                 }
             }
             "section" => out.push_str(&render_section(block, person, warnings)),
@@ -313,9 +336,92 @@ fn render_blocks(
     out
 }
 
+/// 块的锚点：`data-block="<blockId>"`，加在每个块的根元素上。
+///
+/// id 来自库，形态是 `[A-Za-z0-9_-]`，本身安全；仍然过一遍 `escape` ——
+/// 同一个字段将来会被导入的外部数据填进来，那时就不一定干净了。
+fn block_attr(id: &str) -> String {
+    format!(r#" data-block="{}""#, escape(id))
+}
+
+fn class_of(base: &str, extra: &str) -> String {
+    match extra {
+        "" => base.to_string(),
+        _ => format!("{base} {extra}"),
+    }
+}
+
+/// 规范化后的分区角色。用枚举而不是字符串，是为了让「哪种条目渲染」
+/// 在 match 里必须被穷尽处理一次，不会漏掉某一档。
+#[derive(Clone, Copy, PartialEq)]
+enum SectionRole {
+    Plain,
+    Tight,
+    Band,
+    Tags,
+    Kv,
+    Table,
+    /// class 加在 section 自己身上：整个分区变成网格 / 分栏
+    SectionLayout(&'static str),
+    /// class 只包条目、标题留在外面：`row` 的两端对齐不该把标题也算作一行里的元素
+    EntryLayout(&'static str),
+}
+
+impl SectionRole {
+    /// `role` 缺失 = plain（旧数据没有这个字段，不该刷警告）
+    fn parse(block: &Block, warnings: &mut Vec<String>) -> Self {
+        let Some(raw) = block
+            .role
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        else {
+            return SectionRole::Plain;
+        };
+        match raw {
+            "plain" => SectionRole::Plain,
+            "tight" => SectionRole::Tight,
+            "band" => SectionRole::Band,
+            "tags" => SectionRole::Tags,
+            "kv" => SectionRole::Kv,
+            "table" => SectionRole::Table,
+            // 网格与多栏作用于整块：标题占满整行（CSS 里补了 grid-column: 1/-1）
+            "grid-2" => SectionRole::SectionLayout("grid-2"),
+            "grid-3" => SectionRole::SectionLayout("grid-3"),
+            "cols-2" => SectionRole::SectionLayout("cols-2"),
+            "cols-3" => SectionRole::SectionLayout("cols-3"),
+            // 一行两端对齐，但只包条目：标题留在 section 里
+            "row" => SectionRole::EntryLayout("row"),
+            // split 是「一个左栏元素 + 一个右栏元素」的双列结构，结构化条目是
+            // <b> + 若干 .meta + <ul>，塞进 78px 窄栏只会把公司名挤成三行
+            "split" => {
+                warnings.push(SPLIT_UNSUPPORTED.into());
+                SectionRole::Plain
+            }
+            other => {
+                warnings.push(format!("不认识的 role：{other}，按 plain 处理"));
+                SectionRole::Plain
+            }
+        }
+    }
+
+    /// 追加到 `sec` 后面的 class；plain 什么都不加，保持旧成品逐字节不变
+    fn class(self) -> &'static str {
+        match self {
+            SectionRole::Plain => "",
+            SectionRole::Tight => "tight",
+            SectionRole::Band => "band",
+            SectionRole::Tags | SectionRole::Kv | SectionRole::Table => "",
+            SectionRole::SectionLayout(role) => role,
+            // 包条目的那两档不许碰到 section
+            SectionRole::EntryLayout(_) => "",
+        }
+    }
+}
+
 /// 页头：第一个文本字段是大标题，其余按「标签：值」排；照片与文字并排
-fn render_head(fields: &[Field], person: &Person, warnings: &mut Vec<String>) -> String {
-    let (texts, images) = split_fields(fields);
+fn render_head(block: &Block, person: &Person, warnings: &mut Vec<String>) -> String {
+    let (texts, images) = split_fields(&block.fields);
 
     // 照片优先用页头里显式指定的那张字段图；旧数据没指定时退回人身上第一张，
     // 免得升级之后用户原有的证件照突然不见了
@@ -363,7 +469,10 @@ fn render_head(fields: &[Field], person: &Person, warnings: &mut Vec<String>) ->
         None => text,
     };
 
-    format!(r#"<header class="head">{inner}<div class="rule"></div></header>"#)
+    format!(
+        r#"<header class="head"{}>{inner}<div class="rule"></div></header>"#,
+        block_attr(&block.id)
+    )
 }
 
 /// 扫一段手写 HTML 里的 `asset:<id>`，把不存在的记成警告。
@@ -414,8 +523,8 @@ fn render_field_images(
     out
 }
 
-fn render_group(fields: &[Field], person: &Person, warnings: &mut Vec<String>) -> String {
-    let (texts, images) = split_fields(fields);
+fn render_group(block: &Block, person: &Person, warnings: &mut Vec<String>) -> String {
+    let (texts, images) = split_fields(&block.fields);
     let mut inner = String::new();
     for field in &texts {
         let line = field_text(field);
@@ -430,36 +539,121 @@ fn render_group(fields: &[Field], person: &Person, warnings: &mut Vec<String>) -
     if inner.is_empty() {
         return String::new();
     }
-    format!(r#"<div class="group">{inner}</div>"#)
+    format!(
+        r#"<div class="{}"{}>{inner}</div>"#,
+        class_of("group", group_extra_class(block, warnings)),
+        block_attr(&block.id)
+    )
 }
 
+/// 字段组只认两栏：`grid-2` 各占一格不串行，`cols-2` 按流分栏。
+/// 其余 role 在字段组上没有意义（没有标题、没有条目可拆），说出来比静默吞掉好。
+fn group_extra_class(block: &Block, warnings: &mut Vec<String>) -> &'static str {
+    let Some(role) = block
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    else {
+        return "";
+    };
+    match role {
+        "plain" => "",
+        "grid-2" => "grid-2",
+        "cols-2" => "cols-2",
+        // 字段组同样给不出「左栏 + 右栏」，理由与分区档相同
+        "split" => {
+            warnings.push(SPLIT_UNSUPPORTED.into());
+            ""
+        }
+        other if ROLES.contains(&other) => {
+            warnings.push(format!("role {other} 只对分区生效，字段组按 plain 处理"));
+            ""
+        }
+        other => {
+            warnings.push(format!("不认识的 role：{other}，按 plain 处理"));
+            ""
+        }
+    }
+}
+
+/// 分区 → 容器。role 决定「用哪个 class」和「条目怎么落成子元素」。
+///
+/// 为什么拆成四个 renderer 而不是在一个函数里串 if：
+/// tags / kv / table 对**条目**的解读完全不同（一条 = 一个标签 / 两列键值 / 一行表格），
+/// 堆在同一个函数里，改 tags 的规则时会误伤 kv。
 fn render_section(block: &Block, person: &Person, warnings: &mut Vec<String>) -> String {
-    let mut inner = String::new();
-    if !block.title.trim().is_empty() {
-        inner.push_str(&format!(r#"<h2 class="t">{}</h2>"#, escape(&block.title)));
+    let role = SectionRole::parse(block, warnings);
+
+    let mut inner = section_title(block);
+    match role {
+        SectionRole::Tags => {
+            warn_if_lossy(block, person, "tags", warnings);
+            inner.push_str(&render_tags(block, person));
+        }
+        SectionRole::Kv => {
+            warn_if_lossy(block, person, "kv", warnings);
+            inner.push_str(&render_kv(block, person));
+        }
+        SectionRole::Table => {
+            warn_if_lossy(block, person, "table", warnings);
+            inner.push_str(&render_table(block, person));
+        }
+        // 标题已经写进 inner 了，这里只把条目包进布局容器：
+        // <section class="sec"><h2>标题</h2><div class="row">…</div></section>
+        SectionRole::EntryLayout(container) => {
+            let entries = render_entries(block, person, warnings);
+            if !entries.is_empty() {
+                inner.push_str(&format!(r#"<div class="{container}">{entries}</div>"#));
+            }
+        }
+        // 纯样式档：条目还是「加粗首字段 + 次要信息 + 要点列表」，只是容器换了 class
+        _ => inner.push_str(&render_entries(block, person, warnings)),
     }
+
+    format!(
+        r#"<section class="{}"{}>{inner}</section>"#,
+        class_of("sec", role.class()),
+        block_attr(&block.id)
+    )
+}
+
+/// 常规条目序列。放在这里而不是内联进 `render_section`，
+/// 是因为它会被两个分支用到，而 tags/kv/table 分支不该白跑一遍
+/// —— 那会重复产出「图片缺失」之类的警告。
+fn render_entries(block: &Block, person: &Person, warnings: &mut Vec<String>) -> String {
+    let mut out = String::new();
     for entry in &block.items {
-        inner.push_str(&render_entry(entry, person, warnings));
+        out.push_str(&render_entry(entry, person, warnings));
     }
-    format!(r#"<section class="sec">{inner}</section>"#)
+    out
+}
+
+fn section_title(block: &Block) -> String {
+    if block.title.trim().is_empty() {
+        return String::new();
+    }
+    format!(r#"<h2 class="t">{}</h2>"#, escape(&block.title))
+}
+
+/// 本页字段优先；为空表示继承库里那一条。
+///
+/// 四种渲染方式都要先回答「这一条到底有哪些字段」，判定只留这一处：
+/// 页面自己存的字段与库里那条经常一半一半，各写一遍必然对不齐。
+fn entry_fields<'a>(entry: &'a SectionEntry, person: &'a Person) -> &'a [Field] {
+    if !entry.fields.is_empty() {
+        return &entry.fields;
+    }
+    entry
+        .ref_id
+        .as_deref()
+        .and_then(|id| person.items.iter().find(|item| item.id == id))
+        .map(|item| item.fields.as_slice())
+        .unwrap_or(&[])
 }
 
 fn render_entry(entry: &SectionEntry, person: &Person, warnings: &mut Vec<String>) -> String {
-    // 本页字段优先；为空表示继承库里那一条
-    let inherited;
-    let fields: &[Field] = if !entry.fields.is_empty() {
-        &entry.fields
-    } else {
-        inherited = entry
-            .ref_id
-            .as_deref()
-            .and_then(|id| person.items.iter().find(|item| item.id == id));
-        match inherited {
-            Some(source) => &source.fields,
-            None => &[],
-        }
-    };
-
+    let fields = entry_fields(entry, person);
     let (texts, images) = split_fields(fields);
 
     let mut inner = String::new();
@@ -486,6 +680,111 @@ fn render_entry(entry: &SectionEntry, person: &Person, warnings: &mut Vec<String
     format!(r#"<div class="entry">{inner}</div>"#)
 }
 
+/// 标签云：一条只落一个 `<span class="tag">`。
+///
+/// 取第一个**文本**字段（图片字段的值是图注，落成标签会印出半句话）。
+/// 值空着时退回标签名 —— 一个「公司」标签也比一片空白有信息量。
+fn render_tags(block: &Block, person: &Person) -> String {
+    let mut inner = String::new();
+    for entry in &block.items {
+        let (texts, _) = split_fields(entry_fields(entry, person));
+        let Some(first) = texts.first() else {
+            continue;
+        };
+        let text = lead_title(first);
+        if text.trim().is_empty() {
+            continue;
+        }
+        inner.push_str(&format!(r#"<span class="tag">{}</span>"#, escape(&text)));
+    }
+    if inner.is_empty() {
+        return String::new();
+    }
+    format!(r#"<div class="tags">{inner}</div>"#)
+}
+
+/// 键值：每个文本字段一对 `dt/dd`，条目只是分组用的，不再单独包一层。
+fn render_kv(block: &Block, person: &Person) -> String {
+    let mut inner = String::new();
+    for entry in &block.items {
+        let (texts, _) = split_fields(entry_fields(entry, person));
+        for field in texts {
+            let label = field.label.trim();
+            let value = field.value.trim();
+            // 两个都空时输出 <dt></dt><dd></dd> 只会在纸上留一道空隙
+            if label.is_empty() && value.is_empty() {
+                continue;
+            }
+            inner.push_str(&format!(
+                "<dt>{}</dt><dd>{}</dd>",
+                escape(label),
+                escape(value)
+            ));
+        }
+    }
+    if inner.is_empty() {
+        return String::new();
+    }
+    format!(r#"<dl class="kv">{inner}</dl>"#)
+}
+
+/// 表格：一条一行，字段值按顺序成列，第一列加粗当行首。
+///
+/// 这里刻意不用 `field_text`（标签：值）：表格的列宽已经暗示了「标签」这一维，
+/// 再把标签塞进单元格，一张技能表会挤成两行。
+/// 也为空格保留 `<td>`：列数一旦错位，整张表就串行了。
+fn render_table(block: &Block, person: &Person) -> String {
+    let mut rows = String::new();
+    for entry in &block.items {
+        let (texts, _) = split_fields(entry_fields(entry, person));
+        if texts.is_empty() {
+            continue;
+        }
+        let mut row = String::from("<tr>");
+        for (index, field) in texts.iter().enumerate() {
+            let text = escape(field.value.trim());
+            if index == 0 {
+                row.push_str(&format!("<td><b>{text}</b></td>"));
+            } else {
+                row.push_str(&format!("<td>{text}</td>"));
+            }
+        }
+        row.push_str("</tr>");
+        rows.push_str(&row);
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    format!("<table><tbody>{rows}</tbody></table>")
+}
+
+/// tags / kv / table 只排字段，要点和多出来的字段会消失。
+///
+/// GUIDE 里承诺「内容不会因为排版而丢」，所以这里必须吭声：
+/// agent 换了 role 之后以为排好了，实际用户少了两行字，是更糟的结果。
+fn warn_if_lossy(block: &Block, person: &Person, role: &str, warnings: &mut Vec<String>) {
+    // tags 一条只取第一个字段，其余算丢；kv / table 字段全排，只有要点会丢
+    let keep = if role == "tags" { 1 } else { usize::MAX };
+    let mut bullets = 0;
+    let mut fields = 0;
+    for entry in &block.items {
+        bullets += entry.bullets.iter().filter(|line| !line.trim().is_empty()).count();
+        let (texts, _) = split_fields(entry_fields(entry, person));
+        fields += texts.len().saturating_sub(keep);
+    }
+    if bullets == 0 && fields == 0 {
+        return;
+    }
+    let title = if block.title.trim().is_empty() {
+        "未命名分区"
+    } else {
+        block.title.trim()
+    };
+    warnings.push(format!(
+        "「{title}」用 {role} 排：{bullets} 条要点、{fields} 个字段没有出现在纸上，确认这是你要的"
+    ));
+}
+
 fn render_media(block: &Block, person: &Person, warnings: &mut Vec<String>) -> String {
     let Some(asset_id) = block.asset_id.as_deref().filter(|id| !id.trim().is_empty()) else {
         warnings.push("图片块没有引用任何资产".into());
@@ -494,11 +793,16 @@ fn render_media(block: &Block, person: &Person, warnings: &mut Vec<String>) -> S
 
     if find_asset(person, asset_id).is_none() {
         warnings.push(format!("图片块引用了找不到的资产：{asset_id}"));
-        return r#"<figure class="fig missing">图片缺失</figure>"#.to_string();
+        // 缺失时也要留锚点：批注要贴在「这一块」上，而不是飘在页边
+        return format!(
+            r#"<figure class="fig missing"{}>图片缺失</figure>"#,
+            block_attr(&block.id)
+        );
     }
 
     let mut out = format!(
-        r#"<figure class="fig"><img src="asset:{}" alt="">"#,
+        r#"<figure class="fig"{}><img src="asset:{}" alt="">"#,
+        block_attr(&block.id),
         escape(asset_id)
     );
     if let Some(caption) = block.caption.as_deref().filter(|text| !text.trim().is_empty()) {
@@ -607,6 +911,9 @@ fn sanitizer() -> &'static ammonia::Builder<'static> {
         let mut builder = ammonia::Builder::default();
         builder
             .tags(TAGS.iter().copied().collect::<HashSet<_>>())
+            // generic_attributes 就是属性白名单。ammonia 默认丢掉所有 `data-*`，
+            // `data-block` 必须写在这里才会被留下 —— 写在 attribute_filter 里没用，
+            // 那个回调只对「已经通过白名单」的属性执行。
             .generic_attributes(GENERIC_ATTRS.iter().copied().collect::<HashSet<_>>())
             // 只允许排版类属性；非法声明与 @ 规则会被这里剔掉
             .filter_style_properties(CSS_PROPS.iter().copied().collect::<HashSet<_>>())
@@ -1071,5 +1378,282 @@ mod tests {
         assert_eq!(dead.len(), 1, "{:?}", out.warnings);
         // 存在的那个不能误报
         assert!(!out.warnings.iter().any(|line| line.contains("a-work")), "{:?}", out.warnings);
+    }
+
+    /* ---------- role → 容器 class（契约第 5 节） ---------- */
+
+    /// 只有一页、一个分区的小页：把注意力集中在 role 的产出上
+    fn solo_section(role: &str, items: Value) -> ResumePage {
+        serde_json::from_value(json!({
+            "id": "pg1",
+            "kind": "native",
+            "label": "简历",
+            "blocks": [{
+                "id": "b2",
+                "kind": "section",
+                "title": "技能",
+                "role": role,
+                "items": items
+            }]
+        }))
+        .expect("section page")
+    }
+
+    /// 每条一个文本字段，值依次取传入的字符串
+    fn one_field_entries(values: &[&str]) -> Value {
+        let items: Vec<Value> = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                json!({
+                    "id": format!("e{index}"),
+                    "fields": [{ "id": format!("f{index}"), "label": "技能", "value": value }],
+                    "bullets": []
+                })
+            })
+            .collect();
+        Value::Array(items)
+    }
+
+    /// tags：一条一个 `<span class="tag">`，取的是第一个字段的**值**而不是「标签：值」
+    #[test]
+    fn tags_role_turns_each_entry_into_one_tag() {
+        let page = solo_section("tags", one_field_entries(&["报关", "船务", "Excel"]));
+        let out = compile(&page, &person());
+
+        assert!(out.html.contains(r#"<div class="tags">"#), "{}", out.html);
+        assert!(out.html.contains(r#"<span class="tag">报关</span>"#), "{}", out.html);
+        assert!(out.html.contains(r#"<span class="tag">Excel</span>"#), "{}", out.html);
+        // 标签是值，不该印成「技能：报关」
+        assert!(!out.html.contains("技能：报关"), "{}", out.html);
+        // 容器还是分区，标题照常生成
+        assert!(out.html.contains(r#"<section class="sec""#), "{}", out.html);
+        assert!(out.html.contains(r#"<h2 class="t">技能</h2>"#), "{}", out.html);
+        // 一条字段全用上了，没有内容被丢，不该刷警告
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    }
+
+    /// kv：每个字段一对 dt/dd，不再套 entry 那层 div（多一层会把两列挤歪）
+    #[test]
+    fn kv_role_renders_each_field_as_a_pair() {
+        let page = solo_section(
+            "kv",
+            json!([{
+                "id": "e1",
+                "fields": [
+                    { "id": "f1", "label": "英语", "value": "CET-6" },
+                    { "id": "f2", "label": "普通话", "value": "二级甲等" }
+                ],
+                "bullets": []
+            }]),
+        );
+        let out = compile(&page, &person());
+
+        assert!(out.html.contains(r#"<dl class="kv">"#), "{}", out.html);
+        assert!(out.html.contains("<dt>英语</dt><dd>CET-6</dd>"), "{}", out.html);
+        assert!(out.html.contains("<dt>普通话</dt><dd>二级甲等</dd>"), "{}", out.html);
+        assert!(!out.html.contains(r#"class="entry""#), "{}", out.html);
+    }
+
+    /// table：一条一行，字段值按顺序成列，第一列加粗当行首
+    #[test]
+    fn table_role_renders_one_row_per_entry_with_a_bold_first_cell() {
+        let page = solo_section(
+            "table",
+            json!([
+                {
+                    "id": "e1",
+                    "fields": [
+                        { "id": "f1", "label": "年度", "value": "2023" },
+                        { "id": "f2", "label": "单量", "value": "1200" }
+                    ],
+                    "bullets": []
+                },
+                {
+                    "id": "e2",
+                    "fields": [
+                        { "id": "f3", "label": "年度", "value": "2024" },
+                        { "id": "f4", "label": "单量", "value": "1500" }
+                    ],
+                    "bullets": []
+                }
+            ]),
+        );
+        let out = compile(&page, &person());
+
+        assert!(out.html.contains("<table><tbody>"), "{}", out.html);
+        assert!(
+            out.html.contains("<tr><td><b>2023</b></td><td>1200</td></tr>"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("<tr><td><b>2024</b></td><td>1500</td></tr>"),
+            "{}",
+            out.html
+        );
+        // 单元格里只放值：标签已经在列语义里，再写进去一张表会挤成两行
+        assert!(!out.html.contains("年度："), "{}", out.html);
+    }
+
+    /// tight / band 只是换 class，条目仍然照常渲染
+    #[test]
+    fn tight_and_band_only_add_a_class() {
+        let out = compile(&solo_section("tight", one_field_entries(&["报关"])), &person());
+        assert!(out.html.contains(r#"<section class="sec tight""#), "{}", out.html);
+        assert!(out.html.contains(r#"<div class="entry""#), "{}", out.html);
+
+        let out = compile(&solo_section("band", one_field_entries(&["报关"])), &person());
+        assert!(out.html.contains(r#"<section class="sec band""#), "{}", out.html);
+        assert!(out.html.contains(r#"<div class="entry""#), "{}", out.html);
+    }
+
+    /// grid-2 这类布局档同样保留常规条目，只是换容器
+    #[test]
+    fn layout_role_keeps_regular_entries() {
+        let out = compile(&solo_section("grid-2", one_field_entries(&["甲", "乙"])), &person());
+        assert!(out.html.contains(r#"<section class="sec grid-2""#), "{}", out.html);
+        assert_eq!(out.html.matches(r#"class="entry""#).count(), 2, "{}", out.html);
+    }
+
+    /// row 仍然只包条目、标题留在 section 直下；样式改成逐条生效
+    #[test]
+    fn row_role_wraps_entries_and_targets_each_one() {
+        let out = compile(&solo_section("row", one_field_entries(&["甲", "乙"])), &person());
+        // 结构不变：标题在 section 直下，条目容器是它的兄弟
+        assert!(
+            out.html.contains(r#"<h2 class="t">技能</h2><div class="row">"#),
+            "{}",
+            out.html
+        );
+        assert!(!out.html.contains(r#"class="sec row""#), "{}", out.html);
+        assert_eq!(out.html.matches(r#"class="entry""#).count(), 2, "{}", out.html);
+        // 容器级 flex 会把两条挤成一行，样式必须落到 .entry 上
+        assert!(PRESET_CSS.contains(".row > .entry"), "样式表缺 .row > .entry");
+    }
+
+    /// split 只适合手写片段：结构化条目给不出「左栏 + 右栏」，必须回落并吭声
+    #[test]
+    fn split_role_is_rejected_for_structured_pages() {
+        let out = compile(&solo_section("split", one_field_entries(&["报关", "船务"])), &person());
+        assert!(
+            !out.html.contains(r#"class="split""#),
+            "结构化档不该产出 split 容器：{}",
+            out.html
+        );
+        assert!(out.html.contains(r#"<section class="sec""#), "{}", out.html);
+        assert_eq!(out.html.matches(r#"class="entry""#).count(), 2, "{}", out.html);
+        assert!(
+            out.warnings.iter().any(|w| w.contains("split")),
+            "{:?}",
+            out.warnings
+        );
+        // 手写片段还在用 .split，样式表里不能删
+        assert!(PRESET_CSS.contains(".split {"), "样式表缺 .split");
+    }
+
+    /// 不认识的 role 回落 plain 并且必须吭声：静默回落会让 agent 以为排好了
+    #[test]
+    fn unknown_role_falls_back_to_plain_with_a_warning() {
+        let out = compile(
+            &solo_section("masonry", one_field_entries(&["报关"])),
+            &person(),
+        );
+        assert!(out.html.contains(r#"<section class="sec""#), "{}", out.html);
+        assert!(!out.html.contains("masonry"), "{}", out.html);
+        assert!(
+            out.warnings.iter().any(|w| w.contains("masonry")),
+            "{:?}",
+            out.warnings
+        );
+    }
+
+    /// tags 会丢掉要点和多余字段：必须警告，不能让「内容不会丢」变成空话
+    #[test]
+    fn tags_role_warns_when_it_drops_bullets() {
+        let page = solo_section(
+            "tags",
+            json!([{
+                "id": "e1",
+                "fields": [{ "id": "f1", "label": "技能", "value": "报关" }],
+                "bullets": ["负责单证"]
+            }]),
+        );
+        let out = compile(&page, &person());
+        assert!(out.html.contains(r#"<span class="tag">报关</span>"#), "{}", out.html);
+        assert!(
+            out.warnings.iter().any(|w| w.contains("要点")),
+            "{:?}",
+            out.warnings
+        );
+    }
+
+    /// 每个结构化块的根元素都要带 data-block，否则批注无从贴起
+    #[test]
+    fn generated_blocks_carry_their_id() {
+        let out = compile(&page(), &person());
+        assert!(
+            out.html.contains(r#"data-block="b1""#),
+            "页头要带锚点：{}",
+            out.html
+        );
+        assert!(
+            out.html.contains(r#"data-block="b2""#),
+            "分区要带锚点：{}",
+            out.html
+        );
+    }
+
+    /// ammonia 默认丢弃所有 `data-*`。这条专门盯清洗器：
+    /// 生成器写进去、又恰好没走清洗，不能算「通过了 ammonia」。
+    #[test]
+    fn data_block_survives_the_sanitizer() {
+        let cleaned = sanitize(r#"<section data-block="b7"><p>正文</p></section>"#);
+        assert!(cleaned.contains(r#"data-block="b7""#), "{cleaned}");
+
+        // 白名单只开了这一个：别的 data-* 仍然要被丢掉
+        let cleaned = sanitize(r#"<p data-track="x" data-block="b8">正文</p>"#);
+        assert!(cleaned.contains(r#"data-block="b8""#), "{cleaned}");
+        assert!(!cleaned.contains("data-track"), "{cleaned}");
+    }
+
+    /// 页头之后插一个补充字段组，role 决定它是什么角色
+    fn page_with_group(role: &str) -> ResumePage {
+        let mut page = page();
+        page.blocks.insert(
+            1,
+            serde_json::from_value(json!({
+                "id": "b9",
+                "kind": "fields",
+                "role": role,
+                "fields": [
+                    { "id": "g1", "label": "电话", "value": "13800000000" },
+                    { "id": "g2", "label": "城市", "value": "上海" }
+                ]
+            }))
+            .expect("group block"),
+        );
+        page
+    }
+
+    /// 补充字段组支持两栏；其余 role 对字段组没意义，要说出来而不是静默吞掉
+    #[test]
+    fn a_fields_block_can_be_a_two_column_group() {
+        let out = compile(&page_with_group("grid-2"), &person());
+        assert!(
+            out.html
+                .contains(r#"<div class="group grid-2" data-block="b9">"#),
+            "{}",
+            out.html
+        );
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+
+        let out = compile(&page_with_group("table"), &person());
+        assert!(out.html.contains(r#"<div class="group" data-block="b9">"#), "{}", out.html);
+        assert!(
+            out.warnings.iter().any(|w| w.contains("只对分区生效")),
+            "{:?}",
+            out.warnings
+        );
     }
 }

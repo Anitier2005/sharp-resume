@@ -30,11 +30,21 @@ pub struct TurnResult {
     pub assets: Vec<crate::model::Asset>,
 }
 
+/// 收尾：界面指令 + 一条内容信封。
+///
+/// 顺序不能反 —— 删掉用户正看着的那一页时，`openPage`（切到邻页）必须排在
+/// `mutate`（真的删）前面，否则中间会闪一下空面板。信封在轮末才追加，
+/// 天然满足「界面先行、内容落地在后」。
 fn drain_actions(out: &crate::tools::Outbox) -> Vec<Value> {
-    out.actions
+    let mut actions = out
+        .actions
         .lock()
         .map(|guard| guard.clone())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if let Some(envelope) = crate::tools::edit::flush_all(out) {
+        actions.push(envelope);
+    }
+    actions
 }
 
 fn drain_assets(out: &crate::tools::Outbox) -> Vec<crate::model::Asset> {
@@ -104,6 +114,9 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
     use std::sync::atomic::Ordering;
 
     let specs = crate::tools::specs(scope);
+    // 内容暂存区按轮计：先清一次，免得上一轮残留（取消 / 报错提前退出时没结算）
+    // 悄悄漏进这一轮
+    crate::tools::edit::begin(ctx.out);
     let mut messages = messages;
     let mut speech = String::new();
     let mut used: Vec<String> = Vec::new();

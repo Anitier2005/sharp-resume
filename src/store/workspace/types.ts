@@ -1,10 +1,12 @@
 import type {
   AccentKey,
   Asset,
+  BlockRole,
   ChatMessage,
   Field,
   LibraryItem,
   PageLayout,
+  PageNote,
   PageStyle,
   Person,
   ResumePage,
@@ -23,7 +25,7 @@ export type Action =
   | { type: "setTextScale"; textScale: number | null }
   | { type: "patchUi"; patch: Partial<Workspace["ui"]> }
   | { type: "createPerson" }
-  | { type: "createResume"; personId: string }
+  | { type: "createResume"; personId: string; title?: string; resumeId?: string }
   | { type: "renameResume"; personId: string; resumeId: string; title: string }
   | { type: "deleteResume"; personId: string; resumeId: string }
   | { type: "deletePerson"; personId: string }
@@ -33,7 +35,21 @@ export type Action =
   | { type: "personAssets"; personId: string; assets: Asset[] }
   | { type: "itemAssets"; personId: string; itemId: string; assets: Asset[] }
   /* ---------- 页面 ---------- */
-  | { type: "addPage"; personId: string; resumeId: string }
+  | {
+      type: "addPage";
+      personId: string;
+      resumeId: string;
+      /** 新页页名；空则沿用「未命名页」 */
+      label?: string;
+      /**
+       * 建完是否把用户带到新页。
+       * 注意：真正的「当前页」游标在 provider 里（视图态，不落盘），
+       * reducer 只能把新页顶到 `ui.openPages[0]`，由 provider 对齐。
+       */
+      open?: boolean;
+      /** 预生成 id：调用方（agent 通道）需要在 dispatch 之后立刻指向这一页 */
+      id?: string;
+    }
   | { type: "removePage"; personId: string; resumeId: string; pageId: string }
   | { type: "pageLabel"; personId: string; resumeId: string; pageId: string; label: string }
   | { type: "pageHeader"; personId: string; resumeId: string; pageId: string; header: Field[] }
@@ -42,8 +58,46 @@ export type Action =
   | { type: "pageLayout"; personId: string; resumeId: string; pageId: string; layout: PageLayout }
   /** 工具产出的新材料（图片转化等）。按 id 去重后并进人的材料列表 */
   | { type: "addAssets"; personId: string; assets: Asset[] }
+  /**
+   * 排版提示：只改「这块用哪种容器」，不动内容。
+   * `role` 省略 = 清掉提示，回落 plain。
+   */
+  | {
+      type: "blockRole";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      blockId: string;
+      role?: BlockRole;
+    }
+  /**
+   * 纸面批注：按 note.id 去重追加 —— 同一批动作可能重放（界面重连、事件重投），
+   * 不去重会在纸面上叠出一模一样的第二个点。
+   */
+  | {
+      type: "pageNote";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      note: PageNote;
+    }
   /* ---------- 分区与条目 ---------- */
-  | { type: "addSection"; personId: string; resumeId: string; pageId: string; title: string }
+  | {
+      type: "addSection";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      title: string;
+      /**
+       * 工具预生成的分区块 id。
+       * 同一轮里紧跟着的 `add_entry({sectionId})` 用的就是这个 id ——
+       * 让 reducer 自己 uid() 的话，那条 op 找不到容器、被静默跳过，
+       * 而工具那边已经返回成功了。
+       */
+      id?: string;
+      /** 插到这个块之后；没给就追加到页尾 */
+      afterBlockId?: string;
+    }
   | {
       type: "removeSection";
       personId: string;

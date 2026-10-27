@@ -12,11 +12,11 @@ import { diff, flatten, renderDelta, type Flat } from "@/lib/changes";
 import { entriesOf } from "@/lib/blocks";
 import { skillsPrompt } from "@/lib/skills";
 import { AiSettingsSheet } from "./ai-settings";
-import { AssistantTurn, EmptyTurn, TypingTurn, UserTurn } from "./message";
+import { AssistantTurn, EmptyTurn, SystemTurn, TypingTurn, UserTurn } from "./message";
 import { aiReady, loadAi, saveAi, streamChat, type AiSettings } from "@/lib/ai";
 import { buildContext, buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
 import { isTauri } from "@/lib/storage";
-import { applyAgentActions, type AskQuestion } from "@/lib/agent-actions";
+import { applyAgentActions, layoutQuestion, registerChatBridge, type AskQuestion } from "@/lib/agent-actions";
 import { submitLayout } from "@/lib/layout";
 import { AskForm } from "./ask-form";
 import { displayName } from "@/types";
@@ -32,7 +32,8 @@ import styles from "./chat.module.css";
  */
 
 export function ChatPanel() {
-  const { state, person, resume, page, dispatch, setActivePageId } = useWorkspace();
+  const { state, person, resume, page, dispatch, setActivePageId, applyOps, openPerson, openResume } =
+    useWorkspace();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
@@ -44,6 +45,10 @@ export function ChatPanel() {
   const [ask, setAsk] = useState<AskQuestion[] | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** send 的自我引用：排版提问是在「收到指令时」再发一轮请求，写在 send 内部就成了递归 */
+  const sendRef = useRef<((text: string, attachments: Attachment[], forPage?: string) => void) | null>(
+    null,
+  );
   /** 上一轮发出时的页面快照（摊平后），用来算「这一轮之前你手改了什么」 */
   const baseRef = useRef<{ key: string; flat: Flat } | null>(null);
   /** 消息真相源在 Rust（chat_history 拉投影）；浏览器调试模式才退回工作区 */
@@ -136,8 +141,26 @@ export function ChatPanel() {
     [person, resume, page, state],
   );
 
+  /**
+   * 排版 agent 提问：在会话流里落一条「排版 · 关于第 N 页：…」，
+   * 再让会话 agent 为它跑一轮 —— 用户看到的是它真的被回答了，而不是一个悬着的问题。
+   *
+   * 5 秒防重是最后一道闸：两个 agent 互相呼叫时，后端单轮限次挡不住跨轮循环。
+   */
+  const askAt = useRef(new Map<string, number>());
+  const askFromLayout = useCallback(
+    (pageId: string, question: string, blockId?: string) => {
+      const now = Date.now();
+      if (now - (askAt.current.get(pageId) ?? 0) < 5000) return;
+      askAt.current.set(pageId, now);
+      const index = resume?.pages.findIndex((item) => item.id === pageId) ?? -1;
+      sendRef.current?.(layoutQuestion(index + 1, question, blockId), [], pageId);
+    },
+    [resume],
+  );
+
   const send = useCallback(
-    (text: string, attachments: Attachment[]) => {
+    (text: string, attachments: Attachment[], forPage?: string) => {
       if (!person || !resume) return;
 
       // 没有模型就到此为止：不发消息、不伪造回答，直接引导去配置
@@ -146,8 +169,12 @@ export function ChatPanel() {
         toast("先配置模型才能对话");
         return;
       }
-
-      const targetPage = page ?? resume.pages[0] ?? null;
+      // forPage：排版 agent 问的是「它当时在排的那一页」，可能不是用户此刻看的那页
+      const targetPage =
+        (forPage ? resume.pages.find((item) => item.id === forPage) : null) ??
+        page ??
+        resume.pages[0] ??
+        null;
       if (!targetPage) {
         toast("这份简历还没有页面，先在右边新增一页");
         return;
@@ -323,6 +350,8 @@ export function ChatPanel() {
           }
           const applied = applyAgentActions(sent.actions, {
             openPage: (pageId) => setActivePageId(pageId),
+            openPerson,
+            openResume,
             patchUi: (patch) => dispatch({ type: "patchUi", patch }),
             ask: (questions) => setAsk(questions),
             pageStyle: (pageId, style) =>
@@ -330,6 +359,12 @@ export function ChatPanel() {
             pageLayout: (pageId, layout) =>
               dispatch({ type: "pageLayout", personId: person.id, resumeId: resume.id, pageId, layout }),
             requestLayout: (pageId, brief) => runLayoutFor(pageId, brief),
+            // 内容写入走 provider 的确认门：会话 agent 和用户点击必须同一套规则
+            applyOps,
+            pageNote: (pageId, note) =>
+              dispatch({ type: "pageNote", personId: person.id, resumeId: resume.id, pageId, note }),
+            askSession: (pageId, question, blockId) =>
+              askFromLayout(pageId, question, blockId),
           });
           if (applied > 0) toast(`已按你的要求调整界面（${applied} 处）`);
         } catch (error) {
@@ -351,7 +386,69 @@ export function ChatPanel() {
       })();
     },
     // state 进依赖：每次发送都要把最新的工作区快照推给 Rust 的工具层
-    [state, person, resume, page, dispatch, setActivePageId, ai, configured, toast, desktop, patchLocal, runLayoutFor],
+    [
+      state,
+      person,
+      resume,
+      page,
+      dispatch,
+      setActivePageId,
+      applyOps,
+      openPerson,
+      openResume,
+      askFromLayout,
+      ai,
+      configured,
+      toast,
+      desktop,
+      patchLocal,
+      runLayoutFor,
+    ],
+  );
+
+  useEffect(() => {
+    sendRef.current = send;
+  }, [send]);
+
+  /**
+   * 面板是唯一知道「消息存在哪、怎么落库」的地方（桌面端真相在 Rust）。
+   * provider 拿到排版 agent 的指令后，通过注册表回到这里执行 —— 比把整条
+   * 发送链路搬进 provider 现实得多，也避免两套写消息的代码各自漂移。
+   */
+  const bridgeApi = useRef<{
+    turn: (pageId: string, content: string) => void;
+    notice: (content: string) => void;
+  }>({ turn: () => {}, notice: () => {} });
+
+  useEffect(() => {
+    bridgeApi.current = {
+      turn: (pageId, content) => sendRef.current?.(content, [], pageId),
+      notice: (content) => {
+        if (!person) return;
+        const message: ChatMessage = {
+          id: uid("m"),
+          role: "user",
+          system: true,
+          content,
+          time: Date.now(),
+        };
+        if (!desktop) {
+          dispatch({ type: "appendMessage", personId: person.id, message });
+          return;
+        }
+        setRemote((prev) => [...prev, message]);
+        void invoke("chat_push", { key: person.id, message });
+      },
+    };
+  });
+
+  useEffect(
+    () =>
+      registerChatBridge({
+        turn: (pageId, content) => bridgeApi.current.turn(pageId, content),
+        notice: (content) => bridgeApi.current.notice(content),
+      }),
+    [],
   );
 
   /** 统一补丁入口：桌面端消息真相在 Rust，浏览器端在工作区 */
@@ -487,7 +584,9 @@ export function ChatPanel() {
         <div className={styles.threadIn}>
           {messages.length === 0 && !busy && <EmptyTurn name={resume.title} onPick={setInput} />}
           {messages.map((message) =>
-            message.role === "user" ? (
+            message.system ? (
+              <SystemTurn key={message.id} message={message} />
+            ) : message.role === "user" ? (
               <UserTurn key={message.id} message={message} />
             ) : (
               <AssistantTurn key={message.id} message={message} onAction={(action) => handleAction(message, action)} />

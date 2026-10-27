@@ -9,12 +9,14 @@
 //! 应用在前端，页面层不参与任何决策。
 
 pub mod ask;
+pub mod edit;
 pub mod image;
 pub mod layout;
 pub mod page;
 pub mod read;
 
 use std::path::Path;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
@@ -34,6 +36,19 @@ pub struct Outbox {
     pub actions: Mutex<Vec<Value>>,
     /// 工具新建的材料（现在只有图片转化会产出）
     pub assets: Mutex<Vec<Asset>>,
+    /// 本轮内容写入的暂存区。工具改它，轮末由 `agent::turn` flush 成一条 mutate 信封。
+    ///
+    /// 为什么不直接往 `actions` 里塞内容指令：同一轮里模型常连着改同一个容器
+    /// （先改标题、再加一条），每次都基于同一份 `workspace` 快照算新数组，
+    /// 后一次会把前一次冲掉。攒在一处、轮末一次结算，才能保证顺序即语义。
+    pub edits: Mutex<crate::tools::edit::EditState>,
+    /// 本轮已经贴了几条纸面批注。
+    ///
+    /// 计数放在出站口而不是 `EditState`：批注不是内容写入，走的是 `actions`；
+    /// 而且「每轮清零」这件事 `Outbox` 天生就有（每轮新建一个），不需要重置逻辑。
+    pub notes: AtomicUsize,
+    /// 本轮已经向会话 agent 提了几个问题。上限 1：两个 agent 互相追着问会打成乒乓。
+    pub asks: AtomicUsize,
 }
 
 /// 工具执行时能看到的东西：只读快照 + 当前定位 + 出站口。
@@ -76,9 +91,13 @@ pub fn push_action(ctx: &ToolCtx, action: Value) -> Result<(), String> {
         .lock()
         .map_err(|_| "界面指令队列不可用".to_string())?;
     // 上限保护：模型偶尔会在同一轮里反复调 set_ui，没必要把几十条都回传
-    if list.len() < 16 {
-        list.push(action);
+    if list.len() >= 16 {
+        // 静默丢会让模型以为用户看见了。留一行日志，排查「界面没动」时至少能对上账
+        let kind = action.get("type").and_then(Value::as_str).unwrap_or("?");
+        eprintln!("[tools] action 队列已满，丢弃：{kind}");
+        return Ok(());
     }
+    list.push(action);
     Ok(())
 }
 
@@ -166,6 +185,209 @@ pub const TOOLS: &[Tool] = &[
         scopes: EVERYONE,
         writes: false,
     },
+    /* ---------- 内容写入 ----------
+     *
+     * 全部只改 `Outbox.edits`（本轮的暂存区），轮末由 `EditState::flush()` 结算成
+     * 一条 `mutate` 信封交给前端 reducer。所以它们「写」但不「立刻可见」——
+     * 返回文案必须说清「已提交」，不能让模型以为用户那边已经变了。
+     * 破坏性操作还要提醒模型别报「已删除」：用户可能点取消。
+     */
+    Tool {
+        name: "set_field",
+        description: "改一个已有字段的标签或内容。用户说「邮箱换成…」「职位写错了」「照片换这张」时用它。\
+                      产物是这条字段所在容器的全量替换，落在表单里对应的那一格。\
+                      字段 id 从 read_person / read_page 的输出里取，不要按标签猜；只想清空内容就把 value 给空串。",
+        params: edit::set_field_params,
+        run: edit::set_field,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "add_field",
+        description: "在某个容器里新增一项（「期望城市」「到岗时间」这类补丁）。用户说「再加一项」「补个电话」时用它。\
+                      产物是一行新字段，插在 ownerId 那个容器的末尾，或 afterFieldId 指向的字段之后。\
+                      ownerId 可以是候选人 id、页头字段块 id、条目 id、经历库条目 id —— 工具自己判断归哪个容器，\
+                      所以别为了加一项先去改别的字段；改已有字段请用 set_field。",
+        params: edit::add_field_params,
+        run: edit::add_field,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "remove_field",
+        description: "删掉一个字段。只在用户明确说「这项不要了」时用，产物是它从所在容器里消失。\
+                      只是想清空文字不要用它 —— 那会让表单少一行，用户会以为界面出错了；清空请用 set_field 传 value: \"\"。",
+        params: edit::remove_field_params,
+        run: edit::remove_field,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "add_entry",
+        description: "在一个分区里加一条条目（一段经历、一个项目、一条证书）。用户说「再补一段工作经历」时用它。\
+                      产物是新条目出现在该分区末尾，点开能看到你给的字段与要点。\
+                      这条素材经历库里已经有就传 refId，不要先把库里的字段抄一遍 —— 抄一遍之后两边就不同步了。",
+        params: edit::add_entry_params,
+        run: edit::add_entry,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "update_entry",
+        description: "改某一条条目自己的字段或要点（用户在说「第二节那句改成…」时）。\
+                      产物是这一条就地更新，只覆盖你给的部分，没给的字段原样留着。\
+                      要整段重写就把 bullets 全量给；只想换位置请用 move_entry，别删了再新建。",
+        params: edit::update_entry_params,
+        run: edit::update_entry,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "remove_entry",
+        description: "删掉分区里的一条条目（这一段经历不想要了）。产物是这一条从分区里消失，分区本身和别的条目都还在。\
+                      删整栏请用 remove_section，别循环删条目。",
+        params: edit::remove_entry_params,
+        run: edit::remove_entry,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "move_entry",
+        description: "调整条目在分区里的先后。用户说「最近这段放最前面」「项目排在经历后面」时用它，`to` 是 0 基的新位置。\
+                      产物是分区内的条目顺序变了，内容一个字都没动。",
+        params: edit::move_entry_params,
+        run: edit::move_entry,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "add_section",
+        description: "新建一个分区（页面上的一栏，如「教育经历」「技能」）。用户说「加一栏技能」时用它。\
+                      产物是页面上多一个空分区，标题有了但还没有条目 —— 紧接着还要 add_entry 才有内容。",
+        params: edit::add_section_params,
+        run: edit::add_section,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "set_section_title",
+        description: "改分区标题那几个字。用户说「这栏叫项目经历，不叫作品」时用它。\
+                      产物只是标题变了，里面的条目一条不动。",
+        params: edit::set_section_title_params,
+        run: edit::set_section_title,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "remove_section",
+        description: "删掉整个分区，连同里面所有条目。只在用户说「这栏整个不要了」时用。\
+                      产物是这一栏从页面上消失，别的分区不受影响。\
+                      删除会弹确认窗、用户可能拒绝，所以不要说「已删除」，说「已提交，界面会问你」；\
+                      只是暂时不想让它出现就先别删，问问用户是要删还是要挪到别的页。",
+        params: edit::remove_section_params,
+        run: edit::remove_section,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "set_block_role",
+        description: "给某个块指定结构化角色，让生成器按这个形态排：tags（一行标签）、kv（标签-值清单）、\
+                      table（表格）、grid-2/grid-3（多栏）、band（通栏色带）、tight/plain（普通条目）。\
+                      用户说「技能挤成一行」「证书做成表格」时用它。产物只是排版提示，一个字的正文都不改；\
+                      不确定就用 plain，别为了「看起来更专业」乱设。",
+        params: edit::set_block_role_params,
+        run: edit::set_block_role,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "add_page",
+        description: "给当前简历新增一页（零内容）。用户说「再加一页放作品集」时用它。\
+                      产物是新页出现在页列表末尾，需要再往里加分区与条目。\
+                      空的整页原件（证书 PDF）不是这个工具的事，那种要用户自己传文件。",
+        params: edit::add_page_params,
+        run: edit::add_page,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "delete_page",
+        description: "删掉一整页，连同这一页的内容。用户明确说要删某一页时才用。\
+                      产物是这一页从简历里移除。\
+                      这会弹确认窗、用户可能拒绝，所以**不要对用户说「已删除」**，说「已提交，界面会问你」；\
+                      只想清空内容不要删页。",
+        params: edit::delete_page_params,
+        run: edit::delete_page,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "rename_page",
+        description: "改页名（页签上显示的那几个字）。用户说「这页叫英文版」时用它。\
+                      产物只是页名变了，页里的内容不受影响。",
+        params: edit::rename_page_params,
+        run: edit::rename_page,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "add_resume",
+        description: "新建一份简历（另一个版本、另一种语言）。用户说「再做一份英文的」时用它。\
+                      产物是候选人名下多一份空简历，页面要另外加。\
+                      只是想在现有简历里加页，请用 add_page。",
+        params: edit::add_resume_params,
+        run: edit::add_resume,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "rename_resume",
+        description: "改简历标题（侧栏里显示的那份名字）。产物只是标题变了，页与内容都不动。",
+        params: edit::rename_resume_params,
+        run: edit::rename_resume,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "delete_resume",
+        description: "删掉整份简历，含它的全部页面。用户明确说「那份不要了」时才用。\
+                      产物是这份简历从候选人名下移除。\
+                      这会弹确认窗、用户可能拒绝，所以**不要对用户说「已删除」**，说「已提交，界面会问你」；\
+                      用户只是想换个版本看，请先 open_resume 切过去。",
+        params: edit::delete_resume_params,
+        run: edit::delete_resume,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "save_library_item",
+        description: "把一段素材写进经历库（库里是给自己看的原料，不会印到简历上）。\
+                      带 itemId 是更新那一条，不带是新建；产物是库条目变了，页面上的正文不动。\
+                      想改已经印在纸上的内容，请用 update_entry，别在库里改完指望它会同步。",
+        params: edit::save_library_item_params,
+        run: edit::save_library_item,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "remove_library_item",
+        description: "从经历库里删掉一条素材。产物是库条目消失。\
+                      注意：页面上引用它的条目会失去从库里继承来的字段 —— 删之前先 read_page 看一眼有没有人在用。",
+        params: edit::remove_library_item_params,
+        run: edit::remove_library_item,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "apply_patch",
+        description: "一次改多处时用它：ops 里每一项是 {tool, args}，tool 就是上面这些工具的名字，按顺序执行。\
+                      产物仍是一条信封、一次提交，比连着调十次省时间也不会被中途打断。\
+                      任何一条失败整批回滚，返回第几条错、为什么；单点小改别用它，直接调那个工具更清楚。",
+        params: edit::apply_patch_params,
+        run: edit::apply_patch,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
     /* ---------- 页面控制（只影响「看到什么」，不改内容） ---------- */
     Tool {
         name: "open_page",
@@ -173,6 +395,36 @@ pub const TOOLS: &[Tool] = &[
                       不要凭记忆猜页码：不确定就先 list_pages。",
         params: page::open_page_params,
         run: page::open_page,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "list_people",
+        description: "列出所有候选人：能认人的名字、id、各有几份简历。\
+                      只在用户提到**另一个**候选人、或要切换候选人时用它 —— 换人之前先知道有哪些人。\
+                      它不报任何简历内容，问「我的简历里写了什么」请用 read_person / read_page。",
+        params: read::no_params,
+        run: page::list_people,
+        scopes: &[Scope::Session],
+        writes: false,
+    },
+    Tool {
+        name: "open_person",
+        description: "把界面切到另一个候选人。用户说「换回上一个候选人」「看看另一个人」时用它。\
+                      产物只是焦点变了，不写任何内容。\
+                      切过去之后你看到的材料才跟着变；在切换之前不要动别人的数据，你本来也只能改当前这位。",
+        params: page::open_person_params,
+        run: page::open_person,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
+        name: "open_resume",
+        description: "把界面切到同一候选人下的另一份简历。用户说「我要看英文那份」「切回中文版」时用它。\
+                      产物只是焦点变了，不写任何内容。\
+                      不知道有哪些简历就先 read_person，别猜 resumeId。",
+        params: page::open_resume_params,
+        run: page::open_resume,
         scopes: &[Scope::Session],
         writes: true,
     },
@@ -249,6 +501,27 @@ pub const TOOLS: &[Tool] = &[
                       这是排版 agent 的核心工具 —— 内容不在你手里，版面全部由你决定。",
         params: layout::set_layout_params,
         run: layout::set_page_layout,
+        scopes: &[Scope::Layout],
+        writes: true,
+    },
+    Tool {
+        name: "note_on_page",
+        description: "在纸面上留一条给**用户**看的批注。拿不准这里该怎么排、或想提醒「这段按现在这样会挤出页」时用它。\
+                      产物是一个贴在纸面上的批注点：给了 blockId 就贴那一块，没给就贴页边，用户能点开也能关掉。\
+                      它不是给自己记笔记，用户会直接看到 —— 想改内容请用 ask_session。一轮最多 2 条，说完继续排版。",
+        params: layout::note_params,
+        run: layout::note_on_page,
+        scopes: &[Scope::Layout],
+        writes: true,
+    },
+    Tool {
+        name: "ask_session",
+        description: "向会话 agent 提一个具体问题：这段内容要不要拆成两条、这个措辞能不能改。\
+                      产物是一条发给会话 agent 的消息（带上你指的那一块），它可能自己查库回答，也可能转去问用户。\
+                      要问就问能一句话回答的（「这两段合并成一条行不行」），不要写「请确认」这种没法接的话；\
+                      一轮只能问一次，同一个问题别重复问 —— 你说完继续排版，不要停下来等。",
+        params: layout::ask_session_params,
+        run: layout::ask_session,
         scopes: &[Scope::Layout],
         writes: true,
     },
@@ -336,6 +609,11 @@ mod tests {
         let session = names_for(Scope::Session);
         let layout = names_for(Scope::Layout);
 
+        // 工具数就是能力边界的快照：少一个说明注册时漏了，多一个说明有人偷偷
+        // 给某个角色开了口子，两者都该在这里被看见
+        assert_eq!(session.len(), 34, "会话 agent 的工具数变了：{session:?}");
+        assert_eq!(layout.len(), 9, "排版 agent 的工具数变了：{layout:?}");
+
         // 会话 agent：能读、能转交、能转图，但不能自己动版面
         assert!(session.contains(&"request_layout"));
         assert!(session.contains(&"convert_image"));
@@ -357,8 +635,54 @@ mod tests {
             .collect();
         assert!(readers.contains(&"read_page"));
         assert!(readers.contains(&"read_layout_guide"));
+        assert!(readers.contains(&"list_people"), "列候选人不动任何数据");
         assert!(!readers.contains(&"set_page_layout"));
         assert!(!readers.contains(&"convert_image"));
+        // 内容工具全部有副作用（改的是本轮暂存区，轮末才落地，但仍然是写）
+        assert!(!readers.contains(&"set_field"));
+        assert!(!readers.contains(&"apply_patch"));
+        assert!(!readers.contains(&"note_on_page"));
+        // 问用户不改任何状态：它只发一张表单，等用户填
+        assert!(readers.contains(&"ask_user"));
+    }
+
+    /// 会话 agent 现在有内容写权限，但仍然不能自己动版面。
+    ///
+    /// 这两件事必须靠 `scopes` 分开：一旦给会话 agent 开了 `set_page_layout`，
+    /// 它就会绕过 `request_layout` 直接改样式，排版 agent 的存在就没有意义了。
+    #[test]
+    fn session_tools_include_content_writes() {
+        let specs = specs(Scope::Session);
+        let names: Vec<&str> = specs
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|item| item["function"]["name"].as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for name in ["set_field", "add_field", "delete_page", "apply_patch", "open_resume"] {
+            assert!(names.contains(&name), "会话 agent 少了 {name}：{names:?}");
+        }
+        // 换人的前提是知道有哪些人：没有目录，open_person 只能靠报错试 id
+        assert!(names.contains(&"list_people"), "{names:?}");
+        assert!(
+            !names.contains(&"set_page_layout"),
+            "排版不归会话 agent，它只能 request_layout"
+        );
+    }
+
+    /// 排版 agent 只能改版面：批注与提问是它的出口，内容工具一个都不给。
+    #[test]
+    fn layout_tools_do_not_write_content() {
+        let names = names_for(Scope::Layout);
+        for name in ["note_on_page", "ask_session", "set_page_layout"] {
+            assert!(names.contains(&name), "排版 agent 少了 {name}：{names:?}");
+        }
+        for name in ["set_field", "delete_page", "apply_patch", "open_person"] {
+            assert!(!names.contains(&name), "排版 agent 不该有 {name}");
+        }
     }
 
     #[test]
@@ -546,6 +870,170 @@ mod tests {
         let actions = out.actions.lock().unwrap().clone();
         // 空对象是「没有任何覆盖」，不是「没给」—— 前端要据此清空
         assert_eq!(actions[0]["layout"], json!({}));
+    }
+
+    /// 切人 / 切简历只改焦点：产物只有一条界面指令，不碰任何内容。
+    ///
+    /// 已经在那个人身上时不再发指令 —— 空转会让前端多一次重渲染和滚动复位，
+    /// 用户看到的是「界面闪了一下」。
+    #[test]
+    fn open_person_and_open_resume_only_move_the_focus() {
+        let ws = json!({
+            "people": [
+                {
+                    "id": "p1",
+                    "fields": [{ "id": "f1", "label": "姓名", "value": "张三" }],
+                    "resumes": [
+                        { "id": "r1", "title": "中文版", "pages": [] },
+                        { "id": "r2", "title": "English", "pages": [] }
+                    ]
+                },
+                { "id": "p2", "fields": [{ "id": "f2", "label": "姓名", "value": "李四" }], "resumes": [] }
+            ]
+        });
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
+
+        // 换人的前提：先有目录。只报名字 + id + 简历数，别把内容也倒出来
+        let text = call("list_people", &json!({}), &ctx, Scope::Session).unwrap();
+        assert!(text.contains("张三") && text.contains("李四"), "{text}");
+        assert!(text.contains("← 当前"), "当前那位要标出来：{text}");
+        assert!(text.contains("2 份简历"), "{text}");
+        assert!(out.actions.lock().unwrap().is_empty(), "只读工具不该产出指令");
+
+        let text = call("open_person", &json!({ "personId": "p2" }), &ctx, Scope::Session).unwrap();
+        assert!(text.contains("李四"), "要用人名回话，用户才认得出：{text}");
+        let text = call("open_resume", &json!({ "resumeId": "r2" }), &ctx, Scope::Session).unwrap();
+        assert!(text.contains("English"), "{text}");
+
+        let actions = out.actions.lock().unwrap().clone();
+        assert_eq!(actions[0], json!({ "type": "openPerson", "personId": "p2" }));
+        // openResume 要带上 personId：前端按「人 + 简历」定位，缺一个就定不到位
+        assert_eq!(
+            actions[1],
+            json!({ "type": "openResume", "personId": "p1", "resumeId": "r2" })
+        );
+
+        // 错的 id 要把可用的一并列出，模型才有下一轮的自纠机会
+        let err = call("open_person", &json!({ "personId": "p9" }), &ctx, Scope::Session)
+            .unwrap_err();
+        assert!(err.contains("p1") && err.contains("p2"), "{err}");
+        let err = call("open_resume", &json!({ "resumeId": "r9" }), &ctx, Scope::Session)
+            .unwrap_err();
+        assert!(err.contains("r1") && err.contains("r2"), "{err}");
+
+        let before = out.actions.lock().unwrap().len();
+        call("open_person", &json!({ "personId": "p1" }), &ctx, Scope::Session).unwrap();
+        assert_eq!(out.actions.lock().unwrap().len(), before, "原地切换不该再发指令");
+    }
+
+    /// 批注与提问的产物形状：id 与时间戳必须在 Rust 生成，前端要做去重。
+    #[test]
+    fn note_and_question_carry_their_own_ids() {
+        let ws = sample_ws();
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
+
+        call(
+            "note_on_page",
+            &json!({ "text": "技能这一栏压成一行后字号会掉到 8px", "blockId": "b2" }),
+            &ctx,
+            Scope::Layout,
+        )
+        .unwrap();
+        call("note_on_page", &json!({ "text": "整页留白偏多" }), &ctx, Scope::Layout).unwrap();
+        call(
+            "ask_session",
+            &json!({ "question": "这段实习要不要和上一段合并成一条", "blockId": "b2" }),
+            &ctx,
+            Scope::Layout,
+        )
+        .unwrap();
+
+        let actions = out.actions.lock().unwrap().clone();
+        assert_eq!(actions[0]["type"], json!("pageNote"));
+        assert_eq!(actions[0]["personId"], json!("p1"));
+        assert_eq!(actions[0]["resumeId"], json!("r1"));
+        assert_eq!(actions[0]["pageId"], json!("pg1"));
+        assert_eq!(actions[0]["note"]["blockId"], json!("b2"));
+        assert!(actions[0]["note"]["id"].as_str().unwrap().starts_with("n-"));
+        assert!(actions[0]["note"]["at"].as_i64().unwrap() > 0, "at 要是 unix 秒");
+
+        // 整页批注不该带 blockId 这个键
+        assert!(actions[1]["note"].get("blockId").is_none(), "{:?}", actions[1]);
+
+        assert_eq!(actions[2]["type"], json!("askSession"));
+        assert_eq!(actions[2]["pageId"], json!("pg1"));
+        assert_eq!(actions[2]["question"], json!("这段实习要不要和上一段合并成一条"));
+        // 会话 agent 靠 blockId 定位问的是哪一段，没有它就得把整页再读一遍
+        assert_eq!(actions[2]["blockId"], json!("b2"));
+    }
+
+    /// 批注 2 条、提问 1 次是硬限，第 3 条必须报错。
+    ///
+    /// 静默丢会让模型以为话已经说出去了，总结里还会说「我已经在纸面上标注了」——
+    /// 用户那边什么都没有，而且不会再被提醒。
+    #[test]
+    fn notes_and_questions_are_hard_limited_per_turn() {
+        let ws = sample_ws();
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
+
+        call("note_on_page", &json!({ "text": "第一条" }), &ctx, Scope::Layout).unwrap();
+        call("note_on_page", &json!({ "text": "第二条" }), &ctx, Scope::Layout).unwrap();
+        let err = call("note_on_page", &json!({ "text": "第三条" }), &ctx, Scope::Layout)
+            .unwrap_err();
+        assert!(err.contains("2 条"), "要说清上限是几条：{err}");
+        assert_eq!(out.actions.lock().unwrap().len(), 2, "被拒的那条不能留下指令");
+
+        call("ask_session", &json!({ "question": "第一问" }), &ctx, Scope::Layout).unwrap();
+        let err = call("ask_session", &json!({ "question": "第二问" }), &ctx, Scope::Layout)
+            .unwrap_err();
+        assert!(err.contains("1 条"), "{err}");
+        assert_eq!(out.actions.lock().unwrap().len(), 3);
+
+        // 名额记在出站口上：换一个 Outbox 就是新的一轮，不需要额外重置
+        let fresh = Outbox::default();
+        let next = ctx_of(&ws, &fresh);
+        call("note_on_page", &json!({ "text": "新一轮的批注" }), &next, Scope::Layout).unwrap();
+        call("ask_session", &json!({ "question": "新一轮的问题" }), &next, Scope::Layout).unwrap();
+    }
+
+    #[test]
+    fn note_and_question_reject_bad_input_without_side_effects() {
+        let ws = sample_ws();
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
+
+        let err = call(
+            "note_on_page",
+            &json!({ "text": "贴错块", "blockId": "nope" }),
+            &ctx,
+            Scope::Layout,
+        )
+        .unwrap_err();
+        assert!(err.contains("b1"), "报错要列出这一页真实的块：{err}");
+
+        let long = "字".repeat(201);
+        let err = call("note_on_page", &json!({ "text": long }), &ctx, Scope::Layout).unwrap_err();
+        assert!(err.contains("上限"), "{err}");
+        assert!(call("note_on_page", &json!({}), &ctx, Scope::Layout)
+            .unwrap_err()
+            .contains("不能为空"));
+
+        let err = call("ask_session", &json!({ "question": "x".repeat(301) }), &ctx, Scope::Layout)
+            .unwrap_err();
+        assert!(err.contains("上限"), "{err}");
+
+        // 会话 agent 不能留批注，排版 agent 不能改内容：两个方向都要拦住
+        assert!(call("note_on_page", &json!({ "text": "x" }), &ctx, Scope::Session)
+            .unwrap_err()
+            .contains("不能用"));
+        assert!(call("set_field", &json!({ "fieldId": "f1" }), &ctx, Scope::Layout)
+            .unwrap_err()
+            .contains("不能用"));
+
+        assert!(out.actions.lock().unwrap().is_empty(), "失败不该留下指令");
     }
 
     #[test]

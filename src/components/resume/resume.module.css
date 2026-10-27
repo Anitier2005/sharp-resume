@@ -307,3 +307,138 @@
 .zoomCtl .zoomVal {
   color: var(--acc-text);
 }
+
+/* ---------- 纸面批注（排版 agent 留的注记） ---------- */
+/* 定位基准。单独包一层而不是给 .paper 加 position：
+   纸面样式在 paper.module.css 里，属于「成品」的地盘，不该为了界面浮层去动它 */
+.pageHost {
+  position: relative;
+}
+
+/* 批注层本身不吃鼠标事件，只有小圆点吃 —— 否则纸面上的文字就选不中了 */
+.noteLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* 每个批注点的定位壳：贴纸面右缘外侧。
+   用「壳 + 圆点」两层，是为了让批注卡能相对圆点定位，而位置只需要写在壳上 */
+.noteItem {
+  position: absolute;
+  right: -18px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+/* 页级批注（没有块锚点，或锚点块不在这一版里）：不跟中线，从页角往下排 */
+.noteItem[data-page="1"] {
+  right: -16px;
+  transform: none;
+}
+
+/* 圆点：盖在正文上会挡住内容，而画布周围本来就有留白 */
+.notePin {
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--paper);
+  background: var(--acc);
+  color: var(--acc-fg);
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--shadow-paper);
+  pointer-events: auto;
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+.notePin:hover {
+  background: var(--acc-hover);
+  transform: scale(1.12);
+}
+/* 展开中的那一条：填成实心深色，和周围未读的点区分开 */
+.notePin.notePinOn {
+  background: var(--acc-text);
+  color: var(--paper);
+}
+
+/* 页级批注用虚线圈，一眼看出它不属于某一块 */
+.noteItem[data-page="1"] .notePin {
+  border-style: dashed;
+  border-color: var(--acc-line-2);
+}
+
+/* 展开的批注卡：浮在圆点左侧，读完就关，所以盖住一点内容可以接受 */
+.noteCard {
+  position: absolute;
+  right: 22px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 206px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 9px;
+  border: 1px solid var(--paper-line);
+  border-radius: 5px;
+  background: var(--paper);
+  box-shadow: 0 1px 2px rgba(20, 20, 15, 0.08), 0 12px 28px -14px rgba(20, 20, 15, 0.4);
+  pointer-events: auto;
+}
+
+.noteHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+.noteHead b {
+  font-size: 8.5px;
+  font-weight: 600;
+  color: var(--paper-fg);
+}
+.noteHead span {
+  font-size: 7.5px;
+  color: var(--paper-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.noteBody {
+  margin: 0;
+  font-size: 8.5px;
+  line-height: 1.7;
+  color: var(--paper-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 168px;
+  overflow: auto;
+}
+
+.noteActs {
+  display: flex;
+  justify-content: flex-end;
+}
+.noteActs button {
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--paper-line);
+  border-radius: 4px;
+  font-size: 8px;
+  color: var(--paper-2);
+}
+.noteActs button:hover {
+  border-color: var(--acc-line-2);
+  color: var(--acc-text);
+}
+
+/* 批注不是内容：不参与打印，也不该出现在导出的 PDF 里 */
+@media print {
+  .noteLayer {
+    display: none !important;
+  }
+}

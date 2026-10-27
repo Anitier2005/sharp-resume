@@ -153,6 +153,35 @@ pub struct Block {
     /// contain / cover；只是排版提示，缺失就是 contain
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit: Option<String>,
+    /// 结构化生成的排版提示。语义由**人**给，生成器只照着选容器，不做内容分类。
+    /// plain | tight | band | tags | kv | table | grid-2 | grid-3 | cols-2 | cols-3 | split | row
+    ///
+    /// 刻意**不做白名单校验**：这一项只是给渲染层的建议，认不出来就按 plain 排，
+    /// 为此拒掉一次保存（用户丢的是整份简历）完全不划算。校验放在渲染层做，
+    /// 那边本来就要加一条 warnings。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "is_empty")]
+    pub extra: Map<String, Value>,
+}
+
+/// 排版 agent 留在纸面上的批注。
+///
+/// 为什么不复用 `ResumePage.note`（那个是给人看的一句话备注）：
+/// 批注是**成组的、能贴到具体块上**的，还要按出现顺序编号给代理读。
+/// 它不进导出、不参与渲染，只用于两个 agent 之间传话 —— 所以单独存，
+/// 免得到时候渲染器要专门记得跳过某几种 note。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageNote {
+    pub id: String,
+    /// 指向某一块；为空表示整页级注记
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_id: Option<String>,
+    pub text: String,
+    /// unix 秒
+    #[serde(default)]
+    pub at: i64,
     #[serde(flatten, default, skip_serializing_if = "is_empty")]
     pub extra: Map<String, Value>,
 }
@@ -192,6 +221,9 @@ pub struct ResumePage {
     /// v4 遗留：分区。同上
     #[serde(default, skip_serializing_if = "is_empty_vec")]
     pub sections: Vec<Section>,
+    /// 排版 agent 留在纸面上的批注（不是内容，不参与导出）
+    #[serde(default, skip_serializing_if = "is_empty_vec")]
+    pub notes: Vec<PageNote>,
     #[serde(flatten, default, skip_serializing_if = "is_empty")]
     pub extra: Map<String, Value>,
 }
@@ -204,6 +236,9 @@ impl ResumePage {
         if self.kind.trim().is_empty() {
             self.kind = "native".into();
         }
+        // 空文本的批注是垃圾数据：它会渲染成一个空气泡，还会把「批注 n」的编号
+        // 顶歪（模型按下标引用批注），所以在入口处就丢掉，而不是等到渲染时过滤。
+        self.notes.retain(|note| !note.text.trim().is_empty());
         // 页名不在这里动。
         //
         // 试过把「第 12 页」这类自动名清成空、界面显示「未命名页」，结果四五个页签
@@ -224,6 +259,7 @@ impl ResumePage {
                 asset_id: None,
                 caption: None,
                 fit: None,
+                role: None,
                 extra: Map::new(),
             });
         }
@@ -237,6 +273,7 @@ impl ResumePage {
                 asset_id: None,
                 caption: None,
                 fit: None,
+                role: None,
                 extra: section.extra,
             });
         }
@@ -1126,5 +1163,73 @@ mod tests {
         .unwrap();
         page.normalize();
         assert_eq!(page.label, "第 7 页");
+    }
+
+    /// 旧数据没有 role / notes：不能被判非法，也不能被写回一对空字段。
+    /// 反序列化失败会让用户升级后打不开自己的简历 —— 这是最贵的一种错。
+    #[test]
+    fn role_and_notes_are_optional_for_old_data() {
+        let workspace = adopt(json!({
+            "version": 5,
+            "people": [{
+                "id": "p1",
+                "resumes": [{
+                    "id": "r1",
+                    "personId": "p1",
+                    "pages": [{
+                        "id": "pg1",
+                        "kind": "native",
+                        "blocks": [{ "id": "b1", "kind": "section", "title": "工作经历" }]
+                    }]
+                }]
+            }],
+            "ui": {}
+        }))
+        .expect("没有 role / notes 的旧页必须能读");
+
+        assert!(validate(&workspace).is_ok());
+        let page = &workspace.people[0].resumes[0].pages[0];
+        assert!(page.notes.is_empty());
+        assert!(page.blocks[0].role.is_none());
+
+        let back = serde_json::to_value(&workspace).unwrap();
+        assert!(back["people"][0]["resumes"][0]["pages"][0].get("notes").is_none());
+        assert!(back["people"][0]["resumes"][0]["pages"][0]["blocks"][0]
+            .get("role")
+            .is_none());
+    }
+
+    /// role 不做白名单校验：认不出来是渲染层回落 plain 的事，
+    /// 后端为此拒掉一次保存等于拿整份简历冒险。同时空文本批注要丢掉。
+    #[test]
+    fn unknown_role_survives_and_blank_notes_are_dropped() {
+        let workspace = adopt(json!({
+            "version": 5,
+            "people": [{
+                "id": "p1",
+                "resumes": [{
+                    "id": "r1",
+                    "personId": "p1",
+                    "pages": [{
+                        "id": "pg1",
+                        "kind": "native",
+                        "blocks": [{ "id": "b1", "kind": "section", "role": "未来才有的版式" }],
+                        "notes": [
+                            { "id": "n1", "text": "这块太挤", "blockId": "b1", "at": 1700000000 },
+                            { "id": "n2", "text": "   ", "at": 1700000001 }
+                        ]
+                    }]
+                }]
+            }],
+            "ui": {}
+        }))
+        .unwrap();
+
+        assert!(validate(&workspace).is_ok());
+        let page = &workspace.people[0].resumes[0].pages[0];
+        assert_eq!(page.blocks[0].role.as_deref(), Some("未来才有的版式"));
+        assert_eq!(page.notes.len(), 1, "空文本批注必须被丢掉");
+        assert_eq!(page.notes[0].block_id.as_deref(), Some("b1"));
+        assert_eq!(page.notes[0].at, 1700000000);
     }
 }

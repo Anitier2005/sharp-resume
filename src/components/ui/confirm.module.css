@@ -1,7 +1,20 @@
-/* 确认框：只用于不可撤销的操作（删候选人等），刻意做得窄而克制 */
+/* 遮罩本体沿用 shared.veil（fixed + 居中 + 全屏），这里只补「别让下面跟着滚」：
+   touch-action 关掉触摸滑动，overscroll-behavior 阻止滚动链传到底下的纸面 */
+.veil {
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+/* 确认窗：只用于不可撤销的操作（删候选人、删页、agent 的批量删除）。
+   刻意做得窄而克制 —— 它出现的时候，用户正要做一件不能反悔的事。 */
 
 .box {
   width: 320px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 16px 18px 14px;
   background: var(--bg-elev);
   border: 1px solid var(--line-strong);
@@ -17,17 +30,37 @@
 }
 
 .desc {
-  margin: 8px 0 0;
+  margin: 0;
   font-size: 0.6875rem;
   line-height: 1.7;
   color: var(--fg-3);
+}
+
+/* 将被删除的东西逐条列出来：说「2 项」等于没说，用户要认的是具体的页和条目 */
+.items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 168px;
+  overflow: auto;
+  border-left: 2px solid var(--danger);
+  padding-left: 8px;
+}
+.items li {
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  color: var(--fg-2);
+  word-break: break-word;
 }
 
 .acts {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
-  margin-top: 16px;
+  margin-top: 8px;
 }
 
 .acts button {
@@ -47,10 +80,20 @@
 .acts .danger {
   border-color: transparent;
   background: var(--danger);
-  color: #fff;
+  color: var(--bg-elev);
 }
 .acts .danger:hover {
   background: var(--danger);
   filter: brightness(0.94);
-  color: #fff;
+  color: var(--bg-elev);
+}
+
+.acts .primary {
+  border-color: transparent;
+  background: var(--acc);
+  color: var(--acc-fg);
+}
+.acts .primary:hover {
+  background: var(--acc-hover);
+  color: var(--acc-fg);
 }

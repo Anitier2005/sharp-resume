@@ -4,6 +4,11 @@
 //!   `request_layout` —— **会话 agent** 用。它不排版，只把意图转给该页的排版 agent。
 //!   `set_page_layout` —— **排版 agent** 用。它拥有这一页版面的全部决定权。
 //!
+//! 另有两条「说不了就传出去」的通道，都只在排版侧：
+//!   `note_on_page` —— 把一句话贴在纸面上给用户看（不进导出）。
+//!   `ask_session`  —— 内容层面的疑问转给会话 agent，它来决定改不改。
+//! 排版 agent 不能写内容，这两条就是它唯一的出口。
+//!
 //! 为什么拿掉旧的 `set_page_style`：那是「参数层」——只能从疏密三档、边距倍数、
 //! 对齐两项里挑，本质是替 agent 做了排版决策。现在给它的是成品层：
 //! 预设（一次性切换整体疏密）、块级手写（改一段）、整页接管（换一种版面语言）。
@@ -278,4 +283,213 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
     )?;
 
     Ok(format!("这一页的版面已更新：{}", notes.join("、")))
+}
+
+/* ---------- 排版 agent：留批注 / 向会话 agent 提问 ---------- */
+
+/// 批注的长度上限。200 字大约是两行批注气泡；再长用户点开看到的是一段正文，
+/// 那不如直接改版面。
+const MAX_NOTE_CHARS: usize = 200;
+/// 提问上限。比批注更宽松一点，因为问题里往往要带上原文片段。
+const MAX_QUESTION_CHARS: usize = 300;
+
+/// 单轮批注条数上限。纸面就那么大：三条以上就从「提示」变成「涂鸦」了。
+const MAX_NOTES_PER_TURN: usize = 2;
+/// 单轮提问次数上限。1 是刻意的：两个 agent 互相追着问会打成乒乓，这一页就永远排不完。
+const MAX_ASKS_PER_TURN: usize = 1;
+
+/// 占一个本轮名额，超了报错。
+///
+/// 必须报错而不是静默丢弃：静默丢会让模型以为话已经说出去了，下一轮不会再提，
+/// 用户永远看不到那条批注 —— 而模型在总结里还会说「我已经在纸面上标注了」。
+fn take_slot(
+    counter: &std::sync::atomic::AtomicUsize,
+    limit: usize,
+    what: &str,
+) -> Result<(), String> {
+    if counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= limit {
+        return Err(format!(
+            "这一轮已经留下 {limit} 条{what}了。先把版排完，剩下的一轮再说 —— 别再试，重试也不会成功"
+        ));
+    }
+    Ok(())
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// 当前页 + 这一页的块 id 清单。批注贴错块 = 用户点了没反应，所以先校验。
+fn page_blocks<'a>(ctx: &'a ToolCtx) -> Result<(String, Vec<String>), String> {
+    let pages = pages_of(ctx)?;
+    let page = pages
+        .iter()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(ctx.page_id))
+        .ok_or_else(|| format!("找不到当前页 {}", ctx.page_id))?;
+    let blocks = page
+        .get("blocks")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|block| block.get("id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok((ctx.page_id.to_string(), blocks))
+}
+
+fn block_arg(args: &Value, blocks: &[String]) -> Result<Option<String>, String> {
+    let block_id = args
+        .get("blockId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(block_id) = block_id else {
+        return Ok(None);
+    };
+    if !blocks.iter().any(|known| known == block_id) {
+        return Err(format!(
+            "这一页没有 id 为 {block_id} 的块。可用的块：{}（先用 read_page 看准确 id）",
+            if blocks.is_empty() {
+                "（这一页还没有块）".to_string()
+            } else {
+                blocks.join(" / ")
+            }
+        ));
+    }
+    Ok(Some(block_id.to_string()))
+}
+
+pub fn note_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "text": {
+                "type": "string",
+                "description": "写给用户看的一句话，1–200 字。说清「哪里、为什么」，别写「这里有问题」这种没法接的话"
+            },
+            "blockId": {
+                "type": "string",
+                "description": "贴在哪个块上（块 id 从 read_page 取）。不传就贴在页边，表示整页的批注"
+            }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+    })
+}
+
+/// 在纸面上留一条给用户看的批注。
+///
+/// `id` 与 `at` 在 Rust 生成而不是交给前端：前端要做去重与「已读」记忆，
+/// 让它自己造 id 就没法区分「同一条批注重渲染」和「又贴了一条」。
+pub fn note_on_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
+    let text = args
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    if text.is_empty() {
+        return Err("text 不能为空：批注是给人看的一句话，不是占位符".into());
+    }
+    let len = text.chars().count();
+    if len > MAX_NOTE_CHARS {
+        return Err(format!(
+            "批注有 {len} 字，超过 {MAX_NOTE_CHARS} 字上限。批注是一句话，不是一段说明 —— 说清要紧的那一点就好"
+        ));
+    }
+
+    let (page_id, blocks) = page_blocks(ctx)?;
+    let block_id = block_arg(args, &blocks)?;
+
+    // 参数都验过了才占名额：校验失败不该消耗一次机会
+    take_slot(&ctx.out.notes, MAX_NOTES_PER_TURN, "批注")?;
+
+    let mut note = json!({
+        "id": format!("n-{}", crate::session::uuid_like()),
+        "text": text,
+        "at": now_secs(),
+    });
+    if let Some(block_id) = &block_id {
+        note["blockId"] = json!(block_id);
+    }
+
+    push_action(
+        ctx,
+        json!({
+            "type": "pageNote",
+            "personId": ctx.person_id,
+            "resumeId": ctx.resume_id,
+            "pageId": page_id,
+            "note": note,
+        }),
+    )?;
+
+    Ok(format!(
+        "批注已贴在{}，用户会直接在纸面上看到。\n\
+         它是给用户看的，不是给你自己记笔记 —— 想改内容请用 ask_session；这一轮还能再留 {} 条，说完继续排版，不用停下来等。",
+        if block_id.is_some() { "这一块旁边" } else { "页边" },
+        MAX_NOTES_PER_TURN.saturating_sub(
+            ctx.out.notes.load(std::sync::atomic::Ordering::SeqCst)
+        )
+    ))
+}
+
+pub fn ask_session_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": "一句具体的、能回答的问题，1–300 字。例如「这段经历要不要拆成两条」。不要写「请确认」这类没法接的话"
+            },
+            "blockId": {
+                "type": "string",
+                "description": "问题针对哪个块（块 id 从 read_page 取）。会话 agent 会顺着这个块去看内容"
+            }
+        },
+        "required": ["question"],
+        "additionalProperties": false
+    })
+}
+
+/// 把内容层面的疑问转给会话 agent。
+///
+/// 为什么不让排版 agent 自己调内容工具：它一旦能改字，就会顺手把「看起来太长」
+/// 的句子删掉 —— 那是内容决策，用户没同意过。提问走人，改动留在会话层。
+pub fn ask_session(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
+    let question = args
+        .get("question")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    if question.is_empty() {
+        return Err("question 不能为空：要问就说清问什么".into());
+    }
+    let len = question.chars().count();
+    if len > MAX_QUESTION_CHARS {
+        return Err(format!(
+            "问题有 {len} 字，超过 {MAX_QUESTION_CHARS} 字上限。一句话问一件事，别把背景全抄进去"
+        ));
+    }
+
+    let (page_id, blocks) = page_blocks(ctx)?;
+    // blockId 要一起下发：会话 agent 拿着它才知道问的是哪一段，
+    // 否则它只能把整页再 read_page 一遍，还可能答到别的段落上
+    let block_id = block_arg(args, &blocks)?;
+
+    take_slot(&ctx.out.asks, MAX_ASKS_PER_TURN, "提问")?;
+
+    let mut action = json!({ "type": "askSession", "pageId": page_id, "question": question });
+    if let Some(block_id) = &block_id {
+        action["blockId"] = json!(block_id);
+    }
+    push_action(ctx, action)?;
+
+    Ok("问题已转给会话 agent：它可能自己查经历库回答，也可能去问用户。\n\
+        不要重复问同一个问题 —— 说完继续把能排的排好，不用等答复。"
+        .into())
 }

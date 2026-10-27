@@ -320,8 +320,9 @@ export function Sidebar() {
 
       {pendingDelete && (
         <Confirm
+          open
           title={`删除「${pendingDelete.name}」？`}
-          desc="这个人的简历、经历、作品和会话会一起删掉，无法撤销。"
+          description="这个人的简历、经历、作品和会话会一起删掉，无法撤销。"
           onCancel={() => setPendingDelete(null)}
           onConfirm={() => {
             dispatch({ type: "deletePerson", personId: pendingDelete.personId });

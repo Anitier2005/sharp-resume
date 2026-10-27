@@ -99,6 +99,20 @@ export function AssistantTurn({
   );
 }
 
+/**
+ * 系统提示：会话流里的「发生了什么」，不是谁说的话。
+ *
+ * 它借用消息列表存（不新增存储），但形态上要一眼看出来不是对话内容 ——
+ * 居中的一行灰字，不带头像、不带气泡，也不能被当成上下文引用。
+ */
+export function SystemTurn({ message }: { message: ChatMessage }) {
+  return (
+    <div className={styles.turnSys} data-selectable>
+      {message.content}
+    </div>
+  );
+}
+
 export function TypingTurn() {
   return (
     <div className={styles.turnAi}>

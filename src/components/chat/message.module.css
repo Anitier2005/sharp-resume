@@ -253,3 +253,15 @@
 .inlineAsset svg {
   flex: none;
 }
+
+/* 系统提示：居中一行灰字。它出现的场合都是「补充说明用户没看见的事」
+   （比如某批改动被取消），用气泡表现会被误读成对话内容 */
+.turnSys {
+  margin: 2px auto;
+  max-width: 92%;
+  padding: 0 6px;
+  text-align: center;
+  font-size: 0.625rem;
+  line-height: 1.7;
+  color: var(--fg-4);
+}

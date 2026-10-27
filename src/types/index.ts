@@ -88,6 +88,27 @@ export interface PageStyle {
 }
 
 /**
+ * 排版提示：告诉生成器「这块用哪种容器」，语义由人给。
+ *
+ * 为什么不是「内容分类」：同一段内容，这次想排成两栏、下次想排成表格，
+ * 分类应该由下指令的人决定，生成器没有资格替用户判断「这看起来像技能」。
+ * 缺省（没有该字段）一律按 plain 处理，所以老数据不需要迁移。
+ */
+export type BlockRole =
+  | "plain"
+  | "tight"
+  | "band"
+  | "tags"
+  | "kv"
+  | "table"
+  | "grid-2"
+  | "grid-3"
+  | "cols-2"
+  | "cols-3"
+  | "split"
+  | "row";
+
+/**
  * 页里的块。
  *
  * 形状以 Rust 的 `model::Block` 为准：扁平结构，用 `kind` 区分，
@@ -107,6 +128,23 @@ export interface Block {
   caption?: string;
   /** contain / cover，只是排版提示 */
   fit?: string;
+  /** 结构化生成的容器提示；没有 = plain（老数据、手写块都是这种情况） */
+  role?: BlockRole;
+}
+
+/**
+ * 纸面上的批注：排版 agent 留的注记，不是内容。
+ *
+ * 它属于「过程」而不是「成品」—— 所以不进导出、不进打印，
+ * 也需要能单独删掉而不影响任何一块的内容。
+ */
+export interface PageNote {
+  id: string;
+  /** 指向某一块；为空表示整页级注记（贴在页角） */
+  blockId?: string;
+  text: string;
+  /** unix 秒，跟 Rust 侧一致；显示时乘 1000 */
+  at: number;
 }
 
 /**
@@ -140,6 +178,11 @@ export interface ResumePage {
   layout?: PageLayout;
   /** 唯一真相：页头、分区、图片都在这里按顺序排 */
   blocks: Block[];
+  /**
+   * 排版 agent 留在纸面上的批注（不是内容，不参与导出）。
+   * 旧数据没有该字段，读的时候当作空数组即可。
+   */
+  notes?: PageNote[];
   /** v4 遗留：只在读旧数据时出现，`normalizePage` 会把它搬进 blocks */
   header?: Field[];
   /** v4 遗留：同上 */
@@ -200,6 +243,15 @@ export interface ChatMessage {
   tool?: string;
   changes?: ChangeItem[];
   actions?: ChatAction[];
+  /**
+   * 系统提示（「已取消：删除第 2 页等 2 项改动」这类）。
+   *
+   * 为什么用标记而不是新增 role：会话历史由 Rust 侧按 role 组装成模型输入
+   * （`role === "assistant" ? assistant : user`），多一个角色会让整条历史
+   * 在模型眼里错位。用一个附加字段，渲染层自己决定长什么样，模型看到的
+   * 仍是一条普通的 user/assistant 发言。
+   */
+  system?: boolean;
 }
 
 export interface Workspace {

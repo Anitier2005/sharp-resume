@@ -1,7 +1,7 @@
 //! 页面控制工具层。
 //!
-//! 这一层不碰简历内容，只决定「用户眼前看到什么」：当前页、编辑还是预览、
-//! 快捷标签有哪些、界面长什么样（配色 / 字号 / 栏宽）。
+//! 这一层不碰简历内容，只决定「用户眼前看到什么」：在哪个候选人 / 哪份简历 / 哪一页、
+//! 编辑还是预览、快捷标签有哪些、界面长什么样（配色 / 字号 / 栏宽）。
 //!
 //! 它和内容工具走同一条边界：**工具不直接改前端状态**，只往 `ctx.actions`
 //! 里追加一条指令，随本轮回复一起回传，由前端 reducer 应用。
@@ -59,6 +59,49 @@ fn index_of(pages: &[Value], page_id: &str) -> usize {
         .position(|page| id_of(page) == page_id)
         .map(|index| index + 1)
         .unwrap_or(0)
+}
+
+/// 当前候选人节点。切人之前用不到，但 open_resume 需要它来定位「同一人下的简历」
+fn people_of<'a>(ctx: &'a ToolCtx) -> Result<&'a Vec<Value>, String> {
+    ctx.workspace
+        .get("people")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "工作区快照里没有 people".to_string())
+}
+
+fn person_of<'a>(ctx: &'a ToolCtx) -> Result<&'a Value, String> {
+    people_of(ctx)?
+        .iter()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(ctx.person_id))
+        .ok_or_else(|| format!("找不到候选人 {}", ctx.person_id))
+}
+
+pub fn open_person_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "personId": {
+                "type": "string",
+                "description": "候选人 id。不确定就先按错一次——报错里会列出全部可用 id，别按姓名猜"
+            }
+        },
+        "required": ["personId"],
+        "additionalProperties": false
+    })
+}
+
+pub fn open_resume_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "resumeId": {
+                "type": "string",
+                "description": "简历 id。read_person 的输出里每份简历后面都带着它"
+            }
+        },
+        "required": ["resumeId"],
+        "additionalProperties": false
+    })
 }
 
 pub fn open_page_params() -> Value {
@@ -178,6 +221,171 @@ pub fn open_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         index_of(pages, &page_id),
         label_of(page)
     ))
+}
+
+/// 候选人显示名：取第一个有值的字段。
+/// 没有字段时写「未命名」—— id 会紧跟在后面单独列出，不要重复。
+fn person_name(person: &Value) -> String {
+    person
+        .get("fields")
+        .and_then(Value::as_array)
+        .and_then(|fields| {
+            fields.iter().find_map(|field| {
+                field
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+            })
+        })
+        .unwrap_or("未命名")
+        .to_string()
+}
+
+/// 列出所有候选人。
+///
+/// 为什么需要它：内容工具只认 `ToolCtx` 里的当前 `personId`，模型手上没有别人的 id。
+/// 没有目录就只能靠 `open_person` 报错把 id 一个一个试出来 —— 每次猜错都要空转一轮。
+/// 这里只报「能认人的标签 + 几份简历」，不报任何简历内容：它不是内容来源。
+pub fn list_people(_args: &Value, ctx: &ToolCtx) -> Result<String, String> {
+    let people = people_of(ctx)?;
+    if people.is_empty() {
+        return Ok("工作区里还没有候选人。".into());
+    }
+
+    let mut out = format!("共 {} 位候选人：\n", people.len());
+    for person in people {
+        let id = person.get("id").and_then(Value::as_str).unwrap_or("?");
+        let resumes = person
+            .get("resumes")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        out.push_str(&format!(
+            "- {}（id: {id}）· {resumes} 份简历{}\n",
+            person_name(person),
+            if id == ctx.person_id { " ← 当前" } else { "" }
+        ));
+    }
+    Ok(out.trim_end().to_string())
+}
+
+/// 切候选人。
+///
+/// 为什么要这个工具：内容工具的 `personId` 来自 `ToolCtx`，模型手上没有它 ——
+/// 用户说「换回上一个」，模型只能切焦点，不能替用户跨人改数据。
+/// 已经在那个人身上时不发指令：空转会让前端多一次无意义的重渲染与滚动复位。
+pub fn open_person(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
+    let people = people_of(ctx)?;
+    if people.is_empty() {
+        return Err("工作区里还没有候选人".into());
+    }
+
+    let id = args
+        .get("personId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    if id.is_empty() {
+        return Err(format!(
+            "personId 不能为空。可用的候选人：{}",
+            people
+                .iter()
+                .map(|person| format!(
+                    "{}({})",
+                    person_name(person),
+                    person.get("id").and_then(Value::as_str).unwrap_or("?")
+                ))
+                .collect::<Vec<_>>()
+                .join("、")
+        ));
+    }
+
+    let target = people
+        .iter()
+        .find(|person| person.get("id").and_then(Value::as_str) == Some(id))
+        .ok_or_else(|| {
+            format!(
+                "没有 id 为 {id} 的候选人。可用的候选人：{}",
+                people
+                    .iter()
+                    .map(|person| format!(
+                        "{}({})",
+                        person_name(person),
+                        person.get("id").and_then(Value::as_str).unwrap_or("?")
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("、")
+            )
+        })?;
+
+    let name = person_name(target);
+    if id == ctx.person_id {
+        return Ok(format!("已经在候选人「{name}」（{id}）身上了，没有切换"));
+    }
+
+    push_action(ctx, json!({ "type": "openPerson", "personId": id }))?;
+    Ok(format!("已切到候选人「{name}」（id: {id}）"))
+}
+
+/// 切简历。只在**当前候选人**名下找：跨人切简历是两件事混成一件，
+/// 用户说的「看英文那份」几乎不会是另一个人的。
+pub fn open_resume(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
+    let person = person_of(ctx)?;
+    let resumes = person
+        .get("resumes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "这位候选人名下还没有简历".to_string())?;
+    if resumes.is_empty() {
+        return Err("这位候选人名下还没有简历".into());
+    }
+
+    let id = args
+        .get("resumeId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+
+    let list = || {
+        resumes
+            .iter()
+            .map(|resume| {
+                format!(
+                    "《{}》({})",
+                    resume
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.trim().is_empty())
+                        .unwrap_or("未命名简历"),
+                    resume.get("id").and_then(Value::as_str).unwrap_or("?")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("、")
+    };
+
+    if id.is_empty() {
+        return Err(format!("resumeId 不能为空。可用的简历：{}", list()));
+    }
+    let target = resumes
+        .iter()
+        .find(|resume| resume.get("id").and_then(Value::as_str) == Some(id))
+        .ok_or_else(|| format!("没有 id 为 {id} 的简历。可用的简历：{}", list()))?;
+
+    let title = target
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or("未命名简历");
+    if id == ctx.resume_id {
+        return Ok(format!("已经在《{title}》（{id}）上了，没有切换"));
+    }
+
+    push_action(
+        ctx,
+        json!({ "type": "openResume", "personId": ctx.person_id, "resumeId": id }),
+    )?;
+    Ok(format!("已切到《{title}》（id: {id}）"))
 }
 
 pub fn set_view(args: &Value, ctx: &ToolCtx) -> Result<String, String> {

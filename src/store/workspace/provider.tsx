@@ -9,16 +9,25 @@ import {
   type ReactNode,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { Asset, Workspace } from "@/types";
-import { AUTO_TEXT_SCALE_FLOOR } from "@/types";
+import type { Asset, Block, PageNote, Resume, Workspace } from "@/types";
+import { AUTO_TEXT_SCALE_FLOOR, displayName } from "@/types";
 import { SEED } from "@/data/seed";
 import { EMPTY_WORKSPACE } from "@/data/empty";
 import { loadWorkspace, saveWorkspace, isTauri } from "@/lib/storage";
 import { describeChange, diff, flatten, type Flat } from "@/lib/changes";
 import { submitLayout } from "@/lib/layout";
-import { applyAgentActions } from "@/lib/agent-actions";
+import {
+  applyAgentActions,
+  chatBridge,
+  isDestructiveOp,
+  layoutQuestion,
+  needsConfirm,
+} from "@/lib/agent-actions";
+import { uid } from "@/lib/uid";
 import { useToast } from "@/components/ui/toast-context";
+import { Confirm } from "@/components/ui/confirm";
 import { reducer } from "./reducer";
+import type { Action } from "./types";
 import { WorkspaceContext, type WorkspaceContextValue, type SaveState } from "./context";
 
 /**
@@ -47,6 +56,102 @@ interface LayoutApplied {
   assets?: Asset[];
 }
 
+/* ==========================================================================
+   确认门：把「要删什么」翻译成人话
+   ========================================================================== */
+
+/**
+ * 一批等用户点头的写入。
+ *
+ * 为什么整批挂起而不是只挂起删除那几条：这一批是模型一次决策的产物，
+ * 拆开执行会出现「A 删了、B 因为 A 没了而失败」的半途状态，用户看到的
+ * 也不像自己确认过的那件事。
+ */
+interface PendingBatch {
+  ops: Action[];
+  /** 删除类操作的具体对象，一条一行 */
+  items: string[];
+  /** 同一批里不删除的改动条数：确认后它们一起生效 */
+  extra: number;
+}
+
+function findResume(state: Workspace, personId: string, resumeId: string): Resume | null {
+  const person = state.people.find((item) => item.id === personId);
+  return person?.resumes.find((item) => item.id === resumeId) ?? null;
+}
+
+/** 块的人话名：确认窗里写「分区「工作经历」（含 3 条）」比「block b7」有用得多 */
+function describeBlock(block: Block | undefined): string {
+  if (!block) return "这一块";
+  if (block.kind === "section") {
+    const title = block.title?.trim() || "未命名分区";
+    const count = block.items?.length ?? 0;
+    return count ? `分区「${title}」（含 ${count} 条）` : `分区「${title}」`;
+  }
+  if (block.kind === "media") {
+    const caption = block.caption?.trim();
+    return caption ? `图片块「${caption}」` : "一个图片块";
+  }
+  const count = block.fields?.length ?? 0;
+  return count ? `字段组（${count} 项）` : "一组字段";
+}
+
+/**
+ * 反查当前工作区，把删除类 op 说成用户认得出的东西。
+ *
+ * 只读 state、不猜：查不到就退回一个不带细节的说法 —— 确认窗里的描述
+ * 必须比「2 项」更有信息量，但也不能编。
+ */
+function describeDeletions(state: Workspace, ops: Action[]): string[] {
+  const out: string[] = [];
+  for (const op of ops) {
+    if (!isDestructiveOp(op)) continue;
+    switch (op.type) {
+      case "removePage": {
+        const resume = findResume(state, op.personId, op.resumeId);
+        const index = resume?.pages.findIndex((page) => page.id === op.pageId) ?? -1;
+        if (index < 0) {
+          out.push("一页（已经找不到了）");
+          break;
+        }
+        const label = resume?.pages[index]?.label?.trim();
+        out.push(`第 ${index + 1} 页${label ? `「${label}」` : "（未命名页）"}`);
+        break;
+      }
+      case "deleteResume": {
+        const resume = findResume(state, op.personId, op.resumeId);
+        const pages = resume?.pages.length ?? 0;
+        out.push(`简历「${resume?.title || "未命名简历"}」和它的 ${pages} 页`);
+        break;
+      }
+      case "deletePerson": {
+        const person = state.people.find((item) => item.id === op.personId);
+        out.push(
+          person
+            ? `候选人「${displayName(person.fields)}」的全部简历与经历`
+            : "一位候选人（已经找不到了）",
+        );
+        break;
+      }
+      case "removeBlock":
+      case "removeSection": {
+        // removeSection 删的是整个分区（连同条目），描述要和删一个块区分开
+        const targetId = op.type === "removeBlock" ? op.blockId : op.sectionId;
+        const page = findResume(state, op.personId, op.resumeId)?.pages.find(
+          (item) => item.id === op.pageId,
+        );
+        const block = page?.blocks?.find((item) => item.id === targetId);
+        out.push(op.type === "removeSection" ? `整个${describeBlock(block)}` : describeBlock(block));
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return out;
+}
+
+
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, INITIAL_WORKSPACE);
   const [ready, setReady] = useState(false);
@@ -57,6 +162,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [layoutStatus, setLayoutStatus] = useState<{ pageId: string; text: string } | null>(null);
   const firstRun = useRef(true);
   const toast = useToast();
+  /** 等用户点头的写入批次，FIFO：一次只显示一个确认窗，后面来的排队不丢 */
+  const [batches, setBatches] = useState<PendingBatch[]>([]);
+  /** 排版提问的防抖表：同一页 5 秒内只让会话 agent 跑一轮，防止两边互相叫起来 */
+  const askAt = useRef(new Map<string, number>());
 
   // 启动时载入
   useEffect(() => {
@@ -172,6 +281,159 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [openPages, state.ui.openPages, resolvedPageId, resume],
   );
 
+  /**
+   * 换候选人：简历必须一起落。
+   *
+   * 只改 activePersonId 的话，`resume` 会退回「这个人的第一份」，但落盘的
+   * ui.activeResumeId 还停在上一个人身上 —— 下次启动、以及任何读 store 的地方
+   * （比如工具层的只读镜像）都会指向一份不属于当前人的简历。
+   */
+  const openPerson = useCallback(
+    (personId: string) => {
+      const target = state.people.find((item) => item.id === personId);
+      const first = target?.resumes[0];
+      if (!target || !first) return;
+      dispatch({ type: "selectResume", personId: target.id, resumeId: first.id });
+      // 视图里的当前页也得跟着走，否则 resolvedPageId 要先退回旧页再回退
+      setActivePageId(first.pages[0]?.id ?? null);
+    },
+    [state.people],
+  );
+
+  /** 换简历：当前页落到这份简历的第一页（别把上一份的页 id 带过来） */
+  const openResume = useCallback(
+    (personId: string, resumeId: string) => {
+      const target = state.people.find((item) => item.id === personId);
+      const next = target?.resumes.find((item) => item.id === resumeId);
+      if (!target || !next) return;
+      dispatch({ type: "selectResume", personId: target.id, resumeId: next.id });
+      setActivePageId(next.pages[0]?.id ?? null);
+    },
+    [state.people],
+  );
+
+  /* ==========================================================================
+     内容写入通道 + 确认门
+     ========================================================================== */
+
+  /** 按数组顺序落地；不做合并 —— 顺序即语义（契约 1.1） */
+  const runOps = useCallback(
+    (ops: Action[]) => {
+      for (const op of ops) dispatch(op);
+      // addPage{open} 的「视图」那一半：reducer 已把新页顶到 openPages[0]，
+      // 真正的当前页在 provider 的视图态里，得单独跟过去
+      for (const op of ops) {
+        if (op.type === "addPage" && op.open && op.id) openPage(op.id);
+      }
+    },
+    [openPage],
+  );
+
+  /**
+   * agent 的写入入口。用户点击走 dispatch，agent 必须走这里：
+   * 它多一层确认门，行为才和「用户自己点」一致。
+   */
+  const applyOps = useCallback(
+    (ops: Action[]) => {
+      if (!ops.length) return;
+      // 需要 open 的 addPage 在这里就把 id 定下来：确认通过后才 dispatch，
+      // 而 reducer 里生成的 id 外面拿不到，`open` 就没法落点
+      const prepared: Action[] = ops.map((op) =>
+        op.type === "addPage" && op.open && !op.id ? { ...op, id: uid("pg") } : op,
+      );
+      if (!needsConfirm(prepared)) {
+        runOps(prepared);
+        return;
+      }
+      const items = describeDeletions(state, prepared);
+      // 整批挂起：确认后按原顺序一次执行，取消则一条都不落地
+      setBatches((list) => [
+        ...list,
+        { ops: prepared, items, extra: prepared.length - items.length },
+      ]);
+    },
+    [state, runOps],
+  );
+
+  const confirmBatch = () => {
+    const head = batches[0];
+    if (!head) return;
+    runOps(head.ops);
+    setBatches((list) => list.slice(1));
+  };
+
+  /**
+   * 取消：整批丢弃，并在会话里留一句话。
+   *
+   * 为什么要留话：模型并不知道用户点了「取消」（工具的返回文案是「已提交，待确认」），
+   * 下一次它读到这段历史才知道那些改动没生效，否则会以为已经写进去了又去改一遍。
+   */
+  const cancelBatch = () => {
+    const head = batches[0];
+    if (!head) return;
+    setBatches((list) => list.slice(1));
+    // 整批都是删除时说「删除第 2 页…」，混着其他修改就不加动词，免得读起来像只删了它
+    const verb = head.items.length === head.ops.length ? "删除" : "";
+    const summary = head.items.length
+      ? `${verb}${head.items[0]} 等 ${head.ops.length} 项改动`
+      : `${head.ops.length} 项改动`;
+    const notice = `（已取消：${summary}）`;
+    const bridge = chatBridge();
+    if (bridge) {
+      bridge.notice(notice);
+      return;
+    }
+    // 面板没挂上（极端情况）时退回工作区会话，至少让用户看得见
+    if (person) {
+      dispatch({
+        type: "appendMessage",
+        personId: person.id,
+        message: { id: uid("m"), role: "user", system: true, content: notice, time: Date.now() },
+      });
+    }
+  };
+
+  /** 排版 agent 留的批注：按页落进数据，纸面自己负责贴到块上 */
+  const appendNote = useCallback(
+    (personId: string, resumeId: string, pageId: string, note: PageNote) => {
+      dispatch({ type: "pageNote", personId, resumeId, pageId, note });
+    },
+    [],
+  );
+
+  /**
+   * 排版 agent 向会话 agent 提问。
+   *
+   * 前端负责三件事：落成一条会话消息、让会话 agent 自动跑一轮、防重
+   * （同一页 5 秒内只触发一次 —— 两个 agent 互相呼叫很容易打成死循环，
+   * 契约 4 只限制后端单轮次数，这里的节流是最后一道闸）。
+   */
+  const askSession = useCallback(
+    (pageId: string, question: string, blockId?: string) => {
+      const now = Date.now();
+      if (now - (askAt.current.get(pageId) ?? 0) < 5000) return;
+      askAt.current.set(pageId, now);
+
+      const bridge = chatBridge();
+      if (!bridge) {
+        console.warn("[layout] 会话面板还没准备好，这次提问被跳过", question);
+        return;
+      }
+      const index = resume?.pages.findIndex((item) => item.id === pageId) ?? -1;
+      bridge.turn(pageId, layoutQuestion(index + 1, question, blockId));
+    },
+    [resume],
+  );
+
+  /**
+   * 监听器里要用「最新一版」的这些函数，但它们随 state 每次变化。
+   * 放进 ref 而不是进依赖：否则每敲一个字就重订阅一遍 Tauri 事件。
+   */
+  const handlers = useRef({ applyOps, appendNote, askSession, openPerson, openResume });
+  useEffect(() => {
+    handlers.current = { applyOps, appendNote, askSession, openPerson, openResume };
+  });
+
   // 自动保存：改动后 500ms 落盘。保存状态由「快照是否还是当前 state」派生，不在 effect 里同步 setState
   useEffect(() => {
     if (!ready) return;
@@ -259,7 +521,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
       if (!Array.isArray(actions) || !actions.length) return;
       applyAgentActions(actions, {
-        openPage: () => {},
+        // 排版事件也走这一条分发器：新增指令只需要在这里补一次，
+        // 不必为「会话来的」和「排版来的」各维护一套分支
+        openPage: (pageId) => setActivePageId(pageId),
+        openPerson: (personId) => handlers.current.openPerson(personId),
+        openResume: (personId, resumeId) => handlers.current.openResume(personId, resumeId),
         patchUi: (patch) => dispatch({ type: "patchUi", patch }),
         ask: () => {},
         pageStyle: (pageId, style) =>
@@ -267,6 +533,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         pageLayout: (pageId, layout) =>
           dispatch({ type: "pageLayout", personId, resumeId, pageId, layout }),
         requestLayout: () => {},
+        // 写入走同一条确认门（排版 agent 不该写内容，但信封形状是共用的）
+        applyOps: (ops) => handlers.current.applyOps(ops),
+        pageNote: (pageId, note) =>
+          handlers.current.appendNote(personId, resumeId, pageId, note),
+        askSession: (pageId, question, blockId) =>
+          handlers.current.askSession(pageId, question, blockId),
       });
     }).then(keep);
 
@@ -343,6 +615,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const value: WorkspaceContextValue = {
     state,
     dispatch,
+    applyOps,
     person,
     resume,
     page,
@@ -350,6 +623,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setActivePageId,
     openPages,
     openPage,
+    openPerson,
+    openResume,
     closePage,
     expanded,
     toggleExpanded,
@@ -362,5 +637,33 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "setTextScale", textScale: value }),
   };
 
-  return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
+  // 确认窗挂在 provider 上而不是某个面板里：触发它的可能是会话 agent
+  // （在会话列）也可能是排版 agent（在简历列），挂在哪一列都会在另一列失效
+  const pending = batches[0] ?? null;
+
+  return (
+    <WorkspaceContext.Provider value={value}>
+      {children}
+      <Confirm
+        open={!!pending}
+        title={
+          pending && pending.items.length === 1
+            ? "这一步删掉就找不回来了"
+            : `这批改动会删掉 ${pending?.items.length ?? 0} 项内容`
+        }
+        description={[
+          "这是会话里提出的改动，和你在界面上点一样，要先确认。",
+          pending && pending.extra > 0
+            ? `同一批里另外 ${pending.extra} 项修改会在确认后一起生效。`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("")}
+        items={pending?.items}
+        confirmLabel={pending && pending.items.length ? "删除并继续" : "继续"}
+        onConfirm={confirmBatch}
+        onCancel={cancelBatch}
+      />
+    </WorkspaceContext.Provider>
+  );
 }

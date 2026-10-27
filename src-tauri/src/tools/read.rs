@@ -63,27 +63,43 @@ fn text_of(value: &Value, key: &str) -> String {
 ///
 /// 图片字段要说清 assetId —— 模型后面要引用它（写进 HTML 的 `asset:` 或
 /// 设成页头照片），只告诉它「这里有一张图」等于没说。
+///
+/// 每一行都带 `[字段 id]`：写工具按 id 定位（field 全局唯一），
+/// 读的时候不给，模型就只能猜参数名或者先调一次 add_field —— 两种都很糟。
 fn field_phrase(field: &Value) -> Option<String> {
+    let id = text_of(field, "id");
     let label = text_of(field, "label");
     let value = text_of(field, "value");
     let image = text_of(field, "assetId");
 
-    if !image.is_empty() {
+    let body = if !image.is_empty() {
         let mark = format!("〔图片 {image}〕");
-        return Some(match (label.is_empty(), value.is_empty()) {
+        match (label.is_empty(), value.is_empty()) {
             (true, true) => mark,
             (true, false) => format!("图注「{value}」 {mark}"),
             (false, true) => format!("{label}：{mark}"),
             (false, false) => format!("{label}：{mark} 图注「{value}」"),
-        });
-    }
+        }
+    } else if label.is_empty() && value.is_empty() {
+        // 空字段照样要出现：它可能是刚建好还没来得及填的一张图片位，
+        // 模型要往这里写就得先知道它的 id
+        if id.is_empty() {
+            return None;
+        }
+        "（空字段）".to_string()
+    } else {
+        match (label.is_empty(), value.is_empty()) {
+            (true, false) => value,
+            (false, true) => format!("{label}："),
+            _ => format!("{label}：{value}"),
+        }
+    };
 
-    match (label.is_empty(), value.is_empty()) {
-        (true, true) => None,
-        (true, false) => Some(value),
-        (false, true) => Some(format!("{label}：")),
-        (false, false) => Some(format!("{label}：{value}")),
-    }
+    Some(if id.is_empty() {
+        body
+    } else {
+        format!("[{id}] {body}")
+    })
 }
 
 /// 一行一个字段，空值不占行
@@ -268,22 +284,32 @@ pub fn read_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
             "\n这是一页**原件**：内容在文件里（asset:{}），不在字段中。\n             能做的只有调整它在成品里的呈现方式，改不了里面的字。",
             text_of(page, "assetId")
         ));
+        out.push_str(&notes_state(page));
         return Ok(out.trim_end().to_string());
     }
 
     let blocks = items_of(&page["blocks"]);
     if blocks.is_empty() {
         out.push_str("\n（这一页还没有任何内容块）");
-        return Ok(out);
+        out.push_str(&notes_state(page));
+        return Ok(out.trim_end().to_string());
     }
 
     for (bi, block) in blocks.iter().enumerate() {
         let id = text_of(block, "id");
         let kind = text_of(block, "kind");
+        // role 是「这一块要不要换容器」，改它只影响排版不影响内容，
+        // 但模型必须看得见现状，否则每轮都会重复设一次
+        let role = text_of(block, "role");
+        let role_note = if role.is_empty() {
+            String::new()
+        } else {
+            format!("· role {role}")
+        };
         match kind.as_str() {
             "fields" => {
-                let role = if bi == 0 { "｜页头" } else { "" };
-                out.push_str(&format!("\n块 {id}（字段组{role}）\n"));
+                let role_tag = if bi == 0 { "｜页头" } else { "" };
+                out.push_str(&format!("\n块 {id}（字段组{role_tag}）{role_note}\n"));
                 let lines = field_lines(&block["fields"]);
                 if lines.is_empty() {
                     out.push_str("  （空）\n");
@@ -298,7 +324,7 @@ pub fn read_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
             "section" => {
                 let title = text_of(block, "title");
                 out.push_str(&format!(
-                    "\n块 {id}（分区）{}\n",
+                    "\n块 {id}（分区）{}{role_note}\n",
                     if title.is_empty() {
                         "（无标题）".to_string()
                     } else {
@@ -313,14 +339,19 @@ pub fn read_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
                 for (ei, entry) in entries.iter().enumerate() {
                     let (fields, ref_id) = effective_fields(entry, person);
                     let line = inline_fields(fields);
+                    // 条目 id 是 update_entry / remove_entry / move_entry 的唯一凭据
+                    let entry_id = text_of(entry, "id");
                     let suffix = match &ref_id {
                         Some(id) => format!("（库条目 {id}）"),
                         None => String::new(),
                     };
                     if line.is_empty() {
-                        out.push_str(&format!("  {}. （没有字段）{suffix}\n", ei + 1));
+                        out.push_str(&format!(
+                            "  {}. [{entry_id}] （没有字段）{suffix}\n",
+                            ei + 1
+                        ));
                     } else {
-                        out.push_str(&format!("  {}. {line}{suffix}\n", ei + 1));
+                        out.push_str(&format!("  {}. [{entry_id}] {line}{suffix}\n", ei + 1));
                     }
                     let bullets = item_strings(&entry["bullets"]);
                     if bullets.is_empty() {
@@ -335,7 +366,7 @@ pub fn read_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
             "media" => {
                 let caption = text_of(block, "caption");
                 out.push_str(&format!(
-                    "\n块 {id}（图片）asset:{} {}\n",
+                    "\n块 {id}（图片）asset:{} {}{role_note}\n",
                     text_of(block, "assetId"),
                     if caption.is_empty() {
                         String::new()
@@ -344,12 +375,37 @@ pub fn read_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
                     }
                 ));
             }
-            other => out.push_str(&format!("\n块 {id}（不认识的类型 {other}）\n")),
+            other => out.push_str(&format!("\n块 {id}（不认识的类型 {other}）{role_note}\n")),
         }
     }
 
-    out.push_str("\n（块 id 是改这一块版面的凭据：要只动某块，用 set_page_layout 的 parts）");
+    out.push_str(&notes_state(page));
+    out.push_str(
+        "\n（块 id 是改内容与版面的凭据：加条目用 add_entry 传所在分区块的 id，\
+         改版面用 set_page_layout 的 parts）",
+    );
     Ok(out.trim_end().to_string())
+}
+
+/// 纸面上的批注：排版 agent 留的话就靠这一段传给会话 agent。
+/// 编号从 1 起 —— 模型引用「第 2 条批注」时两边指数要一致。
+fn notes_state(page: &Value) -> String {
+    let notes = items_of(&page["notes"]);
+    if notes.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("\n\n排版批注 {} 条：\n", notes.len());
+    for (index, note) in notes.iter().enumerate() {
+        let block = text_of(note, "blockId");
+        let place = if block.is_empty() {
+            String::new()
+        } else {
+            format!(" · 块 {block}")
+        };
+        let text = text_of(note, "text");
+        out.push_str(&format!("  [批注 {}]{place} {text}\n", index + 1));
+    }
+    out
 }
 
 /// 这一页现在是怎么排的：结构化、哪些块手写过、有没有整页接管
@@ -572,5 +628,98 @@ mod tests {
         assert!(text.contains("中远"), "{text}");
         let none = with_ctx(|ctx| read_library(&json!({ "keyword": "不存在的词" }), ctx).unwrap());
         assert!(none.contains("没有匹配"), "{none}");
+    }
+
+    /// 写工具全靠 id 定位：读的时候不把 id 摆出来，模型只能靠猜
+    #[test]
+    fn read_outputs_every_id_the_write_tools_need() {
+        let text = with_ctx(|ctx| read_page(&json!({}), ctx).unwrap());
+        // 字段 id（set_field / remove_field）
+        assert!(text.contains("[f3] 职位：单证"), "{text}");
+        assert!(text.contains("[f4]"), "{text}");
+        // 块 id（add_entry / set_block_role / add_section 的 afterBlockId）
+        assert!(text.contains("块 s1（分区）"), "{text}");
+        // 条目 id（update_entry / remove_entry / move_entry）
+        assert!(text.contains("[e1]"), "{text}");
+        // 库条目 id
+        assert!(text.contains("库条目 it1"), "{text}");
+    }
+
+    #[test]
+    fn read_shows_block_role_when_set() {
+        let ws = json!({
+            "people": [{
+                "id": "p1",
+                "fields": [],
+                "items": [],
+                "assets": [],
+                "resumes": [{
+                    "id": "r1",
+                    "title": "简历",
+                    "pages": [{
+                        "id": "pg1",
+                        "kind": "native",
+                        "label": "一",
+                        "blocks": [
+                            { "id": "b1", "kind": "section", "title": "技能", "role": "tags" },
+                            { "id": "b2", "kind": "fields", "role": "kv",
+                              "fields": [{ "id": "f9", "label": "语言", "value": "英语" }] }
+                        ]
+                    }]
+                }]
+            }]
+        });
+        let out = crate::tools::Outbox::default();
+        let ctx = ToolCtx {
+            workspace: &ws,
+            person_id: "p1",
+            resume_id: "r1",
+            page_id: "pg1",
+            out: &out,
+            root: None,
+        };
+        let text = read_page(&json!({}), &ctx).unwrap();
+        assert!(text.contains("· role tags"), "{text}");
+        assert!(text.contains("· role kv"), "{text}");
+    }
+
+    /// 排版 agent 的批注要能被会话 agent 读到，否则 ask_session 之外没有通道
+    #[test]
+    fn read_page_appends_layout_notes() {
+        let ws = json!({
+            "people": [{
+                "id": "p1",
+                "fields": [],
+                "items": [],
+                "assets": [],
+                "resumes": [{
+                    "id": "r1",
+                    "title": "简历",
+                    "pages": [{
+                        "id": "pg1",
+                        "kind": "native",
+                        "label": "一",
+                        "blocks": [{ "id": "b1", "kind": "section", "title": "工作" }],
+                        "notes": [
+                            { "id": "n1", "text": "这块太挤，删一条", "blockId": "b1", "at": 1 },
+                            { "id": "n2", "text": "整页偏左", "at": 2 }
+                        ]
+                    }]
+                }]
+            }]
+        });
+        let out = crate::tools::Outbox::default();
+        let ctx = ToolCtx {
+            workspace: &ws,
+            person_id: "p1",
+            resume_id: "r1",
+            page_id: "pg1",
+            out: &out,
+            root: None,
+        };
+        let text = read_page(&json!({}), &ctx).unwrap();
+        assert!(text.contains("排版批注 2 条"), "{text}");
+        assert!(text.contains("[批注 1] · 块 b1 这块太挤，删一条"), "{text}");
+        assert!(text.contains("[批注 2] 整页偏左"), "{text}");
     }
 }

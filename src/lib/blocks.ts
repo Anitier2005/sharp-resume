@@ -19,8 +19,12 @@ export function newFieldsBlock(fields: Field[] = [], id?: string): Block {
   return { id: id ?? uid("b"), kind: "fields", fields };
 }
 
-export function newSectionBlock(title = "", items: SectionEntry[] = []): Block {
-  return { id: uid("sc"), kind: "section", title, items };
+/**
+ * 新分区块。`id` 由调用方给时照用：agent 同一轮里「建分区 → 往里加条目」
+ * 靠这个 id 对上，前端自己生成就会和工具手里那个对不上。
+ */
+export function newSectionBlock(title = "", items: SectionEntry[] = [], id?: string): Block {
+  return { id: id ?? uid("sc"), kind: "section", title, items };
 }
 
 export function newMediaBlock(assetId: string, caption?: string): Block {

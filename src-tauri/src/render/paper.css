@@ -247,6 +247,12 @@
   grid-template-columns: repeat(3, 1fr);
   gap: 4px 12px;
 }
+/* 整个分区当网格用（sec.grid-2 / sec.grid-3）时，标题必须占满整行：
+   否则它会缩进第一个格子里，右边的条目跟着错位一格 */
+.doc .sec.grid-2 > .t,
+.doc .sec.grid-3 > .t {
+  grid-column: 1 / -1;
+}
 /* 左窄右宽：左边放时间/地点，右边放内容 */
 .doc .split {
   display: grid;
@@ -269,6 +275,29 @@
   color: var(--dim);
   font-size: 0.9em;
   white-space: nowrap;
+}
+/* role=row 的分区：容器里装的是一条条 .entry。
+ * 容器级 flex 会把 N 条挤出同一行，所以这里改成**逐条生效**：
+ * 每条占满一整行，两端对齐由条目自己做。
+ * 结构不动（section 还是 flex 容器），靠 wrap + 每条 100% 让它们换行。 */
+.doc .row {
+  flex-wrap: wrap;
+}
+.doc .row > .entry {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0 var(--gap);
+}
+/* 长句宁可折行也不把左边的标题挤没 */
+.doc .row > .entry > * {
+  min-width: 0;
+}
+/* 要点自成一行：否则会挨着加粗标题排，被压成一列单字 */
+.doc .row > .entry > .bullets {
+  flex: 1 1 100%;
 }
 
 /* 更紧凑的堆叠：条目之间不留空，靠分隔线断开 */
@@ -317,6 +346,13 @@
 }
 .doc .tight {
   margin-bottom: 0;
+}
+/* `.tight` 是通用修饰类，上面那条 `margin-bottom: 0` 会顺带命中
+ * `section.sec.tight` —— 但 role=tight 的语义只是「标题更紧」，
+ * 不是「这一块不要和下一块留距离」。这里用更具体的选择器把间距还回去，
+ * 不改上面那条：条目、其它地方还在用 `.tight` 取消空白。 */
+.doc > .sec.tight {
+  margin-bottom: var(--gap);
 }
 
 /* ---------- 强调与文本块 ---------- */
@@ -375,6 +411,25 @@
 }
 .doc .kv > span {
   color: var(--dim);
+}
+
+/* 键值列表：结构化生成给的是 <dl class="kv">，一条一份 dt/dd。
+ * 和上面 span 版共用一个名字，所以选择器带上 dl 提高权重，
+ * 只用几行把 span 版的 inline-block / nowrap 压回去，不动它的定义。
+ * 两列宽度取所有 dt 的最大值，右边的值因此能对齐成一列。 */
+.doc dl.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 1px 10px;
+  margin: 0 0 6px;
+  white-space: normal;
+}
+.doc dl.kv > dt {
+  color: var(--dim);
+  font-weight: 400;
+}
+.doc dl.kv > dd {
+  margin: 0;
 }
 
 /* ---------- 媒体 ---------- */
@@ -475,6 +530,15 @@
 .doc table.plain th,
 .doc table.plain td {
   border-bottom: none;
+}
+
+/* table role 生成的表可能几十行：整表 avoid 会被迫整体挪到下一页、再被裁掉。
+   这里改成「表可断、行不可断」—— 分页只发生在行与行之间。 */
+.doc .sec > table {
+  break-inside: auto;
+}
+.doc .sec > table tr {
+  break-inside: avoid;
 }
 
 /* 打印时不许元素跨页断开的情形由这里兜底：

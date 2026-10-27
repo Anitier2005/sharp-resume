@@ -63,21 +63,25 @@ export function mapPage(
  *
  * 页名留空：自动叫「第 7 页」既没有信息量，又会和「它现在排在第几页」打架
  * （见过一页叫「第 25 页」但排在第三位）。界面显示占位「未命名页」。
+ *
+ * `id` 由调用方给：agent 通道要在 dispatch 之后立刻指向这一页，
+ * 只能事先把 id 定下来（见 Action.addPage 的注释）。
  */
-export function newPage(): ResumePage {
+export function newPage(id?: string, label?: string): ResumePage {
   return {
-    id: uid("pg"),
+    id: id ?? uid("pg"),
     kind: "native",
-    label: "",
+    label: label?.trim() ?? "",
     blocks: [],
   };
 }
 
-export function newResume(personId: string): Resume {
+/** `id` 由调用方给时照用：工具会在同一轮里引用它（订阅、改名、往里加页） */
+export function newResume(personId: string, title?: string, id?: string): Resume {
   return {
-    id: uid("r"),
+    id: id ?? uid("r"),
     personId,
-    title: "未命名简历",
+    title: title?.trim() || "未命名简历",
     updatedAt: Date.now(),
     pages: [newPage()],
   };

@@ -78,6 +78,16 @@ export function ResumePanel() {
   );
   /** 等确认框点头才真删的页 */
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  /**
+   * 等确认框点头才真删的块 / 分区。
+   *
+   * 为什么放在面板而不是表单里：删除只是「改 store 的两条指令」，
+   * 确认必须和 agent 那条通道用同一个组件、同一套文案口径 ——
+   * 否则会出现「agent 删分区要问、用户自己删不问」的荒唐局面。
+   */
+  const [pendingCut, setPendingCut] = useState<{ kind: "section" | "block"; blockId: string } | null>(
+    null,
+  );
   /** 刚点了「+」，等 state 落地后把新页选中 */
   const wantNewPage = useRef(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -291,6 +301,7 @@ export function ResumePanel() {
 
   const menuPage = menu ? pageMap.get(menu.pageId) ?? null : null;
   const pendingPage = pendingDelete ? pageMap.get(pendingDelete) ?? null : null;
+  const cutBlock = pendingCut ? (page.blocks ?? []).find((item) => item.id === pendingCut.blockId) ?? null : null;
 
   const openMenu = (event: ReactMouseEvent, pageId: string, from: MenuFrom) => {
     event.preventDefault();
@@ -470,8 +481,8 @@ export function ResumePanel() {
           onHeader={(header) => dispatch({ type: "pageHeader", ...base, header })}
           onLabel={(label) => dispatch({ type: "pageLabel", ...base, label })}
           onAddSection={(title) => dispatch({ type: "addSection", ...base, title })}
-          onRemoveSection={(sectionId) => dispatch({ type: "removeSection", ...base, sectionId })}
-          onRemoveBlock={(blockId) => dispatch({ type: "removeBlock", ...base, blockId })}
+          onRemoveSection={(sectionId) => setPendingCut({ kind: "section", blockId: sectionId })}
+          onRemoveBlock={(blockId) => setPendingCut({ kind: "block", blockId })}
           onBlockFields={(blockId, fields) =>
             dispatch({ type: "blockFields", ...base, blockId, fields })
           }
@@ -553,10 +564,41 @@ export function ResumePanel() {
 
       {pendingPage && (
         <Confirm
-          title={`删除「${pendingPage.label}」？`}
-          desc="这一页的内容会被移除，无法撤销。如果只是想让它从页签栏消失，用「关闭标签」就好。"
+          open
+          title={`删除「${pendingPage.label || "未命名页"}」？`}
+          description="这一页的内容会被移除，无法撤销。如果只是想让它从页签栏消失，用「关闭标签」就好。"
           onCancel={() => setPendingDelete(null)}
           onConfirm={() => handleDelete(pendingPage)}
+        />
+      )}
+
+      {/* 删分区 / 删块：和 agent 那条通道同一个确认窗、同一套措辞，
+          区别只是这里的标题指得出具体是哪一块 */}
+      {pendingCut && (
+        <Confirm
+          open
+          title={
+            pendingCut.kind === "section"
+              ? `删除「${cutBlock?.title?.trim() || "未命名分区"}」这个分区？`
+              : "删除这一块？"
+          }
+          description={
+            pendingCut.kind === "section"
+              ? `分区里的 ${cutBlock?.items?.length ?? 0} 条内容会一起删掉，无法撤销。`
+              : cutBlock?.kind === "media"
+                ? "只从这一页移走，图片还在材料里，随时能再插回来。"
+                : "这一块的内容会被移除，无法撤销。"
+          }
+          onCancel={() => setPendingCut(null)}
+          onConfirm={() => {
+            if (pendingCut.kind === "section") {
+              dispatch({ type: "removeSection", ...base, sectionId: pendingCut.blockId });
+              toast(`已删除「${cutBlock?.title?.trim() || "未命名分区"}」`);
+            } else {
+              dispatch({ type: "removeBlock", ...base, blockId: pendingCut.blockId });
+            }
+            setPendingCut(null);
+          }}
         />
       )}
     </section>
