@@ -4,3 +4,6 @@
 *.ico binary
 *.icns binary
 *.docx binary
+# 批处理必须 CRLF：cmd.exe 不认 LF，会把 rem 与下一行并成一条命令。
+*.bat text eol=crlf
+*.cmd text eol=crlf
