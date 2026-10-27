@@ -1,8 +1,11 @@
 mod agent;
 mod assets;
 mod db;
+mod docx;
+mod export;
 mod model;
 mod net;
+mod pool;
 mod session;
 mod snapshot;
 mod storage;
@@ -450,7 +453,11 @@ pub fn run() {
             assets::asset_put,
             assets::asset_get,
             assets::asset_drop,
-            snapshot::plan_export
+            snapshot::plan_export,
+            export::export_resume,
+            pool::pool_put,
+            pool::pool_get,
+            pool::pool_list
         ])
         .manage(session::Sessions::default())
         .run(tauri::generate_context!())

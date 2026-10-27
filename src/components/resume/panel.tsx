@@ -15,7 +15,14 @@ import { ContextMenu } from "@/components/ui/context-menu";
 import { Confirm } from "@/components/ui/confirm";
 import { ChevronDown, Close, More, Plus } from "@/components/ui/icons";
 import { countChars, pageIndex } from "@/lib/doc";
-import { pageToMarkdown, printPage, resumeToMarkdown, saveBytes, saveText } from "@/lib/export";
+import {
+  exportResumeFolder,
+  pageToMarkdown,
+  printPage,
+  resumeToMarkdown,
+  saveBytes,
+  saveText,
+} from "@/lib/export";
 import { pageToDocx } from "@/lib/docx";
 import { displayName, type ResumePage } from "@/types";
 import { Paper } from "./paper";
@@ -256,6 +263,21 @@ export function ResumePanel() {
     );
   };
 
+  /** 整份导出：后端按页写文件到文件夹，并留一份 manifest 供下次增量更新 */
+  const exportFolder = () => {
+    void exportResumeFolder(state, person.id, resume.id)
+      .then((out) => {
+        const notes = [
+          out.removed.length ? `清掉 ${out.removed.length} 个旧文件` : "",
+          out.conflicts.length ? `${out.conflicts.length} 个同名文件另起了名字` : "",
+        ].filter(Boolean);
+        toast(
+          `已导出 ${out.files.length} 个文件到「${out.dirName}」${notes.length ? `（${notes.join("，")}）` : ""}`,
+        );
+      })
+      .catch((error) => toast(String(error)));
+  };
+
   const pageMap = new Map(resume.pages.map((item) => [item.id, item]));
   /** 只剩一页时不能删：页是简历的骨架，删空了整份简历就没地方写东西了 */
   const sole = resume.pages.length <= 1;
@@ -447,6 +469,12 @@ export function ResumePanel() {
                 resumeToMarkdown(person, resume.pages),
               ).then((path) => path && toast("已导出整份 Markdown"));
             }}
+          />
+          <MenuSep />
+          <MenuItem
+            label="Word · 整份"
+            hint="导出文件夹"
+            onSelect={exportFolder}
           />
         </Dropdown>
       </div>

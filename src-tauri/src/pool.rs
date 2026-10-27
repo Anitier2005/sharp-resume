@@ -110,11 +110,7 @@ pub fn pool_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// 旧版本把材料放在 `assets/`；读的时候两个目录都找，写只进 `pool/`
-fn legacy_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
-    crate::data_dir(app).ok().map(|dir| dir.join("assets"))
-}
-
+/// 旧版本把材料放在 `assets/`；`read_at` 读的时候两个目录都找，写只进 `pool/`
 fn safe_stored(stored: &str) -> Result<String, String> {
     let name = Path::new(stored)
         .file_name()
@@ -186,6 +182,8 @@ pub fn put(
         mime: mime.clone(),
         bytes: data.len() as i64,
         added_at: crate::snapshot::now_ms() as i64,
+        // 引用数由 `sync` 每轮按工作区现算；刚放进来时还不知道谁会用
+        refs: 0,
     };
     state.with(|conn| db::asset_upsert(conn, &row))?;
 
@@ -197,18 +195,25 @@ pub fn put(
     }))
 }
 
-pub fn read(app: &tauri::AppHandle, stored: &str) -> Result<Vec<u8>, String> {
+/// 从指定数据目录读池里的文件。
+///
+/// 导出与测试只需要一个目录，不需要整个 `AppHandle` —— 少一层依赖才能直接测。
+pub fn read_at(root: &Path, stored: &str) -> Result<Vec<u8>, String> {
     let name = safe_stored(stored)?;
-    let pool = pool_dir(app)?.join(&name);
+    let pool = root.join("pool").join(&name);
     if let Ok(bytes) = std::fs::read(&pool) {
         return Ok(bytes);
     }
-    if let Some(legacy) = legacy_dir(app) {
-        if let Ok(bytes) = std::fs::read(legacy.join(&name)) {
-            return Ok(bytes);
-        }
+    // 旧版本把材料放在 `assets/`
+    let legacy = root.join("assets").join(&name);
+    if let Ok(bytes) = std::fs::read(&legacy) {
+        return Ok(bytes);
     }
     Err(format!("材料文件不存在：{name}"))
+}
+
+pub fn read(app: &tauri::AppHandle, stored: &str) -> Result<Vec<u8>, String> {
+    read_at(&crate::data_dir(app)?, stored)
 }
 
 /// 移进 `.trash/<年月日>/`，不直接抹掉。原件不可重建，留退路。
@@ -240,7 +245,7 @@ fn trash(app: &tauri::AppHandle, stored: &str) -> Result<(), String> {
 /// 只看 stored 不看 id：同一个文件可能被三处引用，换任何一处 id 都不该影响判定。
 pub fn sync(app: &tauri::AppHandle, state: &Shared, workspace: &Workspace) -> Result<usize, String> {
     let used = used_stored(workspace);
-    let rows = state.with(db::asset_all)?;
+    let rows = state.with(|conn| db::asset_all(conn))?;
     let mut reclaimed = 0usize;
 
     for row in rows {
@@ -268,24 +273,25 @@ pub fn used_stored(workspace: &Workspace) -> HashSet<String> {
     let mut used = HashSet::new();
     let mut by_id: HashMap<&str, &str> = HashMap::new();
 
-    let mut note_asset = |asset: &crate::model::Asset| {
+    // 写成普通函数而不是闭包：闭包会一直可变借用 used，后面就没法再直接 insert
+    fn note_asset(used: &mut HashSet<String>, asset: &crate::model::Asset) {
         if !asset.stored.trim().is_empty() && !asset.stored.starts_with("data:") {
             used.insert(asset.stored.clone());
         }
-    };
+    }
 
     for asset in &workspace.assets {
-        note_asset(asset);
+        note_asset(&mut used, asset);
         by_id.insert(asset.id.as_str(), asset.stored.as_str());
     }
     for person in &workspace.people {
         for asset in &person.assets {
-            note_asset(asset);
+            note_asset(&mut used, asset);
             by_id.insert(asset.id.as_str(), asset.stored.as_str());
         }
         for item in &person.items {
             for asset in &item.assets {
-                note_asset(asset);
+                note_asset(&mut used, asset);
                 by_id.insert(asset.id.as_str(), asset.stored.as_str());
             }
         }
@@ -304,7 +310,7 @@ pub fn used_stored(workspace: &Workspace) -> HashSet<String> {
                     }
                     for entry in &block.items {
                         for asset in &entry.assets {
-                            note_asset(asset);
+                            note_asset(&mut used, asset);
                         }
                     }
                 }
@@ -336,7 +342,7 @@ pub fn pool_get(app: tauri::AppHandle, stored: String) -> Result<Vec<u8>, String
 #[tauri::command]
 pub fn pool_list(app: tauri::AppHandle, state: tauri::State<'_, Shared>) -> Result<Value, String> {
     let dir = pool_dir(&app)?;
-    let rows = state.with(db::asset_all)?;
+    let rows = state.with(|conn| db::asset_all(conn))?;
     let mut out = Vec::new();
     for row in rows {
         out.push(json!({

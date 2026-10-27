@@ -97,8 +97,7 @@ fn free_name(dir: &Path, wanted: &str, reserved: &HashSet<String>) -> String {
 }
 
 pub fn run(
-    app: &tauri::AppHandle,
-    state: &Shared,
+    root: &Path,
     workspace: &Workspace,
     resume: &Resume,
     input: &ExportInput,
@@ -157,7 +156,7 @@ pub fn run(
     // 2. 目标目录
     let dir = match input.dir.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
         Some(raw) => PathBuf::from(raw),
-        None => crate::data_dir(app)?.join("导出").join(&plan.dir_name),
+        None => root.join("导出").join(&plan.dir_name),
     };
 
     if dir.exists() && !dir.is_dir() {
@@ -213,7 +212,7 @@ pub fn run(
                 .ok_or_else(|| {
                     format!("第 {index} 页是文件页，但它指向的材料不在了（id = {}）", page.asset_id.clone().unwrap_or_default())
                 })?;
-            let bytes = crate::pool::read(app, &asset.stored)?;
+            let bytes = crate::pool::read_at(root, &asset.stored)?;
             // 逐字节拷贝：不转码、不重压缩
             crate::storage::atomic_write(&target, &bytes)?;
         } else {
@@ -236,7 +235,7 @@ pub fn run(
             let Some(asset) = block.asset_id.as_deref().and_then(|id| assets.get(id)) else {
                 continue;
             };
-            let Some(bytes) = crate::pool::read(app, &asset.stored).ok() else {
+            let Some(bytes) = crate::pool::read_at(root, &asset.stored).ok() else {
                 continue;
             };
             let ext = ext_of(&asset.name);
@@ -349,8 +348,175 @@ pub fn export_resume(
         .and_then(|person| person.resumes.iter().find(|item| item.id == input.resume_id))
         .ok_or_else(|| format!("找不到简历 {}", input.resume_id))?
         .clone();
-    let result = run(&app, &state, &workspace, &resume, &input)?;
+    let root = crate::data_dir(&app)?;
+    let result = run(&root, &workspace, &resume, &input)?;
     // 导出会读池里的文件，顺手做一次引用同步：删掉的页对应的文件进回收目录
     let _ = crate::pool::sync(&app, &state, &workspace);
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// 每个用例一个独立目录：<临时>/sharp-resume-export-test/<tag>-<纳秒>
+    fn temp_root(tag: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir()
+            .join("sharp-resume-export-test")
+            .join(format!("{tag}-{stamp}"));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        dir
+    }
+
+    /// 一份最小的真实形状：一人一简历两页（正文页 + 上传原件页）
+    fn workspace_with_two_pages() -> Workspace {
+        serde_json::from_value(json!({
+            "version": 5,
+            "people": [{
+                "id": "p1",
+                "fields": [{ "id": "f1", "label": "姓名", "value": "张三" }],
+                "assets": [{ "id": "a1", "kind": "image", "name": "原件.png", "stored": "scan.png" }],
+                "items": [],
+                "messages": [],
+                "resumes": [{
+                    "id": "r1",
+                    "personId": "p1",
+                    "title": "测试简历",
+                    "updatedAt": 0,
+                    "pages": [
+                        {
+                            "id": "pg1",
+                            "kind": "native",
+                            "label": "正文",
+                            "blocks": [{
+                                "id": "pg1-head",
+                                "kind": "fields",
+                                "fields": [
+                                    { "id": "f2", "label": "姓名", "value": "张三" },
+                                    { "id": "f3", "label": "职位", "value": "工程师" }
+                                ]
+                            }]
+                        },
+                        {
+                            "id": "pg2",
+                            "kind": "file",
+                            "label": "原件",
+                            "assetId": "a1",
+                            "blocks": []
+                        }
+                    ]
+                }]
+            }],
+            "ui": { "accent": "white" }
+        }))
+        .expect("测试数据要能解析")
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .expect("读目录")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn writes_every_page_and_copies_the_original_bytes() {
+        let root = temp_root("roundtrip");
+        let out = root.join("out");
+        std::fs::create_dir_all(root.join("pool")).unwrap();
+        std::fs::write(root.join("pool").join("scan.png"), b"PNGDATA").unwrap();
+
+        let workspace = workspace_with_two_pages();
+        let resume = workspace.people[0].resumes[0].clone();
+        let input = ExportInput {
+            person_id: "p1".into(),
+            resume_id: "r1".into(),
+            dir: Some(out.to_string_lossy().to_string()),
+        };
+
+        let result = run(&root, &workspace, &resume, &input).expect("导出应当成功");
+        let files = result["files"].as_array().unwrap();
+        // 两页 + manifest
+        assert_eq!(files.len(), 2, "两页各一个文件：{files:?}");
+        assert!(out.join("manifest.json").exists(), "manifest 必须写出来");
+
+        // file 页是逐字节拷贝
+        let copied = names(&out)
+            .into_iter()
+            .find(|name| name.ends_with(".png"))
+            .expect("原件应当被拷进来");
+        assert_eq!(std::fs::read(out.join(&copied)).unwrap(), b"PNGDATA");
+
+        // 正文页是 docx（zip 头 PK）
+        let docx = names(&out)
+            .into_iter()
+            .find(|name| name.ends_with(".docx"))
+            .expect("正文页应当有 docx");
+        let bytes = std::fs::read(out.join(&docx)).unwrap();
+        assert_eq!(&bytes[..2], b"PK", "docx 是 zip，应以 PK 开头");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rerun_replaces_manifest_and_drops_files_of_removed_pages() {
+        let root = temp_root("rerun");
+        let out = root.join("out");
+        std::fs::create_dir_all(root.join("pool")).unwrap();
+        std::fs::write(root.join("pool").join("scan.png"), b"PNGDATA").unwrap();
+
+        let workspace = workspace_with_two_pages();
+        let resume = workspace.people[0].resumes[0].clone();
+        let input = ExportInput {
+            person_id: "p1".into(),
+            resume_id: "r1".into(),
+            dir: Some(out.to_string_lossy().to_string()),
+        };
+        run(&root, &workspace, &resume, &input).expect("第一次导出");
+
+        // 删掉第二页再导一次：它的文件应当被清掉，目录里只剩一页 + manifest
+        let mut one_page = workspace.clone();
+        one_page.people[0].resumes[0].pages.truncate(1);
+        let resume = one_page.people[0].resumes[0].clone();
+        let result = run(&root, &one_page, &resume, &input).expect("第二次导出");
+
+        assert_eq!(result["removed"].as_u64().unwrap(), 1, "第二页的文件应被清掉");
+        assert_eq!(result["files"].as_array().unwrap().len(), 1);
+        assert!(
+            !names(&out).iter().any(|name| name.ends_with(".png")),
+            "原件不该还留着：{:?}",
+            names(&out)
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn refuses_a_folder_that_is_not_ours() {
+        let root = temp_root("foreign");
+        let out = root.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("用户自己的东西.txt"), b"mine").unwrap();
+
+        let workspace = workspace_with_two_pages();
+        let resume = workspace.people[0].resumes[0].clone();
+        let input = ExportInput {
+            person_id: "p1".into(),
+            resume_id: "r1".into(),
+            dir: Some(out.to_string_lossy().to_string()),
+        };
+
+        let error = run(&root, &workspace, &resume, &input).expect_err("不该往别人的目录里写");
+        assert!(error.contains("已经有别的东西"), "错误要说清原因：{error}");
+        assert_eq!(std::fs::read(out.join("用户自己的东西.txt")).unwrap(), b"mine");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Person, ResumePage } from "@/types";
+import type { Person, ResumePage, Workspace } from "@/types";
 import { displayName, fieldText } from "@/types";
 import { headerOf, sectionsOf } from "@/lib/blocks";
-import { isTauri } from "@/lib/storage";
+import { isTauri, saveWorkspace } from "@/lib/storage";
 
 /** 一页 → Markdown：字段就是字段，标题就是用户写的标题 */
 export function pageToMarkdown(person: Person, page: ResumePage): string {
@@ -93,3 +93,31 @@ export function printPage(): void {
 }
 
 export const personTitle = (person: Person) => displayName(person.fields);
+
+/* ---------- 整份导出成一个文件夹 ---------- */
+
+export interface ExportOutcome {
+  dirName: string;
+  /** 这次写进去的文件名（含页旁挂的图片） */
+  files: string[];
+  /** 上次导出、这次已经不存在的页，被清掉的文件名 */
+  removed: string[];
+  /** 同名但内容被用户改过：没覆盖，另起了名字 */
+  conflicts: string[];
+}
+
+/**
+ * 把一份简历导出成一个文件夹：每页一个文件 + manifest + 页里的图片旁挂。
+ *
+ * **导出读的是库里那份工作区**（后端负责写文件），所以先把内存里的改动落盘，
+ * 否则刚改的那一版不会被导出去。
+ */
+export async function exportResumeFolder(
+  workspace: Workspace,
+  personId: string,
+  resumeId: string,
+): Promise<ExportOutcome> {
+  if (!isTauri()) throw new Error("整份导出只在桌面端可用");
+  await saveWorkspace(workspace);
+  return invoke<ExportOutcome>("export_resume", { input: { personId, resumeId } });
+}

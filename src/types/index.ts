@@ -178,6 +178,11 @@ export interface ChatMessage {
 export interface Workspace {
   /** 5 起：一页 = 一串块（页头也是块） */
   version: 5;
+  /**
+   * 资产池的元数据。文件本体在 `<数据目录>/pool/`，这里只记「它是什么」。
+   * file 页与 media 块通过 id 引用这里的条目；老数据里材料还嵌在人和条目上。
+   */
+  assets?: Asset[];
   people: Person[];
   ui: {
     accent: AccentKey;
