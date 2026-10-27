@@ -23,8 +23,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={push}>
       {children}
       <div className={styles.toasts} data-print="hide" aria-live="polite">
+        {/* 提示里常带报错原文，得能选中复制 */}
         {items.map((item) => (
-          <div key={item.id} className={styles.toast}>
+          <div key={item.id} className={styles.toast} data-selectable>
             {item.text}
           </div>
         ))}

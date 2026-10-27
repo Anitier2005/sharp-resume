@@ -18,7 +18,13 @@
 }
 
 /* ---------- 页签 ---------- */
+/* 页签栏。注意这里**不能**写 overflow:hidden：
+   「⋯」和「导出」的下拉都是绝对定位的子元素，会被裁成半截。
+   页签自身的溢出交给 .tabStrip 裁。
+   position+z-index 让整条栏（含下拉）压在下面的画布之上。 */
 .tabs {
+  position: relative;
+  z-index: 20;
   height: 40px;
   flex: none;
   display: flex;
@@ -26,23 +32,17 @@
   gap: 1px;
   padding: 0 6px;
   border-bottom: 1px solid var(--line);
-  overflow: hidden;
 }
 
-/* 页签滚动区：只滚这一块，右边的「编辑|预览」和「导出」钉住不动。
-   min-width:0 是必须的，否则 flex 子项不会收缩，滚动条出不来。 */
-.tabScroll {
-  flex: 0 1 auto;
+/* 页签区：吃满剩余宽度，超出就由 JS 折叠进「⋯」，自己不滚。
+   flex-basis 必须写 0（不能是 auto），否则内容宽会把「编辑 | 预览」和「导出」挤出去。 */
+.tabStrip {
+  flex: 1 1 0;
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 1px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-.tabScroll::-webkit-scrollbar {
-  display: none;
+  overflow: hidden;
 }
 
 .tab {
@@ -102,24 +102,49 @@
   color: var(--fg-1);
 }
 
+/* 「+」与「⋯」钉在页签区右侧、并成一组：同尺寸、同 hover、间距 2px。
+   放一起之前，「+」是页签组的末尾，页签一多就离「⋯」很远，看着像两个散落的按钮。 */
+.tabTools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+}
+
 .tabAdd {
-  width: 20px;
+  width: 22px;
   height: 22px;
   display: grid;
   place-items: center;
   border-radius: 5px;
   color: var(--fg-3);
-  font-size: 0.875rem;
   line-height: 1;
-  margin-left: 2px;
+  transition: background 0.14s ease, color 0.14s ease;
 }
 .tabAdd:hover {
   background: var(--acc-softer);
   color: var(--acc-text);
 }
 
-.fill {
-  flex: 1;
+/* 「⋯」折叠入口：和「+」同形，但常亮——它出现就说明页签已经装不下了 */
+.more {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--fg-3);
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.more:hover {
+  background: var(--acc-softer);
+  color: var(--acc-text);
+}
+.more[aria-expanded="true"] {
+  background: var(--acc-soft);
+  color: var(--acc-text);
 }
 
 .export {

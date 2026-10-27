@@ -9,12 +9,16 @@ import { toAttachment, stripPreview, attachmentText } from "@/lib/attach";
 import { attachAtEnd } from "@/lib/inline-tokens";
 import { modelById } from "@/lib/model-config";
 import { diff, flatten, renderDelta, type Flat } from "@/lib/changes";
+import { entriesOf } from "@/lib/blocks";
 import { skillsPrompt } from "@/lib/skills";
 import { AiSettingsSheet } from "./ai-settings";
 import { AssistantTurn, EmptyTurn, TypingTurn, UserTurn } from "./message";
 import { aiReady, loadAi, saveAi, streamChat, type AiSettings } from "@/lib/ai";
 import { buildContext, buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
 import { isTauri } from "@/lib/storage";
+import { applyAgentActions, type AskQuestion } from "@/lib/agent-actions";
+import { requestLayout } from "@/lib/layout";
+import { AskForm } from "./ask-form";
 import { displayName } from "@/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import styles from "./chat.module.css";
@@ -28,7 +32,7 @@ import styles from "./chat.module.css";
  */
 
 export function ChatPanel() {
-  const { person, resume, page, dispatch } = useWorkspace();
+  const { state, person, resume, page, dispatch, setActivePageId } = useWorkspace();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
@@ -36,6 +40,8 @@ export function ChatPanel() {
   const [ai, setAi] = useState<AiSettings>(() => loadAi());
   const [aiOpen, setAiOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
+  /** 模型发来的表单；非空时盖在会话上 */
+  const [ask, setAsk] = useState<AskQuestion[] | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   /** 上一轮发出时的页面快照（摊平后），用来算「这一轮之前你手改了什么」 */
@@ -105,6 +111,35 @@ export function ChatPanel() {
   const patchLocal = useCallback((id: string, patch: Partial<ChatMessage>) => {
     setRemote((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }, []);
+
+  /**
+   * 会话 agent 说「这页要重排」时，转给页排版 agent，并把结果落回工作区。
+   * 排版本该由页 agent 负责，会话这边只传意图（brief），不碰样式。
+   */
+  const runLayoutFor = useCallback(
+    (pageId: string, brief: string) => {
+      if (!person || !resume) return;
+      const target = resume.pages.find((item) => item.id === pageId) ?? page;
+      if (!target) return;
+      void requestLayout({ person, resume, page: target, state, brief })
+        .then((actions) => {
+          if (!actions?.length) return;
+          applyAgentActions(actions, {
+            openPage: () => {},
+            patchUi: (patch) => dispatch({ type: "patchUi", patch }),
+            ask: () => {},
+            pageStyle: (id, style) =>
+              dispatch({ type: "pageStyle", personId: person.id, resumeId: resume.id, pageId: id, style }),
+            requestLayout: () => {},
+          });
+        })
+        .catch((error: unknown) => {
+          const reason = error instanceof Error ? error.message : String(error);
+          toast(`排版没跑成：${reason}`);
+        });
+    },
+    [person, resume, page, state, dispatch, toast],
+  );
 
   const send = useCallback(
     (text: string, attachments: Attachment[]) => {
@@ -218,9 +253,13 @@ export function ChatPanel() {
             delta?: string;
             reasoning?: string;
             message?: string;
+            tool?: string;
+            detail?: string;
           }>();
           let acc = "";
           let flushed = 0;
+          /** 本轮调过的工具，结束后写进这条消息的 tool 行，回放时看得出它读过什么 */
+          const used: string[] = [];
           channel.onmessage = (chunk) => {
             if (chunk.kind === "delta" && chunk.delta) {
               acc += chunk.delta;
@@ -231,10 +270,13 @@ export function ChatPanel() {
               }
             } else if (chunk.kind === "reasoning" && chunk.reasoning) {
               setReasoning((prev) => prev + chunk.reasoning);
+            } else if (chunk.kind === "tool_start" && chunk.tool) {
+              if (!used.includes(chunk.tool)) used.push(chunk.tool);
+              patchLocal(replyId, { tool: `${chunk.tool} · ${chunk.detail ?? "执行中"}` });
             }
           };
 
-          const id = await invoke<string>("chat_send", {
+          const sent = await invoke<{ id: string; actions: unknown[] }>("chat_send", {
             args: {
               key: person.id,
               context,
@@ -245,9 +287,19 @@ export function ChatPanel() {
               temperature: ai.temperature,
               reasoning: ai.reasoning ?? null,
               contextWindow: ai.contextWindow ?? null,
+              resumeId: resume.id,
+              pageId: targetPage.id,
+              view: state.ui.view ?? "edit",
+              // 工具层的只读镜像。剥掉 messages：工具不读会话，没必要每次搬全部历史
+              workspace: {
+                version: state.version,
+                ui: state.ui,
+                people: state.people.map((item) => ({ ...item, messages: [] })),
+              },
             },
             onEvent: channel,
           });
+          const id = sent.id;
 
           const { content, changes } = splitReply(acc, person, targetPage);
           await invoke("chat_patch", {
@@ -255,7 +307,7 @@ export function ChatPanel() {
             id,
             patch: {
               content: content || "（模型没有返回正文）",
-              tool: `${ai.model} · 完成`,
+              tool: used.length ? `${ai.model} · ${used.join(" / ")}` : `${ai.model} · 完成`,
               changes: changes.length ? changes : null,
               actions: changes.length
                 ? [
@@ -268,6 +320,17 @@ export function ChatPanel() {
 
           // 用 Rust 的历史覆盖本地投影：draft 换成正式消息，顺手拿到裁剪后的列表
           setRemote(await invoke<ChatMessage[]>("chat_history", { key: person.id }));
+
+          // 页面控制工具的指令在这里落地：切页、切视图、改快捷栏、调外观
+          const applied = applyAgentActions(sent.actions, {
+            openPage: (pageId) => setActivePageId(pageId),
+            patchUi: (patch) => dispatch({ type: "patchUi", patch }),
+            ask: (questions) => setAsk(questions),
+            pageStyle: (pageId, style) =>
+              dispatch({ type: "pageStyle", personId: person.id, resumeId: resume.id, pageId, style }),
+            requestLayout: (pageId, brief) => runLayoutFor(pageId, brief),
+          });
+          if (applied > 0) toast(`已按你的要求调整界面（${applied} 处）`);
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
           if (reason.includes("已中断")) {
@@ -286,7 +349,8 @@ export function ChatPanel() {
         }
       })();
     },
-    [person, resume, page, dispatch, ai, configured, toast, desktop, patchLocal],
+    // state 进依赖：每次发送都要把最新的工作区快照推给 Rust 的工具层
+    [state, person, resume, page, dispatch, setActivePageId, ai, configured, toast, desktop, patchLocal, runLayoutFor],
   );
 
   /** 统一补丁入口：桌面端消息真相在 Rust，浏览器端在工作区 */
@@ -329,7 +393,7 @@ export function ChatPanel() {
       // 同一条 entry 的多处改写合并成一次写入，否则后一次会覆盖前一次。
       if (!page) return;
       // v4：措辞只有一套，直接按 entryId 改本页那一条
-      const entries = page.sections.flatMap((section) => section.items);
+      const entries = entriesOf(page);
       const patches = new Map<string, string[]>();
       for (const change of changes) {
         const target = change.target;
@@ -398,8 +462,11 @@ export function ChatPanel() {
       data-col="chat"
       data-print="hide"
       onDragOver={(event) => {
+        // 只认文件：拖动页签、拖动字段把手、拖动选中文字都会派发 dragover，
+        // 以前不筛，随手一拖就冒出「松开即可添加附件」的遮罩
+        if (!event.dataTransfer.types.includes("Files")) return;
         event.preventDefault();
-        setDragging(true);
+        if (!dragging) setDragging(true);
       }}
       onDragLeave={(event) => {
         if (event.currentTarget.contains(event.relatedTarget as Node)) return;
@@ -455,6 +522,19 @@ export function ChatPanel() {
         onFilesChange={setFiles}
       />
 
+      {ask && (
+        <AskForm
+          questions={ask}
+          onCancel={() => setAsk(null)}
+          onSubmit={(text) => {
+            setAsk(null);
+            // 表单答案就是一条普通用户消息：后端不用挂起跨请求状态，
+            // 模型下一轮读到的是一段结构化的自然语言
+            send(text, []);
+          }}
+        />
+      )}
+
       {aiOpen && (
         <AiSettingsSheet
           settings={ai}
@@ -468,7 +548,11 @@ export function ChatPanel() {
         />
       )}
 
-      {dragging && <div className={styles.dropHint}>松开即可添加附件</div>}
+      {dragging && (
+        <div className={styles.dropHint}>
+          <span>松开即可添加附件</span>
+        </div>
+      )}
     </section>
   );
 }

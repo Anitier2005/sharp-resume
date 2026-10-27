@@ -21,6 +21,15 @@ export const Plus = (p: IconProps) => (
   </svg>
 );
 
+/** 三横线：页签装不下时的折叠入口。
+ *  原来是三点（⋯），和「更多操作」同义、容易被当成菜单按钮；
+ *  这里要表达的是「还有其他页排成一列」，横线更像一个折叠起来的列表。 */
+export const More = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.9, ...p })}>
+    <path d="M4 7h16M4 12h16M4 17h16" />
+  </svg>
+);
+
 export const Search = (p: IconProps) => (
   <svg {...base({ strokeWidth: 1.8, ...p })}>
     <circle cx="11" cy="11" r="7" />

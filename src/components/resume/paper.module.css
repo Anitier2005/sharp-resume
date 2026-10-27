@@ -19,7 +19,9 @@
   max-width: 374px;
   min-height: 528px;
   align-self: flex-start;
-  padding: 32px 34px 34px;
+  /* 页边距由排版 agent 决定（--p-margin 倍数，1 = 默认） */
+  padding: calc(32px * var(--p-margin, 1)) calc(34px * var(--p-margin, 1))
+    calc(34px * var(--p-margin, 1));
   background: var(--paper);
   border: 1px solid var(--paper-line);
   border-radius: 3px;
@@ -111,7 +113,7 @@
 .item p {
   margin: 4px 0 0;
   font-size: 9.5px;
-  line-height: 1.9;
+  line-height: var(--p-lh, 1.9);
   color: var(--paper-2);
 }
 
@@ -136,7 +138,7 @@
 .summary {
   margin: 10px 0 0;
   font-size: 9.5px;
-  line-height: 1.9;
+  line-height: var(--p-lh, 1.9);
   color: var(--paper-2);
 }
 
@@ -151,7 +153,7 @@
   display: block;
   padding-left: 9px;
   font-size: 9.5px;
-  line-height: 1.9;
+  line-height: var(--p-lh, 1.9);
   color: var(--paper-2);
 }
 .bullet::before {
@@ -166,7 +168,7 @@
   display: flex;
   gap: 8px;
   font-size: 9px;
-  line-height: 1.85;
+  line-height: var(--p-lh, 1.85);
 }
 .skill span {
   flex: none;
@@ -209,4 +211,79 @@
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+
+/* ---------- 排版 agent 能改的三件事：疏密、边距、页头对齐 ----------
+   只动行高与留白，不动字号：纸面是 A4 等比缩略，字号一变，
+   分页虚线的位置就和真实打印对不上了。 */
+
+.paper[data-density="compact"] {
+  --p-lh: 1.62;
+}
+.paper[data-density="roomy"] {
+  --p-lh: 2.16;
+}
+
+.paper[data-align="center"] .headText {
+  text-align: center;
+}
+
+/* ---------- 第二块起的字段组 ---------- */
+.fieldGroup {
+  margin-top: 12px;
+}
+.fieldGroup .meta:first-child {
+  margin-top: 0;
+}
+
+/* ---------- 图片块（作品图、证书扫描件、整页原件） ---------- */
+.media {
+  margin: 15px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.media img {
+  display: block;
+  width: 100%;
+  max-height: 300px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid var(--paper-line);
+  border-radius: 2px;
+}
+.media img[data-fit="cover"] {
+  object-fit: cover;
+}
+.media figcaption {
+  font-size: 8.5px;
+  color: var(--paper-3);
+}
+.mediaEmpty {
+  display: block;
+  padding: 20px 0;
+  text-align: center;
+  font-size: 8.5px;
+  color: var(--paper-3);
+  border: 1px dashed var(--paper-line);
+  border-radius: 2px;
+}
+
+/* ---------- 整页原件：不排版，铺满纸张 ---------- */
+.paper[data-page-kind="file"] {
+  padding: 0;
+}
+.fullPage {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.fullPageEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  font-size: 9px;
+  color: var(--paper-3);
 }

@@ -8,7 +8,11 @@ rust-version = "1.77.2"
 
 [lib]
 name = "sharp_resume_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# 只要 rlib。Tauri 模板默认给三种形态是为了移动端：iOS 要 staticlib，
+# Android 要 cdylib，桌面只用 rlib。三种形态会把同一个库编三遍，
+# 其中 staticlib 还要额外产出一个 300+ MB 的 .lib，链接时间翻倍。
+# 本项目只做 Windows 桌面，砍掉另外两种，debug 编译快一大截。
+crate-type = ["rlib"]
 
 [features]
 # 生产构建必须启用：把 dist/ 以 tauri:// 自定义协议内嵌进二进制。
@@ -37,6 +41,12 @@ reqwest = { version = "0.12", default-features = false, features = [
   "system-proxy",
 ] }
 futures-util = "0.3"
+
+# 结构化数据的权威存储。
+# bundled：把 sqlite3.c 一起编进来，不依赖系统里的 libsqlite3
+# （Windows 只有 System32 的 winsqlite3.dll，版本和特性都不受控）。
+# 已验证：MSVC Community 2026 + 本机 SDK 能编过（sqlite 3.46.0）。
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # 读取 Windows「辅助功能 → 文本大小」的实际缩放值，供 UI 字号跟随。
 [target.'cfg(windows)'.dependencies]

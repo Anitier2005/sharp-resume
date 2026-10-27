@@ -1,10 +1,11 @@
 import { useState } from "react";
-import type { Field, Person, ResumePage, SectionEntry } from "@/types";
+import type { Block, Field, Person, ResumePage, SectionEntry } from "@/types";
 import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem } from "@/components/ui/menu";
 import { ChevronRight, Close, Plus, ArrowUp, ArrowDown } from "@/components/ui/icons";
 import { FieldsEditor } from "@/components/ui/fields";
 import { AssetsEditor } from "@/components/ui/assets";
+import { headerOf, sectionsOf } from "@/lib/blocks";
 import { uid } from "@/lib/uid";
 import { displayName, fieldText } from "@/types";
 import { cx } from "@/lib/cx";
@@ -13,8 +14,11 @@ import styles from "./form.module.css";
 /**
  * 编辑态表单：一切皆字段。
  *
- * 页头 = 一组字段；分区 = 用户自己起名 + 一组条目；条目 = 一组字段 + 措辞。
+ * 页头 = 第一个字段块；分区 = 用户自己起名 + 一组条目；条目 = 一组字段 + 措辞。
  * 这里不出现任何「姓名 / 公司 / 时间」的预设键。
+ *
+ * v5 起页面是一串块，表单按块的顺序显示：页头块、额外字段组、分区、图片。
+ * 认不出的块不显示，但不会被删掉 —— 保存时原样带着。
  */
 export interface FormProps {
   person: Person;
@@ -23,6 +27,8 @@ export interface FormProps {
   onLabel: (label: string) => void;
   onAddSection: (title: string) => void;
   onRemoveSection: (sectionId: string) => void;
+  onRemoveBlock: (blockId: string) => void;
+  onBlockFields: (blockId: string, fields: Field[]) => void;
   onSectionTitle: (sectionId: string, title: string) => void;
   onSectionItems: (sectionId: string, items: SectionEntry[]) => void;
   onEntryPatch: (entryId: string, patch: Partial<SectionEntry>) => void;
@@ -35,6 +41,8 @@ export function ResumeForm({
   onLabel,
   onAddSection,
   onRemoveSection,
+  onRemoveBlock,
+  onBlockFields,
   onSectionTitle,
   onSectionItems,
   onEntryPatch,
@@ -45,8 +53,14 @@ export function ResumeForm({
   const toggle = (key: string) => setOpen((prev) => ({ ...prev, [key]: !prev[key] }));
   const isOpen = (key: string, fallback = false) => open[key] ?? fallback;
 
+  const headerFields = headerOf(page);
+  const sections = sectionsOf(page);
+  // 第一个 fields 块是页头，其余的是用户自己加的字段组；媒体块单独列
+  const extraGroups = (page.blocks ?? []).filter((block) => block.kind === "fields").slice(1);
+  const mediaBlocks = (page.blocks ?? []).filter((block) => block.kind === "media");
+
   const addFromLibrary = (sectionId: string, refId: string) => {
-    const section = page.sections.find((item) => item.id === sectionId);
+    const section = sections.find((item) => item.id === sectionId);
     if (!section) return;
     if (section.items.some((entry) => entry.refId === refId)) {
       toast("这条已经在本页了");
@@ -57,6 +71,33 @@ export function ResumeForm({
       { id: uid("se"), refId, fields: [], bullets: [] },
     ]);
   };
+
+  // 整页原件：我们不排版它，只让用户改页名
+  if (page.kind === "file") {
+    return (
+      <div className={styles.form} data-print="hide">
+        <div className={styles.scroll}>
+          <section className={styles.labelRow}>
+            <span className={styles.labelKey}>页名</span>
+            <input
+              value={page.label}
+              spellCheck={false}
+              placeholder="给这一页起个名字"
+              onChange={(event) => onLabel(event.target.value)}
+            />
+          </section>
+          <div className={styles.sec}>
+            <div className={styles.head}>
+              <b>整页原件</b>
+              <span className={styles.hint}>
+                这一页是直接上传的原件，按原样印在纸上；要改内容就换一份文件
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.form} data-print="hide">
@@ -77,16 +118,16 @@ export function ResumeForm({
             <ChevronRight size={10} className={cx(styles.chev, isOpen("header", true) && styles.chevOn)} />
             <b>页头</b>
             <span className={styles.hint}>第一行作标题，其余依次排开</span>
-            <span className={styles.cnt}>{page.header.length} 项</span>
+            <span className={styles.cnt}>{headerFields.length} 项</span>
           </button>
           {isOpen("header", true) && (
             <div className={styles.body}>
-              <FieldsEditor fields={page.header} onChange={onHeader} />
+              <FieldsEditor fields={headerFields} onChange={onHeader} />
             </div>
           )}
         </div>
 
-        {page.sections.map((section) => {
+        {sections.map((section) => {
           const opened = isOpen(section.id, true);
           return (
             <div className={styles.sec} key={section.id}>
@@ -282,6 +323,59 @@ export function ResumeForm({
             </div>
           );
         })}
+
+        {/* 第一块之后还有字段组：用户自己加的「联系方式」「语言」这类 */}
+        {extraGroups.map((block: Block) => {
+          const opened = isOpen(block.id);
+          return (
+            <div className={styles.sec} key={block.id}>
+              <div className={styles.sectionHead}>
+                <button type="button" className={styles.head} onClick={() => toggle(block.id)}>
+                  <ChevronRight size={10} className={cx(styles.chev, opened && styles.chevOn)} />
+                  <b>字段组</b>
+                  <span className={styles.cnt}>{(block.fields ?? []).length} 项</span>
+                </button>
+                <button
+                  type="button"
+                  className={styles.remove}
+                  aria-label="删除这组字段"
+                  onClick={() => onRemoveBlock(block.id)}
+                >
+                  <Close size={9} />
+                </button>
+              </div>
+              {opened && (
+                <div className={styles.body}>
+                  <FieldsEditor
+                    fields={block.fields ?? []}
+                    onChange={(fields) => onBlockFields(block.id, fields)}
+                    addLabel="加一个字段"
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* 图片块：作品截图、证书扫描件、整页原件 */}
+        {mediaBlocks.map((block) => (
+          <div className={styles.sec} key={block.id}>
+            <div className={styles.sectionHead}>
+              <div className={styles.head}>
+                <b>图片</b>
+                <span className={styles.hint}>{block.caption?.trim() || "按原始比例排进纸面"}</span>
+              </div>
+              <button
+                type="button"
+                className={styles.remove}
+                aria-label="删除这张图"
+                onClick={() => onRemoveBlock(block.id)}
+              >
+                <Close size={9} />
+              </button>
+            </div>
+          </div>
+        ))}
 
         <button type="button" className={styles.addSection} onClick={() => onAddSection("")}>
           <Plus size={10} /> 加一个分区

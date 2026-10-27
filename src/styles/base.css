@@ -39,6 +39,24 @@ button {
   color: #141412;
 }
 
+/* ==========================================================================
+   可选区：这是桌面应用，不是网页
+
+   默认全员 user-select:none —— 否则 Ctrl+A 会把整窗（侧栏、页签、工具栏、
+   纸面、右栏所有文字）一次选中，满屏蓝底；拖选也会带出相邻面板的文字。
+   只有「用来读和复制的东西」放开：输入控件、AI 回复、用户消息、简历纸面。
+   这些容器各自标 data-selectable，配合 lib/shortcuts 里的 Ctrl+A 处理。
+   ========================================================================== */
+.win {
+  user-select: none;
+}
+.win :is(input, textarea, [contenteditable]) {
+  user-select: text;
+}
+.win [data-selectable] {
+  user-select: text;
+}
+
 /* 细滚动条：多个可滚动容器共用，写在这里避免重复 */
 .scroll-thin {
   scrollbar-width: thin;

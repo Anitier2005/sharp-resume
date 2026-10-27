@@ -1,5 +1,5 @@
 import type { Person, Workspace } from "@/types";
-import { uid } from "@/lib/uid";
+import { mapSections, newSectionBlock, withEntry, withHeader, withoutBlock } from "@/lib/blocks";
 import type { Action } from "./types";
 import { mapPage, mapResume, newPerson, newPage, newResume, touch, withExpanded } from "./helpers";
 
@@ -137,6 +137,13 @@ export function reducer(state: Workspace, action: Action): Workspace {
         pages: [...resume.pages, newPage(resume.pages.length + 1)],
       }));
 
+    // 排版只由「页排版 agent」写：会话 agent 想改排版得走 request_layout
+    case "pageStyle":
+      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) => ({
+        ...page,
+        style: action.style,
+      }));
+
     case "removePage":
       return mapResume(state, action.personId, action.resumeId, (resume) => ({
         ...resume,
@@ -153,51 +160,54 @@ export function reducer(state: Workspace, action: Action): Workspace {
       }));
 
     case "pageHeader":
-      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) => ({
-        ...page,
-        header: action.header,
-      }));
+      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) =>
+        withHeader(page, action.header),
+      );
 
-    /* ---------- 分区与条目 ---------- */
+    /* ---------- 分区与条目（都是块） ---------- */
 
     case "addSection":
       return mapPage(state, action.personId, action.resumeId, action.pageId, (page) => ({
         ...page,
-        sections: [...page.sections, { id: uid("sc"), title: action.title, items: [] }],
+        blocks: [...(page.blocks ?? []), newSectionBlock(action.title)],
       }));
 
     case "removeSection":
+      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) =>
+        withoutBlock(page, action.sectionId),
+      );
+
+    case "removeBlock":
+      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) =>
+        withoutBlock(page, action.blockId),
+      );
+
+    case "blockFields":
       return mapPage(state, action.personId, action.resumeId, action.pageId, (page) => ({
         ...page,
-        sections: page.sections.filter((section) => section.id !== action.sectionId),
+        blocks: (page.blocks ?? []).map((block) =>
+          block.id === action.blockId ? { ...block, fields: action.fields } : block,
+        ),
       }));
 
     case "sectionTitle":
-      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) => ({
-        ...page,
-        sections: page.sections.map((section) =>
-          section.id === action.sectionId ? { ...section, title: action.title } : section,
+      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) =>
+        mapSections(page, (block) =>
+          block.id === action.sectionId ? { ...block, title: action.title } : block,
         ),
-      }));
+      );
 
     case "sectionItems":
-      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) => ({
-        ...page,
-        sections: page.sections.map((section) =>
-          section.id === action.sectionId ? { ...section, items: action.items } : section,
+      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) =>
+        mapSections(page, (block) =>
+          block.id === action.sectionId ? { ...block, items: action.items } : block,
         ),
-      }));
+      );
 
     case "entryPatch":
-      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) => ({
-        ...page,
-        sections: page.sections.map((section) => ({
-          ...section,
-          items: section.items.map((entry) =>
-            entry.id === action.entryId ? { ...entry, ...action.patch } : entry,
-          ),
-        })),
-      }));
+      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) =>
+        withEntry(page, action.entryId, action.patch),
+      );
 
     /* ---------- 会话 ---------- */
 

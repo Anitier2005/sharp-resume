@@ -1,6 +1,12 @@
+mod agent;
 mod assets;
+mod db;
+mod model;
 mod net;
 mod session;
+mod snapshot;
+mod storage;
+mod tools;
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -163,26 +169,72 @@ fn app_info(app: tauri::AppHandle) -> AppInfo {
     }
 }
 
-/// 读取工作区 JSON；文件不存在时返回 None。
+/// 读取工作区。
+///
+/// 旧版是一份 workspace.json，现在是 SQLite。顺序：
+///   1. 数据库里有内容 → 直接返回（权威）
+///   2. 数据库是空的、但旁边躺着老的 workspace.json → 导进来，然后把老文件
+///      改名成 `workspace.json.imported` 留档。不改名的话每次启动都会重导一遍，
+///      用户在数据库里做的改动会被旧文件「复活」。
+///   3. 老文件是 v1–v3 → 原样交还前端迁移。迁移逻辑暂时还在前端，
+///      迁移完前端会用 v4 调一次 write_state，那时才真正入库。
 #[tauri::command]
 fn read_state(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let file = state_file(&app)?;
-    if !file.exists() {
+    let dir = data_dir(&app)?;
+    let mut conn = db::open(&dir.join("app.db"))?;
+    if let Some(workspace) = db::load(&conn)? {
+        return serde_json::to_string(&workspace)
+            .map(Some)
+            .map_err(|error| format!("工作区序列化失败：{error}"));
+    }
+
+    let legacy = state_file(&app)?;
+    if !legacy.exists() {
         return Ok(None);
     }
-    std::fs::read_to_string(file)
+    let Some(text) = storage::read_raw(&legacy)? else {
+        return Ok(None);
+    };
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("工作区结构不符合 v4：{error}"))?;
+    if value.get("version").and_then(serde_json::Value::as_u64) != Some(4) {
+        return Ok(Some(text));
+    }
+
+    let workspace: model::Workspace = serde_json::from_str(&text)
+        .map_err(|error| format!("工作区结构不符合 v4：{error}"))?;
+    model::validate(&workspace)?;
+    db::save(&mut conn, &workspace)?;
+
+    let backup = legacy.with_file_name("workspace.json.imported");
+    std::fs::rename(&legacy, &backup)
+        .map_err(|error| format!("导入成功，但归档旧文件失败：{error}"))?;
+
+    serde_json::to_string(&workspace)
         .map(Some)
-        .map_err(|error| format!("读取工作区失败：{error}"))
+        .map_err(|error| format!("工作区序列化失败：{error}"))
 }
 
-/// 写入工作区 JSON（前端自动保存调用）。
+/// 写入工作区（前端自动保存调用）。
+///
+/// 空字符串 = 清空（前端「清空工作区」走这条）。
+/// 非空时先解析 + 校验，不合法直接拒绝：宁可这次保存失败，
+/// 也不把坏数据写进库 —— 那会连累之后每一次读取。
 #[tauri::command]
 fn write_state(app: tauri::AppHandle, json: String) -> Result<(), String> {
-    let file = state_file(&app)?;
-    if let Some(parent) = file.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| format!("创建目录失败：{error}"))?;
+    let dir = data_dir(&app)?;
+    let mut conn = db::open(&dir.join("app.db"))?;
+    if json.trim().is_empty() {
+        return db::clear(&conn);
     }
-    std::fs::write(file, json).map_err(|error| format!("写入工作区失败：{error}"))
+
+    let workspace: model::Workspace = serde_json::from_str(&json)
+        .map_err(|error| format!("拒绝写入：结构不合法（{error}）"))?;
+    if workspace.version != 4 {
+        return Err(format!("拒绝写入：只接受 version 4，收到 {}", workspace.version));
+    }
+    model::validate(&workspace)?;
+    db::save(&mut conn, &workspace)
 }
 
 /// 在文件管理器里打开数据目录，方便用户备份 / 拷走。
@@ -394,9 +446,11 @@ pub fn run() {
             session::chat_clear,
             session::chat_cancel,
             session::chat_send,
+            agent::layout::layout_send,
             assets::asset_put,
             assets::asset_get,
-            assets::asset_drop
+            assets::asset_drop,
+            snapshot::plan_export
         ])
         .manage(session::Sessions::default())
         .run(tauri::generate_context!())

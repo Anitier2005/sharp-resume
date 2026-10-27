@@ -9,9 +9,10 @@ import type {
   Workspace,
 } from "@/types";
 import { uid } from "@/lib/uid";
+import { normalizeWorkspace } from "@/lib/blocks";
 
 /**
- * 工作区迁移：任意历史版本 → v4（纯字段模型）。
+ * 工作区迁移：任意历史版本 → v5。
  *
  * 历史：
  *   v1  经历库存 bullets，页面只存 experienceIds
@@ -19,8 +20,10 @@ import { uid } from "@/lib/uid";
  *   v3  会话从简历上移到人
  *   v4  **字段化**：人的信息、库条目、页头、分区条目全变成自由字段；
  *       去掉页面类型（中文/英文/作品集）与语言维度
+ *   v5  **分块**：一页 = 一串块（fields / section / media），页头就是第一个 fields 块
  *
- * 单向、幂等：v4 直接原样返回；更早的按字段有没有来判断，重复跑不会二次改写。
+ * 单向、幂等：v4 及以上只做结构补齐（v4 → v5 把 header/sections 搬进 blocks）；
+ * 更早的按字段有没有来判断，重复跑不会二次改写。
  * 迁移必须无损：原有内容全部变成字段值，一句不丢（只是键名由用户接管）。
  */
 
@@ -136,7 +139,9 @@ function migratePage(page: Loose, order: number): ResumePage {
 
   return {
     id: text(page.id) || uid("pg"),
+    kind: "native",
     label: text(page.label) || `第 ${order + 1} 页`,
+    blocks: [],
     header,
     sections,
   };
@@ -186,28 +191,50 @@ function migratePerson(person: Loose): Person {
   };
 }
 
+/**
+ * 老数据没有 openPages：先按「当前简历的全部页」铺开。
+ * 之后打开任意一页都会把它顶到最前，顺序由使用习惯自然接管。
+ */
+function initialOpenPages(ui: Workspace["ui"] | undefined, people: Person[]): string[] {
+  const person = people.find((item) => item.id === ui?.activePersonId) ?? people[0];
+  const resume =
+    person?.resumes.find((item) => item.id === ui?.activeResumeId) ?? person?.resumes[0];
+  return (resume?.pages ?? []).map((item) => item.id);
+}
+
 export function migrateWorkspace(raw: unknown): Workspace {
   const src = raw as { version?: number; people?: Loose[]; ui?: Workspace["ui"] } | undefined;
   if (!src || typeof src !== "object" || !Array.isArray(src.people)) {
     throw new Error("工作区数据格式不对");
   }
-  if (src.version === 4) return raw as Workspace;
 
-  return {
-    version: 4,
-    people: src.people.map(migratePerson),
-    ui: {
-      accent: src.ui?.accent ?? "white",
-      accentHex: src.ui?.accentHex,
-      mode: src.ui?.mode ?? "light",
-      activePersonId: src.ui?.activePersonId ?? null,
-      activeResumeId: src.ui?.activeResumeId ?? null,
-      expanded: src.ui?.expanded ?? [],
-      textScale: src.ui?.textScale ?? null,
-      sideW: src.ui?.sideW,
-      docW: src.ui?.docW,
-      showSide: src.ui?.showSide,
-      showDoc: src.ui?.showDoc,
-    },
+  const version = typeof src.version === "number" ? src.version : 0;
+
+  if (version >= 4) {
+    // v4 与 v5 的内容语义完全一样，差别只在「页由一串块组成」。
+    // 补齐 openPages 之后交给 normalizeWorkspace 把 header/sections 搬成 blocks —— 与 Rust 同一套规则。
+    const workspace = raw as Workspace;
+    const ui = Array.isArray(workspace.ui?.openPages)
+      ? workspace.ui
+      : { ...workspace.ui, openPages: initialOpenPages(workspace.ui, workspace.people) };
+    return normalizeWorkspace({ ...workspace, version: 5, ui });
+  }
+
+  const people = src.people.map(migratePerson);
+  const ui: Workspace["ui"] = {
+    accent: src.ui?.accent ?? "white",
+    accentHex: src.ui?.accentHex,
+    mode: src.ui?.mode ?? "light",
+    activePersonId: src.ui?.activePersonId ?? null,
+    activeResumeId: src.ui?.activeResumeId ?? null,
+    expanded: src.ui?.expanded ?? [],
+    textScale: src.ui?.textScale ?? null,
+    sideW: src.ui?.sideW,
+    docW: src.ui?.docW,
+    showSide: src.ui?.showSide,
+    showDoc: src.ui?.showDoc,
+    openPages: initialOpenPages(src.ui, people),
   };
+
+  return normalizeWorkspace({ version: 5, people, ui });
 }

@@ -24,11 +24,25 @@ rem 打包：回到仓库根目录跑 npm run package:clean
 rem ============================================================================
 setlocal
 
-if not defined MSVC_ROOT set "MSVC_ROOT=C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Tools\MSVC\14.51.36231"
+rem 工具链位置会随 VS 重装变化（本机 2026-10-26 从 C 盘 BuildTools 换成了 E 盘 Community），
+rem 所以按候选顺序探测，找到第一个存在的 VC\Tools\MSVC\<版本> 就用它。
+if not defined MSVC_ROOT (
+  for %%B in (
+    "E:\Program Files\Microsoft Visual Studio\18\Community"
+    "C:\Program Files\Microsoft Visual Studio\18\Community"
+    "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools"
+  ) do (
+    if not defined MSVC_ROOT if exist "%%~B\VC\Tools\MSVC" (
+      for /d %%V in ("%%~B\VC\Tools\MSVC\*") do if not defined MSVC_ROOT set "MSVC_ROOT=%%~V"
+    )
+  )
+)
 if not defined SDK_ROOT  set "SDK_ROOT=C:\Program Files (x86)\Windows Kits\10"
 if not defined SDK_VER   set "SDK_VER=10.0.28000.0"
 
-set "CL_DIR=%MSVC_ROOT%\bin\Hostx86\x64"
+rem Community 装的是 64 位宿主（bin\Hostx64\x64），BuildTools 之前只有 32 位宿主
+set "CL_DIR=%MSVC_ROOT%\bin\Hostx64\x64"
+if not exist "%CL_DIR%\cl.exe" set "CL_DIR=%MSVC_ROOT%\bin\Hostx86\x64"
 set "RC_DIR=%SDK_ROOT%\bin\%SDK_VER%\x64"
 
 if not exist "%CL_DIR%\cl.exe" (

@@ -30,7 +30,7 @@ export function UserTurn({ message }: { message: ChatMessage }) {
   return (
     <div className={styles.turnUser}>
       {message.content && (
-        <div className={styles.prompt}>
+        <div className={styles.prompt} data-selectable>
           {segments.map((part, index) =>
             part.file ? (
               <span className={styles.inlineAsset} key={index} title={part.file.name}>

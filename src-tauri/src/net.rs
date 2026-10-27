@@ -13,10 +13,64 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::ipc::Channel;
 
+/// 一条对话消息。比原来的 {role, content} 多了工具相关字段：
+///   - assistant 带 `tool_calls`：模型要求调工具
+///   - role = "tool" 带 `tool_call_id`：工具执行结果回灌
+/// 两个可选字段都 skip_serializing_if，普通对话发出去的 JSON 和以前完全一致。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+impl ChatMessage {
+    pub fn system(text: impl Into<String>) -> Self {
+        Self { role: "system".into(), content: Some(text.into()), tool_calls: None, tool_call_id: None }
+    }
+    pub fn user(text: impl Into<String>) -> Self {
+        Self { role: "user".into(), content: Some(text.into()), tool_calls: None, tool_call_id: None }
+    }
+    pub fn assistant(text: impl Into<String>) -> Self {
+        Self { role: "assistant".into(), content: Some(text.into()), tool_calls: None, tool_call_id: None }
+    }
+    /// 模型这一轮只要调工具、不说话
+    pub fn assistant_calls(calls: Vec<ToolCall>, text: String) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: if text.is_empty() { None } else { Some(text) },
+            tool_calls: Some(calls),
+            tool_call_id: None,
+        }
+    }
+    /// 工具结果。`content` 必须是字符串（OpenAI 协议），读不出来也要给个错误文本
+    pub fn tool_result(call_id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            role: "tool".into(),
+            content: Some(text.into()),
+            tool_calls: None,
+            tool_call_id: Some(call_id.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: FunctionCall,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FunctionCall {
+    pub name: String,
+    /// 模型给的是 JSON 字符串，不是对象；这里保持原样，解析失败由工具层兜
+    pub arguments: String,
 }
 
 /// 前端传过来的请求。字段刻意保持扁平，好和 `AiSettings` 对上。
@@ -34,6 +88,9 @@ pub struct AiRequest {
     pub reasoning: Option<String>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// OpenAI 风格的 tools 数组；None 时请求体里不出现这个字段
+    #[serde(default)]
+    pub tools: Option<serde_json::Value>,
 }
 
 /// 流式事件：一块增量、结束、或错误。前端按 kind 分支处理。
@@ -48,20 +105,29 @@ pub struct StreamChunk {
     pub reasoning: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// kind = tool_start / tool_end 时：工具名
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// 工具的人话说明（读了第几页 / 结果有多大）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 impl StreamChunk {
     fn delta(text: String) -> Self {
-        Self { kind: "delta", delta: Some(text), reasoning: None, message: None }
+        Self { kind: "delta", delta: Some(text), reasoning: None, message: None, tool: None, detail: None }
     }
     fn reasoning(text: String) -> Self {
-        Self { kind: "reasoning", delta: None, reasoning: Some(text), message: None }
+        Self { kind: "reasoning", delta: None, reasoning: Some(text), message: None, tool: None, detail: None }
     }
     fn done() -> Self {
-        Self { kind: "done", delta: None, reasoning: None, message: None }
+        Self { kind: "done", delta: None, reasoning: None, message: None, tool: None, detail: None }
     }
     fn error(message: String) -> Self {
-        Self { kind: "error", delta: None, reasoning: None, message: Some(message) }
+        Self { kind: "error", delta: None, reasoning: None, message: Some(message), tool: None, detail: None }
+    }
+    pub fn tool_event(kind: &'static str, tool: String, detail: String) -> Self {
+        Self { kind, delta: None, reasoning: None, message: None, tool: Some(tool), detail: Some(detail) }
     }
 }
 
@@ -107,6 +173,11 @@ fn body(req: &AiRequest, stream: bool) -> serde_json::Value {
         if effort != "off" {
             map["reasoning_effort"] = serde_json::json!(effort);
         }
+    }
+    // 有工具就挂上；措辞固定 auto —— 强制调用会让「随便聊聊」也去读简历
+    if let Some(tools) = &req.tools {
+        map["tools"] = tools.clone();
+        map["tool_choice"] = serde_json::json!("auto");
     }
     map
 }
@@ -162,14 +233,43 @@ pub async fn chat_once(req: AiRequest) -> Result<String, String> {
     })
 }
 
-/// 流式请求：按 SSE 解出 delta，逐块推给前端，返回累加后的全文。
+/// 一轮流的产出：正文 + 模型要求的工具调用
+#[derive(Debug, Default)]
+pub struct StreamOutcome {
+    pub content: String,
+    pub tool_calls: Vec<ToolCall>,
+}
+
+/// SSE 里 tool_calls 是**分片**下发的（id / name / arguments 各来一段），
+/// 必须按 index 累积拼起来，最后才是完整的 JSON 字符串。
+#[derive(Debug, Default)]
+struct CallBuf {
+    id: String,
+    name: String,
+    args: String,
+}
+
+/// 流式请求：按 SSE 解出 delta，逐块推给前端。
 ///
 /// `cancel` 由上层（session）持有：置位后在下一块就会退出，连接随 Response 释放而关闭。
 pub async fn stream(
     req: &AiRequest,
     cancel: &std::sync::atomic::AtomicBool,
     on_event: &Channel<StreamChunk>,
-) -> Result<String, String> {
+) -> Result<StreamOutcome, String> {
+    stream_with(req, cancel, &mut |chunk| {
+        let _ = on_event.send(chunk);
+    })
+    .await
+}
+
+/// 与 `stream` 同一套逻辑，事件出口换成可注入的闭包 ——
+/// 单测造不出 Channel（要有 webview），但闭环验证必须能收事件。
+pub async fn stream_with<E: FnMut(StreamChunk)>(
+    req: &AiRequest,
+    cancel: &std::sync::atomic::AtomicBool,
+    emit: &mut E,
+) -> Result<StreamOutcome, String> {
     use std::sync::atomic::Ordering;
 
     let response = client()
@@ -184,17 +284,18 @@ pub async fn stream(
     if !(200..300).contains(&status) {
         let text = response.text().await.unwrap_or_default();
         let message = describe(status, &text);
-        let _ = on_event.send(StreamChunk::error(message.clone()));
+        emit(StreamChunk::error(message.clone()));
         return Err(message);
     }
 
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
-    let mut full = String::new();
+    let mut outcome = StreamOutcome::default();
+    let mut calls: Vec<CallBuf> = Vec::new();
 
     while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::SeqCst) {
-            return Ok(full);
+            return Ok(outcome);
         }
         let bytes = chunk.map_err(|error| format!("读取流失败：{error}"))?;
         buffer.push_str(&String::from_utf8_lossy(&bytes));
@@ -211,8 +312,9 @@ pub async fn stream(
                 continue;
             }
             if payload == "[DONE]" {
-                let _ = on_event.send(StreamChunk::done());
-                return Ok(full);
+                outcome.tool_calls = finish_calls(calls);
+                emit(StreamChunk::done());
+                return Ok(outcome);
             }
             let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) else {
                 continue;
@@ -220,27 +322,68 @@ pub async fn stream(
             let delta = &json["choices"][0]["delta"];
             if let Some(text) = delta["content"].as_str() {
                 if !text.is_empty() {
-                    full.push_str(text);
-                    let _ = on_event.send(StreamChunk::delta(text.to_string()));
+                    outcome.content.push_str(text);
+                    emit(StreamChunk::delta(text.to_string()));
                 }
             }
             if let Some(thought) = delta["reasoning_content"].as_str() {
                 if !thought.is_empty() {
-                    let _ = on_event.send(StreamChunk::reasoning(thought.to_string()));
+                    emit(StreamChunk::reasoning(thought.to_string()));
+                }
+            }
+            if let Some(parts) = delta["tool_calls"].as_array() {
+                for part in parts {
+                    let slot = part["index"].as_u64().unwrap_or(0) as usize;
+                    while calls.len() <= slot {
+                        calls.push(CallBuf::default());
+                    }
+                    let call = &mut calls[slot];
+                    if let Some(id) = part["id"].as_str() {
+                        if !id.is_empty() && call.id.is_empty() {
+                            call.id = id.to_string();
+                        }
+                    }
+                    if let Some(name) = part["function"]["name"].as_str() {
+                        if !name.is_empty() && call.name.is_empty() {
+                            call.name = name.to_string();
+                        }
+                    }
+                    if let Some(args) = part["function"]["arguments"].as_str() {
+                        call.args.push_str(args);
+                    }
                 }
             }
         }
     }
 
-    let _ = on_event.send(StreamChunk::done());
-    Ok(full)
+    outcome.tool_calls = finish_calls(calls);
+    emit(StreamChunk::done());
+    Ok(outcome)
+}
+
+/// 碎片收口：没名字的丢掉（有些网关会发空占位），缺 id 的补一个
+fn finish_calls(calls: Vec<CallBuf>) -> Vec<ToolCall> {
+    calls
+        .into_iter()
+        .enumerate()
+        .filter(|(_, call)| !call.name.is_empty())
+        .map(|(index, call)| ToolCall {
+            id: if call.id.is_empty() { format!("call_{index}") } else { call.id },
+            kind: "function".into(),
+            function: FunctionCall {
+                name: call.name,
+                // 空参数要给 "{}"，否则工具层解析会报错
+                arguments: if call.args.trim().is_empty() { "{}".into() } else { call.args },
+            },
+        })
+        .collect()
 }
 
 /// 无状态的一次性流式（设置页的直连测试用；正式对话走 session::chat_send）
 #[tauri::command]
 pub async fn chat_stream(req: AiRequest, on_event: Channel<StreamChunk>) -> Result<String, String> {
     let cancel = std::sync::atomic::AtomicBool::new(false);
-    stream(&req, &cancel, &on_event).await
+    Ok(stream(&req, &cancel, &on_event).await?.content)
 }
 
 #[cfg(test)]
@@ -248,22 +391,32 @@ mod tests {
     use super::*;
 
     fn live_request() -> Option<AiRequest> {
-        // 只在本机存在 config/ai.local.json 时跑，CI 上没有就跳过
-        let path = std::path::Path::new("../config/ai.local.json");
-        let raw = std::fs::read_to_string(path).ok()?;
-        let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        // 只在本机存在 testdata 配置时跑，CI 上没有就跳过
+        let (base_url, api_key, model) = live_settings()?;
         Some(AiRequest {
-            base_url: json["baseUrl"].as_str()?.to_string(),
-            api_key: json["apiKey"].as_str()?.to_string(),
-            model: json["model"].as_str()?.to_string(),
+            base_url,
+            api_key,
+            model,
             temperature: Some(0.0),
             reasoning: None,
             max_tokens: Some(64),
-            messages: vec![ChatMessage {
-                role: "user".into(),
-                content: "只回复两个字：收到".into(),
-            }],
+            tools: None,
+            messages: vec![ChatMessage::user("只回复两个字：收到")],
         })
+    }
+
+    /// 公开配置 + 本机密钥，和 scripts/package.mjs 里那套目录约定一致
+    fn live_settings() -> Option<(String, String, String)> {
+        let base: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string("../testdata/ai.json").ok()?).ok()?;
+        let secret: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string("../testdata/secrets/ai.local.json").ok()?)
+                .ok()?;
+        Some((
+            base["baseUrl"].as_str()?.to_string(),
+            secret["apiKey"].as_str()?.to_string(),
+            base["model"].as_str()?.to_string(),
+        ))
     }
 
     #[test]
@@ -282,11 +435,114 @@ mod tests {
     #[tokio::test]
     async fn live_chat_once() {
         let Some(req) = live_request() else {
-            eprintln!("跳过：没有 config/ai.local.json");
+            eprintln!("跳过：没有 testdata 配置");
             return;
         };
         let text = chat_once(req).await.expect("请求应成功");
         assert!(!text.is_empty(), "回复不该为空");
         eprintln!("live reply: {text}");
+    }
+
+    fn demo_workspace() -> serde_json::Value {
+        serde_json::json!({
+            "people": [{
+                "id": "p1",
+                "fields": [{ "id": "f0", "label": "姓名", "value": "张三" }],
+                "items": [],
+                "resumes": [{
+                    "id": "r1",
+                    "title": "中文简历",
+                    "pages": [
+                        { "id": "pg1", "label": "通用版", "header": [], "sections": [] },
+                        { "id": "pg2", "label": "English", "header": [], "sections": [] }
+                    ]
+                }]
+            }]
+        })
+    }
+
+    /// 工具调用闭环：模型要工具 → 我们执行 → 结果回灌 → 它据此回答。
+    /// 这是 P1 的核心验收点，必须真连模型，否则只是「协议长得像」。
+    #[tokio::test]
+    async fn live_tool_call_roundtrip() {
+        let Some((base_url, api_key, model)) = live_settings() else {
+            eprintln!("跳过：没有 testdata 配置");
+            return;
+        };
+
+        let workspace = demo_workspace();
+        let sink = std::sync::Mutex::new(Vec::<serde_json::Value>::new());
+        let ctx = crate::tools::ToolCtx {
+            workspace: &workspace,
+            person_id: "p1",
+            resume_id: "r1",
+            page_id: "pg2",
+            actions: &sink,
+        };
+
+        let mut messages = vec![
+            ChatMessage::system(
+                "你是简历助手。用户问「第几页」的时候必须先调用 list_pages，不许凭猜回答。",
+            ),
+            ChatMessage::user("我现在在第几页？"),
+        ];
+
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let first = stream_with(
+            &AiRequest {
+                base_url: base_url.clone(),
+                api_key: api_key.clone(),
+                model: model.clone(),
+                messages: messages.clone(),
+                temperature: Some(0.0),
+                reasoning: None,
+                max_tokens: None,
+                tools: Some(crate::tools::specs(crate::tools::Scope::Session)),
+            },
+            &cancel,
+            &mut |_| {},
+        )
+        .await
+        .expect("第一轮应成功");
+
+        assert!(!first.tool_calls.is_empty(), "模型应该要求调工具，实际正文：{}", first.content);
+
+        let call = &first.tool_calls[0];
+        let args: serde_json::Value =
+            serde_json::from_str(&call.function.arguments).unwrap_or_else(|_| serde_json::json!({}));
+        let result = crate::tools::call(&call.function.name, &args, &ctx, crate::tools::Scope::Session)
+            .unwrap_or_else(|error| panic!("工具 {} 执行失败：{error}", call.function.name));
+        assert!(
+            result.contains("← 当前") && result.contains("English"),
+            "工具应标出当前页是 English，实际：\n{result}"
+        );
+
+        messages.push(ChatMessage::assistant_calls(first.tool_calls.clone(), first.content));
+        messages.push(ChatMessage::tool_result(call.id.clone(), result));
+
+        let second = stream_with(
+            &AiRequest {
+                base_url,
+                api_key,
+                model,
+                messages,
+                temperature: Some(0.0),
+                reasoning: None,
+                max_tokens: None,
+                tools: Some(crate::tools::specs(crate::tools::Scope::Session)),
+            },
+            &cancel,
+            &mut |_| {},
+        )
+        .await
+        .expect("第二轮应成功");
+
+        assert!(!second.content.trim().is_empty(), "工具回灌后应该给出正文");
+        assert!(
+            second.content.contains('2') || second.content.contains("二") || second.content.contains("English"),
+            "回答里应提到第 2 页 / English，实际：{}",
+            second.content
+        );
+        eprintln!("live tool reply: {}", second.content);
     }
 }

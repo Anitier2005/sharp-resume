@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   Field,
   LibraryItem,
+  PageStyle,
   Person,
   ResumePage,
   Section,
@@ -35,6 +36,7 @@ export type Action =
   | { type: "removePage"; personId: string; resumeId: string; pageId: string }
   | { type: "pageLabel"; personId: string; resumeId: string; pageId: string; label: string }
   | { type: "pageHeader"; personId: string; resumeId: string; pageId: string; header: Field[] }
+  | { type: "pageStyle"; personId: string; resumeId: string; pageId: string; style: PageStyle }
   /* ---------- 分区与条目 ---------- */
   | { type: "addSection"; personId: string; resumeId: string; pageId: string; title: string }
   | {
@@ -43,6 +45,23 @@ export type Action =
       resumeId: string;
       pageId: string;
       sectionId: string;
+    }
+  | {
+      /** 改写某个块自己的字段（页头块之外的字段组用这条） */
+      type: "blockFields";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      blockId: string;
+      fields: Field[];
+    }
+  | {
+      /** 删任意块：页头块、媒体块也走这条 */
+      type: "removeBlock";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      blockId: string;
     }
   | {
       type: "sectionTitle";

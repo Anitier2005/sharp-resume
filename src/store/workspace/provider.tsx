@@ -45,8 +45,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     let alive = true;
     loadWorkspace().then((saved) => {
       if (!alive) return;
-      if (saved && saved.version === 4 && saved.people?.length) {
+      // migrate 之后一定是最新结构，这里不再判断版本号（判断会随版本升级而失效）
+      if (saved && saved.people?.length) {
         dispatch({ type: "hydrate", workspace: saved });
+        // 上次看的是哪一页没有单独存，就是快速检索的第一个；
+        // 它不属于当前简历时 resolvedPageId 会自己退回第一页
+        setActivePageId(saved.ui.openPages?.[0] ?? null);
         setSavedSnapshot(saved);
       } else {
         setSavedSnapshot(INITIAL_WORKSPACE);
@@ -78,6 +82,76 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const page = useMemo(
     () => resume?.pages.find((item) => item.id === resolvedPageId) ?? null,
     [resume, resolvedPageId],
+  );
+
+  /**
+   * 页签栏用的「快速检索」列表（MRU）：
+   *   1. 只留当前简历里还在的页 —— 删页、切简历后不会留下找不到的 id
+   *   2. 当前页永远排第一 —— 切简历、删页都会有一个自动落点，
+   *      如果它不在列表里，页签栏就会出现「一个都没选中」的样子
+   *   3. 老数据没有 openPages 时把全部页当列表
+   */
+  const openPages = useMemo(() => {
+    if (!resume) return [];
+    const known = new Set(resume.pages.map((item) => item.id));
+    const list: string[] = [];
+    for (const id of state.ui.openPages ?? resume.pages.map((item) => item.id)) {
+      if (!known.has(id) || list.includes(id)) continue;
+      list.push(id);
+    }
+    if (resolvedPageId) {
+      const at = list.indexOf(resolvedPageId);
+      if (at > 0) list.splice(at, 1);
+      if (at !== 0) list.unshift(resolvedPageId);
+    }
+    return list;
+  }, [resume, state.ui.openPages, resolvedPageId]);
+
+  // 当前页一变就把它顶到最前（点页签、新建页、切简历、删页都走这里），
+  // 顺带把顺序落盘，下次启动仍是最近用过的排前面
+  useEffect(() => {
+    if (!resolvedPageId) return;
+    const stored = state.ui.openPages;
+    if (stored?.[0] === resolvedPageId) return;
+    const rest = (stored ?? resume?.pages.map((item) => item.id) ?? []).filter(
+      (id) => id !== resolvedPageId,
+    );
+    dispatch({ type: "patchUi", patch: { openPages: [resolvedPageId, ...rest] } });
+  }, [resolvedPageId, resume, state.ui.openPages]);
+
+  /** 切页 + 顶到快速检索最前 */
+  const openPage = useCallback(
+    (id: string) => {
+      setActivePageId(id);
+      const stored = state.ui.openPages ?? resume?.pages.map((item) => item.id) ?? [];
+      dispatch({
+        type: "patchUi",
+        patch: { openPages: [id, ...stored.filter((item) => item !== id)] },
+      });
+    },
+    [resume, state.ui.openPages],
+  );
+
+  /**
+   * 关标签 = 只从快速检索里移除，页本身不动。
+   * 关的是当前页时退回列表里下一个最近用过的；列表空了就退回简历第一页。
+   */
+  const closePage = useCallback(
+    (id: string) => {
+      if (!resume) return;
+      // 必须基于 store 里的原始列表：`openPages` 是派生值，已经按当前简历过滤过，
+      // 写回去会把别的简历攒下的检索顺序抹掉
+      const stored = state.ui.openPages ?? openPages;
+      const rest = stored.filter((item) => item !== id);
+      dispatch({ type: "patchUi", patch: { openPages: rest } });
+      if (id !== resolvedPageId) return;
+      const next =
+        openPages.find((item) => item !== id) ??
+        resume.pages.find((item) => item.id !== id)?.id ??
+        null;
+      if (next) setActivePageId(next);
+    },
+    [openPages, state.ui.openPages, resolvedPageId, resume],
   );
 
   // 自动保存：改动后 500ms 落盘。保存状态由「快照是否还是当前 state」派生，不在 effect 里同步 setState
@@ -142,6 +216,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     page,
     activePageId: resolvedPageId,
     setActivePageId,
+    openPages,
+    openPage,
+    closePage,
     expanded,
     toggleExpanded,
     saveState,

@@ -47,14 +47,14 @@ export function mapPage(
 
 /**
  * 新建页面：**零预设**。
- * 没有类型、没有语言、没有预置分区与字段 —— 用户自己起名、自己加字段。
+ * 没有类型、没有语言、没有预置分区与字段 —— 用户自己起名、自己加字段加块。
  */
 export function newPage(order: number): ResumePage {
   return {
     id: uid("pg"),
+    kind: "native",
     label: `第 ${order} 页`,
-    header: [],
-    sections: [],
+    blocks: [],
   };
 }
 

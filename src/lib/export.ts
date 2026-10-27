@@ -1,18 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Person, ResumePage } from "@/types";
 import { displayName, fieldText } from "@/types";
+import { headerOf, sectionsOf } from "@/lib/blocks";
 import { isTauri } from "@/lib/storage";
 
 /** 一页 → Markdown：字段就是字段，标题就是用户写的标题 */
 export function pageToMarkdown(person: Person, page: ResumePage): string {
   const lines: string[] = [];
-  const [lead, ...rest] = page.header;
+  const [lead, ...rest] = headerOf(page);
 
   if (lead) lines.push(`# ${lead.value || lead.label}`, "");
   for (const field of rest) lines.push(fieldText(field));
   if (rest.length) lines.push("");
 
-  for (const section of page.sections) {
+  for (const section of sectionsOf(page)) {
     if (section.title.trim()) lines.push(`## ${section.title}`, "");
     for (const entry of section.items) {
       const source = person.items.find((item) => item.id === entry.refId);

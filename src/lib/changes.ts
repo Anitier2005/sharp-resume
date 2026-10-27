@@ -1,5 +1,6 @@
 import type { Person, ResumePage } from "@/types";
 import { fieldText } from "@/types";
+import { headerOf, sectionsOf } from "@/lib/blocks";
 
 /**
  * 变更感知：把「右侧手改了什么」变成结构化差异，喂给模型。
@@ -42,14 +43,14 @@ export function flatten(person: Person, page: ResumePage): Flat {
     "page:label": { label: "页名", value: page.label },
   };
 
-  for (const field of page.header) {
+  for (const field of headerOf(page)) {
     out[`header:${field.id}`] = {
       label: `页头 · ${field.label || "未命名字段"}`,
       value: field.label ? field.value : fieldText(field),
     };
   }
 
-  for (const section of page.sections) {
+  for (const section of sectionsOf(page)) {
     const secName = section.title.trim() || "未命名分区";
     out[`section:${section.id}`] = { label: `分区 · ${secName}`, value: section.title };
 

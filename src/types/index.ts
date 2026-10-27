@@ -1,11 +1,15 @@
 /**
- * 数据模型 v4：只管理「字段」，不预设任何具体内容。
+ * 数据模型 v5：只管理「字段」，不预设任何具体内容。
  *
  * 设计原则（用户定的）：
  *   1. 一个人有什么信息、一段经历有哪些要点，由用户自己加字段决定，代码里不许出现
  *      「姓名」「公司」「职位」「时间」这类预设键
  *   2. 没有语言维度：不区分中英，措辞与分区标题都是用户写的普通文本
  *   3. 新建简历 / 新建页不预置模板，从零开始
+ *
+ * v5 的改动只有一处：**一页 = 一串块**。页头不再是一个特等公民字段，
+ * 它就是第一个 `fields` 块；分区是 `section` 块；上传的整页原件是 `media` 块。
+ * 这样「页头 → 分区 → 作品图 → 又一个分区」这种顺序才能表达出来。
  */
 
 /**
@@ -64,12 +68,55 @@ export interface Resume {
   pages: ResumePage[];
 }
 
-/** 简历页：页头字段 + 若干分区 */
+/** 简历页：一串块，按顺序排下去 */
+/** 页面排版参数：由「页排版 agent」决定，会话 agent 不改它 */
+export interface PageStyle {
+  /** 疏密：紧凑 / 标准 / 宽松，决定行高与段间距 */
+  density?: "compact" | "normal" | "roomy";
+  /** 页边距倍数，0.8–1.6，1 = 默认 */
+  margin?: number;
+  /** 页头对齐 */
+  align?: "left" | "center";
+}
+
+/**
+ * 页里的块。
+ *
+ * 形状以 Rust 的 `model::Block` 为准：扁平结构，用 `kind` 区分，
+ * 每种块只用到自己那几个字段，其余留空。**不认识的 kind 要原样留着**，
+ * 别在读写循环里把它扫掉 —— 老版本遇到新版本写的块不该毁数据。
+ */
+export interface Block {
+  id: string;
+  /** fields（字段组，第一块就是页头）/ section（分区）/ media（图片或原件） */
+  kind: string;
+  fields?: Field[];
+  /** section 块的分区标题 */
+  title?: string;
+  items?: SectionEntry[];
+  /** media 块引用的材料 id */
+  assetId?: string;
+  caption?: string;
+  /** contain / cover，只是排版提示 */
+  fit?: string;
+}
+
 export interface ResumePage {
   id: string;
+  /** native（我们自己排版）/ file（用户上传的整页原件） */
+  kind: string;
   label: string;
-  header: Field[];
-  sections: Section[];
+  /** file 页引用的材料 id */
+  assetId?: string;
+  note?: string;
+  /** 缺省 = 标准排版 */
+  style?: PageStyle;
+  /** 唯一真相：页头、分区、图片都在这里按顺序排 */
+  blocks: Block[];
+  /** v4 遗留：只在读旧数据时出现，`normalizePage` 会把它搬进 blocks */
+  header?: Field[];
+  /** v4 遗留：同上 */
+  sections?: Section[];
 }
 
 /** 分区：标题由用户起（"工作经历" / "Awards" / "开源项目"…） */
@@ -129,8 +176,8 @@ export interface ChatMessage {
 }
 
 export interface Workspace {
-  /** 4 起：字段化，去掉语言与页面类型 */
-  version: 4;
+  /** 5 起：一页 = 一串块（页头也是块） */
+  version: 5;
   people: Person[];
   ui: {
     accent: AccentKey;
@@ -144,6 +191,15 @@ export interface Workspace {
     docW?: number;
     showSide?: boolean;
     showDoc?: boolean;
+    /** 右栏当前是编辑还是预览。会话要知道用户在看哪个视图（定位头 + 页 agent 的触发条件） */
+    view?: "edit" | "preview";
+    /**
+     * 页签栏里「快速检索」的页：按最近使用排序，第一个是当前页。
+     *
+     * 它不是页的完整列表 —— 关掉标签只是从这里移除，页本身还在 resume.pages 里，
+     * 所以这份列表可以不含全部页；老数据没有这个字段时按全部页处理。
+     */
+    openPages?: string[];
   };
 }
 

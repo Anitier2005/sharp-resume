@@ -1,10 +1,12 @@
 import {
   cloneElement,
   isValidElement,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -16,10 +18,31 @@ interface DropdownProps {
   children: ReactNode;
   align?: "start" | "end";
   width?: number;
+  /** 菜单项可能很长（页签折叠、模型列表）时给个上限，超出就滚 */
+  maxHeight?: number;
+  /** 受控开合：页签折叠菜单要让位给右键菜单时，调用方得能从外面把它收起来 */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function Dropdown({ trigger, children, align = "end", width }: DropdownProps) {
-  const [open, setOpen] = useState(false);
+export function Dropdown({
+  trigger,
+  children,
+  align = "end",
+  width,
+  maxHeight,
+  open: controlled,
+  onOpenChange,
+}: DropdownProps) {
+  const [inner, setInner] = useState(false);
+  const open = controlled ?? inner;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (controlled === undefined) setInner(next);
+      onOpenChange?.(next);
+    },
+    [controlled, onOpenChange],
+  );
   /** 下方放不下时改为向上弹（输入框在窗口最底部，菜单一定会顶到边） */
   const [flipUp, setFlipUp] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -48,10 +71,10 @@ export function Dropdown({ trigger, children, align = "end", width }: DropdownPr
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [open, setOpen]);
 
   const node = isValidElement(trigger)
-    ? cloneElement(trigger, { onClick: () => setOpen((value) => !value), "aria-expanded": open })
+    ? cloneElement(trigger, { onClick: () => setOpen(!open), "aria-expanded": open })
     : trigger;
 
   return (
@@ -66,7 +89,10 @@ export function Dropdown({ trigger, children, align = "end", width }: DropdownPr
             flipUp && styles.up,
           )}
           role="menu"
-          style={width ? { minWidth: width } : undefined}
+          style={{
+            ...(width ? { minWidth: width } : null),
+            ...(maxHeight ? { maxHeight, overflowY: "auto" } : null),
+          }}
           onClick={() => setOpen(false)}
         >
           {children}
@@ -81,16 +107,29 @@ interface MenuItemProps {
   hint?: string;
   icon?: ReactNode;
   danger?: boolean;
+  /** 不可用的项保留在原位，让用户看得到「为什么不行」（比如「至少要留一页」） */
+  disabled?: boolean;
   onSelect: () => void;
+  onContextMenu?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }
 
-export function MenuItem({ label, hint, icon, danger, onSelect }: MenuItemProps) {
+export function MenuItem({
+  label,
+  hint,
+  icon,
+  danger,
+  disabled,
+  onSelect,
+  onContextMenu,
+}: MenuItemProps) {
   return (
     <button
       type="button"
       role="menuitem"
       className={cx(styles.item, danger && styles.danger)}
+      disabled={disabled}
       onClick={onSelect}
+      onContextMenu={onContextMenu}
     >
       {icon && <span className={styles.mi}>{icon}</span>}
       <span className={styles.ml}>{label}</span>

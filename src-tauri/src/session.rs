@@ -11,7 +11,7 @@
 //!   - 历史从最新往回留，直到用掉约 60% 的上下文窗口（给回复和输出留余量）
 //!   - 至少保留最近一条 user 消息，否则模型会答非所问
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::Channel;
 
-use crate::net::{self, AiRequest, ChatMessage, StreamChunk};
+use crate::net::{AiRequest, ChatMessage, StreamChunk};
 
 /// system 模板随包硬编码：改 `prompts/system.md` 重新打包即可生效
 const SYSTEM_TEMPLATE: &str = include_str!("../../prompts/system.md");
@@ -93,6 +93,19 @@ impl Sessions {
         }
     }
 
+    /// 页排版 agent 复用同一份存储，key 带 `layout:` 前缀隔离。
+    /// 不新开文件：会话本来就该「随工作台一起走」，分成两个文件反而容易漏备份。
+    pub(crate) fn history_of(&self, app: &tauri::AppHandle, key: &str) -> Vec<Value> {
+        self.ensure_loaded(app);
+        self.list(key)
+    }
+
+    pub(crate) fn append(&self, app: &tauri::AppHandle, key: &str, message: Value) {
+        self.ensure_loaded(app);
+        self.push(key, message);
+        self.save(app);
+    }
+
     fn patch(&self, key: &str, id: &str, patch: Value) {
         if let Ok(mut store) = self.store.lock() {
             if let Some(list) = store.get_mut(key) {
@@ -115,7 +128,7 @@ impl Sessions {
 
 /// 粗略 token 估算：CJK 按 1 字 ≈ 1 token，其余按 4 字符 ≈ 1 token。
 /// 不引 tiktoken —— 这里只需要"别超窗口"，不需要精确计费。
-fn estimate_tokens(text: &str) -> usize {
+pub(crate) fn estimate_tokens(text: &str) -> usize {
     let mut cjk = 0usize;
     let mut other = 0usize;
     for ch in text.chars() {
@@ -129,7 +142,7 @@ fn estimate_tokens(text: &str) -> usize {
 }
 
 /// 从最新往回取，直到占满预算
-fn trim_history(history: &[Value], budget: usize) -> Vec<Value> {
+pub(crate) fn trim_history(history: &[Value], budget: usize) -> Vec<Value> {
     let mut used = 0usize;
     let mut picked: Vec<Value> = Vec::new();
     for message in history.iter().rev() {
@@ -198,6 +211,17 @@ pub fn chat_cancel(state: tauri::State<'_, Sessions>, key: String) {
     }
 }
 
+/// chat_send 的返回：消息 id + 本轮产出的界面指令。
+///
+/// 指令不在这里直接应用，是因为只有前端知道 reducer 怎么落。
+/// 顺序由 Rust 保证（先切页、再改视图、最后调外观），前端照着跑就行。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendResult {
+    pub id: String,
+    pub actions: Vec<Value>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendArgs {
@@ -213,6 +237,16 @@ pub struct SendArgs {
     pub temperature: Option<f64>,
     pub reasoning: Option<String>,
     pub context_window: Option<usize>,
+    /// 当前简历 / 页面：每轮都会写进定位头，工具也靠它取默认页
+    #[serde(default)]
+    pub resume_id: String,
+    #[serde(default)]
+    pub page_id: String,
+    #[serde(default)]
+    pub view: Option<String>,
+    /// 工作区快照：工具层的只读镜像。前端每次发送时推一份，不改变数据归属。
+    #[serde(default)]
+    pub workspace: Value,
 }
 
 /// 发一轮对话：Rust 组上下文 → 流式回推 → 把 assistant 消息写进历史
@@ -222,7 +256,7 @@ pub async fn chat_send(
     state: tauri::State<'_, Sessions>,
     args: SendArgs,
     on_event: Channel<StreamChunk>,
-) -> Result<String, String> {
+) -> Result<SendResult, String> {
     state.ensure_loaded(&app);
 
     let flag = Arc::new(AtomicBool::new(false));
@@ -230,8 +264,16 @@ pub async fn chat_send(
         running.insert(args.key.clone(), flag.clone());
     }
 
-    // 组装：模板 + 材料，历史按预算裁剪
+    // 组装：模板 + 材料 + 定位头，历史按预算裁剪
     let mut system = SYSTEM_TEMPLATE.replace("{{context}}", &args.context);
+    system.push_str("\n\n");
+    system.push_str(&crate::agent::context::locate(
+        &args.workspace,
+        &args.key,
+        &args.resume_id,
+        &args.page_id,
+        args.view.as_deref().unwrap_or("edit"),
+    ));
     if !args.extra.trim().is_empty() {
         system.push_str("\n\n");
         system.push_str(args.extra.trim());
@@ -240,54 +282,69 @@ pub async fn chat_send(
     let budget = window.saturating_sub(estimate_tokens(&system) + 2_000) * 6 / 10;
     let history = trim_history(&state.list(&args.key), budget);
 
-    let mut messages = vec![ChatMessage {
-        role: "system".into(),
-        content: system,
-    }];
+    let mut messages = vec![ChatMessage::system(system)];
     for message in &history {
         let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
         let content = message.get("content").and_then(Value::as_str).unwrap_or("");
         if content.trim().is_empty() {
             continue;
         }
-        messages.push(ChatMessage {
-            role: role.to_string(),
-            content: content.to_string(),
+        messages.push(if role == "assistant" {
+            ChatMessage::assistant(content)
+        } else {
+            ChatMessage::user(content)
         });
     }
 
-    let request = AiRequest {
+    let template = AiRequest {
         base_url: args.base_url,
         api_key: args.api_key,
         model: args.model.clone(),
-        messages,
+        messages: Vec::new(),
         temperature: args.temperature,
         reasoning: args.reasoning,
         max_tokens: None,
+        tools: None,
+    };
+
+    // 页面控制工具产出的界面指令：本轮结束后随返回值一起交给前端执行
+    let actions = std::sync::Mutex::new(Vec::new());
+    let ctx = crate::tools::ToolCtx {
+        workspace: &args.workspace,
+        person_id: &args.key,
+        resume_id: &args.resume_id,
+        page_id: &args.page_id,
+        actions: &actions,
     };
 
     let reply_id = format!("m-{}", uuid_like());
-    let result = net::stream(&request, &flag, &on_event).await;
+    let result =
+        crate::agent::turn::run(&template, messages, &ctx, &flag, &on_event, crate::tools::Scope::Session)
+            .await;
 
     if let Ok(mut running) = state.running.lock() {
         running.remove(&args.key);
     }
 
     match result {
-        Ok(text) if !flag.load(Ordering::SeqCst) => {
+        Ok(turn) if !flag.load(Ordering::SeqCst) => {
             // 落一条 assistant 消息；content 由前端随后 patch（它还要解析改写块）
             state.push(
                 &args.key,
                 json!({
                     "id": reply_id,
                     "role": "assistant",
-                    "content": text,
+                    "content": turn.content,
                     "time": chrono_like(),
-                    "tool": format!("{} · 已完成", args.model),
+                    "tool": if turn.used.is_empty() {
+                        format!("{} · 已完成", args.model)
+                    } else {
+                        format!("{} · 用了 {}", args.model, turn.used.join(" / "))
+                    },
                 }),
             );
             state.save(&app);
-            Ok(reply_id)
+            Ok(SendResult { id: reply_id, actions: turn.actions })
         }
         Ok(_) | Err(_) if flag.load(Ordering::SeqCst) => Err("已中断".into()),
         Err(error) => Err(error),
@@ -296,14 +353,14 @@ pub async fn chat_send(
 }
 
 /// 极简 id：时间戳 + 计数，够用且不引 uuid 依赖
-fn uuid_like() -> String {
+pub(crate) fn uuid_like() -> String {
     use std::sync::atomic::AtomicU64;
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{}-{}", chrono_like(), seq)
 }
 
-fn chrono_like() -> u128 {
+pub(crate) fn chrono_like() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())

@@ -1,14 +1,16 @@
 import type { ChangeItem, Person, ResumePage } from "@/types";
 import { fieldText } from "@/types";
 import type { ChatMsg } from "@/lib/ai";
+import { entriesOf, headerOf, sectionsOf } from "@/lib/blocks";
 import { skillsPrompt } from "@/lib/skills";
 
 /** 材料：只描述"这一页现在有什么"，规则在 prompts/system.md 里 */
 export function buildContext(person: Person, page: ResumePage): string {
   const lines: string[] = ["【页头】"];
-  lines.push(...(page.header.length ? page.header.map(fieldText) : ["（空）"]));
+  const header = headerOf(page);
+  lines.push(...(header.length ? header.map(fieldText) : ["（空）"]));
 
-  for (const section of page.sections) {
+  for (const section of sectionsOf(page)) {
     lines.push("", `【${section.title || "未命名分区"}】`);
     if (!section.items.length) {
       lines.push("（空）");
@@ -95,7 +97,7 @@ const norm = (value: string) => value.replace(/\s+/g, "").replace(/[，。；、
 function findTarget(before: string, person: Person, page: ResumePage): ChangeItem["target"] {
   const key = norm(before);
   if (!key) return undefined;
-  const entries = page.sections.flatMap((section) => section.items);
+  const entries = entriesOf(page);
   void person;
 
   for (const entry of entries) {

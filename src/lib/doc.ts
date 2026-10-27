@@ -1,4 +1,5 @@
 import type { Field, Person, ResumePage } from "@/types";
+import { headerOf, sectionsOf } from "@/lib/blocks";
 
 /** 当前页可见内容的字数（不含空白），用于状态栏 */
 export function countChars(person: Person, page: ResumePage | null): number {
@@ -6,9 +7,9 @@ export function countChars(person: Person, page: ResumePage | null): number {
   const chunks: string[] = [];
 
   const push = (fields: Field[]) => chunks.push(...fields.flatMap((field) => [field.label, field.value]));
-  push(page.header);
+  push(headerOf(page));
 
-  for (const section of page.sections) {
+  for (const section of sectionsOf(page)) {
     chunks.push(section.title);
     for (const entry of section.items) {
       push(entry.fields);

@@ -6,6 +6,7 @@
  *   分区标题 = 用户写的那句话；条目第一个字段加粗，其余照排；措辞逐条列。
  */
 import type { AccentKey, Person, ResumePage } from "@/types";
+import { headerOf, sectionsOf } from "@/lib/blocks";
 import { displayName, fieldText } from "@/types";
 
 const ACCENT_HEX: Record<AccentKey, string> = {
@@ -58,14 +59,14 @@ function para(text: string, opts: RunOpts = {}): string {
 
 function documentXml(person: Person, page: ResumePage, hex: string): string {
   const out: string[] = [];
-  const [lead, ...rest] = page.header;
+  const [lead, ...rest] = headerOf(page);
 
   if (lead) out.push(para(lead.value || lead.label, { bold: true, size: 34, color: hex }));
   for (const field of rest) {
     out.push(para(fieldText(field), { size: 17, color: "77776F" }));
   }
 
-  for (const section of page.sections) {
+  for (const section of sectionsOf(page)) {
     if (section.title.trim()) {
       out.push(para(section.title, { bold: true, size: 21, color: hex }));
     }

@@ -1,12 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useWorkspace } from "@/store/workspace";
 import { useToast } from "@/components/ui/toast-context";
-import { Dropdown, MenuItem, MenuSep } from "@/components/ui/menu";
-import { ChevronDown, Close, Plus } from "@/components/ui/icons";
+import { Dropdown, MenuItem, MenuLabel, MenuSep } from "@/components/ui/menu";
+import { applyAgentActions } from "@/lib/agent-actions";
+import { requestLayout } from "@/lib/layout";
+import { ContextMenu } from "@/components/ui/context-menu";
+import { Confirm } from "@/components/ui/confirm";
+import { ChevronDown, Close, More, Plus } from "@/components/ui/icons";
 import { countChars, pageIndex } from "@/lib/doc";
 import { pageToMarkdown, printPage, resumeToMarkdown, saveBytes, saveText } from "@/lib/export";
 import { pageToDocx } from "@/lib/docx";
-import { displayName } from "@/types";
+import { displayName, type ResumePage } from "@/types";
 import { Paper } from "./paper";
 import { ResumeForm } from "./form";
 import { cx } from "@/lib/cx";
@@ -15,16 +26,74 @@ import paperStyles from "./paper.module.css";
 
 type ViewMode = "edit" | "preview";
 
+/** 右键菜单是在哪一块点出来的：标签本身就是打开的，折叠项才需要「打开」 */
+type MenuFrom = "tab" | "fold";
+
 export function ResumePanel() {
-  const { state, person, resume, page, activePageId, setActivePageId, dispatch, saveState } =
-    useWorkspace();
+  const {
+    state,
+    person,
+    resume,
+    page,
+    activePageId,
+    openPages,
+    openPage,
+    closePage,
+    dispatch,
+    saveState,
+  } = useWorkspace();
   const toast = useToast();
-  const [mode, setMode] = useState<ViewMode>("edit");
+  /** 视图进 store：会话要据此告诉模型「用户现在在预览」，页 agent 也靠切预览触发排版 */
+  const mode = state.ui.view ?? "edit";
+  const setMode = (next: ViewMode) => dispatch({ type: "patchUi", patch: { view: next } });
+
+  /**
+   * 切到预览时让「页排版 agent」看一遍这一页。
+   *
+   * 只在真正进入预览时跑，不在编辑时跑：排版要花一次模型调用，
+   * 用户只是在改字的时候没必要惊动它。没配模型就直接跳过，不弹错误。
+   */
+  const refreshLayout = (brief: string) => {
+    if (!person || !resume || !page) return;
+    void requestLayout({ person, resume, page, state, brief })
+      .then((actions) => {
+        if (!actions?.length) return;
+        applyAgentActions(actions, {
+          openPage: () => {},
+          patchUi: (patch) => dispatch({ type: "patchUi", patch }),
+          ask: () => {},
+          pageStyle: (id, style) =>
+            dispatch({ type: "pageStyle", personId: person.id, resumeId: resume.id, pageId: id, style }),
+          requestLayout: () => {},
+        });
+      })
+      .catch((error: unknown) => {
+        const reason = error instanceof Error ? error.message : String(error);
+        toast(`排版没跑成：${reason}`);
+      });
+  };
   const [zoom, setZoom] = useState(100);
   const [sheets, setSheets] = useState(1);
   const [a4Height, setA4Height] = useState(529);
   const canvasRef = useRef<HTMLDivElement | null>(null);
-  const tabScrollRef = useRef<HTMLDivElement | null>(null);
+  /** 页签栏外层：量可用宽度用 */
+  const tabsRef = useRef<HTMLDivElement | null>(null);
+  /** 页签实体层：页签与「+」都在里面，装不下的收进折叠菜单 */
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const addRef = useRef<HTMLButtonElement | null>(null);
+  /** 页签实测宽度缓存：被折叠的页签已不在 DOM 里，只能靠它估算 */
+  const widths = useRef(new Map<string, number>());
+  const [visible, setVisible] = useState(99);
+  const visibleRef = useRef(99);
+  const [showMore, setShowMore] = useState(false);
+  /** 「⋯」的开关放到这里：右键折叠项时要把它收起来，让位给右键菜单 */
+  const [moreOpen, setMoreOpen] = useState(false);
+  /** 右键菜单指向的那一页 */
+  const [menu, setMenu] = useState<{ x: number; y: number; pageId: string; from: MenuFrom } | null>(
+    null,
+  );
+  /** 等确认框点头才真删的页 */
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   /** 刚点了「+」，等 state 落地后把新页选中 */
   const wantNewPage = useRef(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -44,36 +113,104 @@ export function ResumePanel() {
     return () => observer.disconnect();
   }, [mode]);
 
-  // 刚新增的那一页：直接选中，并滚到最右端
+  // 刚新增的那一页：直接选中。折叠逻辑会把当前页顶进可见区，不用再滚
   useEffect(() => {
     if (!wantNewPage.current || !resume?.pages.length) return;
     wantNewPage.current = false;
-    setActivePageId(resume.pages[resume.pages.length - 1].id);
-    requestAnimationFrame(() => {
-      const box = tabScrollRef.current;
-      if (box) box.scrollLeft = box.scrollWidth;
-    });
-  }, [resume?.pages.length, resume, setActivePageId]);
+    openPage(resume.pages[resume.pages.length - 1].id);
+  }, [resume?.pages.length, resume, openPage]);
 
-  // 切到别的页时把它的页签滚进视野（页签多了才不会出现「选了却看不见」）
-  useEffect(() => {
-    const box = tabScrollRef.current;
-    const active = box?.querySelector<HTMLElement>('[aria-current="page"]');
-    active?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [activePageId]);
+  /**
+   * 页签装不下就折叠成「⋯」，不再横向滚 —— 横滚的页签条会把右边的
+   * 「编辑 | 预览」和「导出」压掉一截，看起来像被盖住。
+   *
+   * 宽度靠「实测 + 缓存」：可见的每次实测覆盖缓存，被折叠的沿用上次的值；
+   * 出现没量过的新页签时先全展开量一轮，下一轮再收敛。
+   *
+   * avail 只由列宽和右侧两块决定，不看页签层自己有多宽 —— 结果确定，
+   * 所以不会出现「收起一个 → 变宽 → 又放回去」的抖动。
+   *
+   * 关掉页签（页还在）之后也必须留着「⋯」：那是这些页唯一的重新打开入口。
+   */
+  const measure = useCallback(() => {
+    const tabs = tabsRef.current;
+    const strip = stripRef.current;
+    if (!tabs || !strip || !resume) return;
+
+    for (const node of strip.querySelectorAll<HTMLElement>("[data-tab-id]")) {
+      const id = node.dataset.tabId;
+      if (id) widths.current.set(id, node.offsetWidth);
+    }
+
+    const ids = openPages;
+    if (ids.some((id) => !widths.current.has(id))) {
+      if (visibleRef.current !== ids.length) {
+        visibleRef.current = ids.length;
+        setVisible(ids.length);
+      }
+      return;
+    }
+
+    const GAP = 1;
+    const MORE_W = 24;
+    const widthOf = (id: string) => widths.current.get(id) ?? 72;
+    const seg = tabs.querySelector<HTMLElement>("[data-seg]")?.offsetWidth ?? 0;
+    const exp = tabs.querySelector<HTMLElement>("[data-export]")?.offsetWidth ?? 0;
+    const addW = addRef.current?.offsetWidth ?? 22;
+    // 12 是左右内边距；「+」和「⋯」现在钉在页签区外面，也要先扣掉；6 是各处 gap 的余量
+    const base = tabs.clientWidth - 12 - seg - exp - addW - 6;
+    const sum = ids.reduce((total, id) => total + widthOf(id) + GAP, 0);
+
+    const closed = resume.pages.length - ids.length;
+    const withMore = closed > 0 || sum > base;
+    const avail = withMore ? base - MORE_W - GAP : base;
+
+    let used = 0;
+    let fit = 0;
+    for (const id of ids) {
+      const w = widthOf(id);
+      if (used + w + GAP > avail) break;
+      used += w + GAP;
+      fit += 1;
+    }
+
+    setShowMore(withMore);
+    // 「⋯」收起时顺手把它的菜单也关掉，否则它下次出现会带着上次的展开态
+    if (!withMore) setMoreOpen(false);
+    if (visibleRef.current !== fit) {
+      visibleRef.current = fit;
+      setVisible(fit);
+    }
+  }, [openPages, resume]);
+
+  /**
+   * 首测必须发生在 paint 之前，否则会先闪一帧「页签全挤在一起」。
+   * 所以用 useLayoutEffect 只建观察器：ResizeObserver 的初始观测回调
+   * 就在 layout 之后、paint 之前，把测量写进回调等于免费拿到这个时机。
+   * 连每个页签一起观察，页签增减或改名都会重新量。
+   */
+  useLayoutEffect(() => {
+    const tabs = tabsRef.current;
+    const strip = stripRef.current;
+    if (!tabs || !strip) return;
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(tabs);
+    for (const node of Array.from(strip.children)) observer.observe(node);
+    return () => observer.disconnect();
+  }, [measure, visible, showMore]);
 
   useEffect(() => {
     const paper = wrapRef.current?.firstElementChild as HTMLElement | null;
     if (!paper) return;
-    const measure = () => {
+    const read = () => {
       const width = paper.offsetWidth;
       if (!width) return;
       const onePage = width * (297 / 210);
       setA4Height(onePage);
       setSheets(Math.max(1, paper.offsetHeight / onePage));
     };
-    measure();
-    const observer = new ResizeObserver(measure);
+    read();
+    const observer = new ResizeObserver(read);
     observer.observe(paper);
     return () => observer.disconnect();
   }, [mode, page?.id]);
@@ -102,41 +239,128 @@ export function ResumePanel() {
   const base = { personId: person.id, resumeId: resume.id, pageId: page.id };
   const saveLabel = saveState === "saving" ? "保存中…" : "已保存";
 
+  // 文件名与「导出」下拉保持一致：显示名-页名.扩展名
+  const exportDocx = (target: ResumePage) => {
+    const bytes = pageToDocx(person, target, state.ui.accent);
+    void saveBytes(
+      `${displayName(person.fields)}-${target.label}.docx`,
+      bytes,
+      "Word 文档",
+      ["docx"],
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ).then((path) => path && toast("已导出 Word"));
+  };
+  const exportMd = (target: ResumePage) => {
+    void saveText(`${displayName(person.fields)}-${target.label}.md`, pageToMarkdown(person, target)).then(
+      (path) => path && toast("已导出 Markdown"),
+    );
+  };
+
+  const pageMap = new Map(resume.pages.map((item) => [item.id, item]));
+  /** 只剩一页时不能删：页是简历的骨架，删空了整份简历就没地方写东西了 */
+  const sole = resume.pages.length <= 1;
+
+  /**
+   * 到底显示哪几个页签：快速检索列表的前 visible 个；当前页若落在折叠区，
+   * 就让它顶掉最后一个，否则会出现「点了却在菜单里」，用户找不到自己刚打开的页。
+   */
+  const at = openPages.indexOf(page.id);
+  const shownCount = Math.min(Math.max(visible, 0), openPages.length);
+  const shownIds = openPages.slice(0, shownCount);
+  if (showMore && at >= shownCount) {
+    if (shownIds.length === 0) shownIds.push(page.id);
+    else shownIds[shownIds.length - 1] = page.id;
+  }
+  const shownSet = new Set(shownIds);
+  const foldedIds = openPages.filter((id) => !shownSet.has(id));
+  const openSet = new Set(openPages);
+  /** 被关掉、但页还在的那些：没有它们，「关闭标签」就是一条单向路 */
+  const closedIds = resume.pages.map((item) => item.id).filter((id) => !openSet.has(id));
+
+  const handleClose = (item: ResumePage) => {
+    closePage(item.id);
+    toast(`已关闭「${item.label}」的标签，页还在`);
+  };
+
+  const handleDelete = (item: ResumePage) => {
+    dispatch({ type: "removePage", ...base, pageId: item.id });
+    // 顺手把死 id 从快速检索里清掉；删的是当前页时，closePage 会挑下一个落点
+    closePage(item.id);
+    setPendingDelete(null);
+    toast(`已删除「${item.label}」`);
+  };
+
+  const menuPage = menu ? pageMap.get(menu.pageId) ?? null : null;
+  const pendingPage = pendingDelete ? pageMap.get(pendingDelete) ?? null : null;
+
+  const openMenu = (event: ReactMouseEvent, pageId: string, from: MenuFrom) => {
+    event.preventDefault();
+    if (from === "fold") setMoreOpen(false);
+    setMenu({ x: event.clientX, y: event.clientY, pageId, from });
+  };
+
+  /** 折叠项与「未在检索栏」共用一行：点一下就是打开并顶到最前 */
+  const foldItem = (id: string) => {
+    const item = pageMap.get(id);
+    if (!item) return null;
+    return (
+      <MenuItem
+        key={id}
+        label={item.label}
+        hint={`第 ${pageIndex(resume, id) + 1} 页`}
+        onSelect={() => openPage(id)}
+        onContextMenu={(event) => openMenu(event, id, "fold")}
+      />
+    );
+  };
+
   return (
     <section className={styles.doc} data-col="doc">
-      <div className={styles.tabs} data-print="hide">
-        {/* 页签会越加越多，420px 装不下时必须自己滚，而不是把右边挤出去 */}
-        <div className={styles.tabScroll} ref={tabScrollRef}>
-          {resume.pages.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={cx(styles.tab, item.id === page.id && styles.tabOn)}
-              aria-current={item.id === page.id ? "page" : undefined}
-              title={item.label}
-              onClick={() => setActivePageId(item.id)}
-            >
-              <span className={styles.tabName}>{item.label}</span>
-              {resume.pages.length > 1 && (
-                <span
-                  className={styles.tx}
-                  role="button"
-                  aria-label={`删除 ${item.label}`}
-                  tabIndex={-1}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    dispatch({ type: "removePage", ...base, pageId: item.id });
-                    toast(`已删除「${item.label}」`);
-                  }}
-                >
-                  <Close size={8} />
-                </span>
-              )}
-            </button>
-          ))}
+      <div className={styles.tabs} data-print="hide" ref={tabsRef}>
+        {/* 页签栏只是「快速检索」：放的是最近打开过的页，装不下的收进「⋯」。
+            关掉某个标签只是把它从这里拿掉，页还在简历里。 */}
+        <div className={styles.tabStrip} ref={stripRef}>
+          {shownIds.map((id) => {
+            const item = pageMap.get(id);
+            if (!item) return null;
+            return (
+              <button
+                key={id}
+                type="button"
+                data-tab-id={id}
+                className={cx(styles.tab, id === page.id && styles.tabOn)}
+                aria-current={id === page.id ? "page" : undefined}
+                title={item.label}
+                onClick={() => openPage(id)}
+                onContextMenu={(event) => openMenu(event, id, "tab")}
+              >
+                <span className={styles.tabName}>{item.label}</span>
+                {/* 最后一个标签不给关：关了也还得立刻放回来（当前页必须在检索栏里） */}
+                {openPages.length > 1 && (
+                  <span
+                    className={styles.tx}
+                    role="button"
+                    aria-label={`关闭 ${item.label} 的标签`}
+                    tabIndex={-1}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleClose(item);
+                    }}
+                  >
+                    <Close size={8} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
+        {/* 「+」和「⋯」是一组工具，钉在页签区右边。
+            以前「+」在 .tabStrip 里，页签一多就和「⋯」分居两处，看着是散的。 */}
+        <div className={styles.tabTools}>
           <button
             type="button"
+            ref={addRef}
             className={styles.tabAdd}
             aria-label="新增页面"
             onClick={() => {
@@ -145,13 +369,40 @@ export function ResumePanel() {
               toast("已新增一页（空白，什么也没预置）");
             }}
           >
-            <Plus size={11} />
+            <Plus size={12} />
           </button>
+
+          {/* 折叠菜单挂在 .tabStrip 外面，否则会被它的 overflow:hidden 裁掉 */}
+          {showMore && (
+            <Dropdown
+              open={moreOpen}
+              onOpenChange={setMoreOpen}
+              width={186}
+              maxHeight={264}
+              trigger={
+                <button type="button" className={styles.more} aria-label="更多页面">
+                  <More size={12} />
+                </button>
+              }
+            >
+              {foldedIds.length > 0 && (
+                <>
+                  <MenuLabel>已折叠 {foldedIds.length} 页</MenuLabel>
+                  {foldedIds.map(foldItem)}
+                </>
+              )}
+              {closedIds.length > 0 && (
+                <>
+                  {foldedIds.length > 0 && <MenuSep />}
+                  <MenuLabel>未在检索栏</MenuLabel>
+                  {closedIds.map(foldItem)}
+                </>
+              )}
+            </Dropdown>
+          )}
         </div>
 
-        <span className={styles.fill} />
-
-        <div className={styles.seg} role="tablist" aria-label="编辑与预览">
+        <div className={styles.seg} data-seg role="tablist" aria-label="编辑与预览">
           <button
             type="button"
             role="tab"
@@ -166,7 +417,10 @@ export function ResumePanel() {
             role="tab"
             aria-selected={mode === "preview"}
             className={cx(styles.segBtn, mode === "preview" && styles.segOn)}
-            onClick={() => setMode("preview")}
+            onClick={() => {
+              setMode("preview");
+              refreshLayout("");
+            }}
           >
             预览
           </button>
@@ -175,7 +429,7 @@ export function ResumePanel() {
         <Dropdown
           width={196}
           trigger={
-            <button type="button" className={styles.export}>
+            <button type="button" className={styles.export} data-export>
               导出
               <ChevronDown size={9} />
             </button>
@@ -183,28 +437,8 @@ export function ResumePanel() {
         >
           <MenuItem label="打印 / 存为 PDF" hint="当前页" onSelect={handlePrint} />
           <MenuSep />
-          <MenuItem
-            label="Word · 当前页"
-            hint=".docx"
-            onSelect={() => {
-              const bytes = pageToDocx(person, page, state.ui.accent);
-              void saveBytes(
-                `${displayName(person.fields)}-${page.label}.docx`,
-                bytes,
-                "Word 文档",
-                ["docx"],
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-              ).then((path) => path && toast("已导出 Word"));
-            }}
-          />
-          <MenuItem
-            label="Markdown · 当前页"
-            onSelect={() => {
-              void saveText(`${displayName(person.fields)}-${page.label}.md`, pageToMarkdown(person, page)).then(
-                (path) => path && toast("已导出 Markdown"),
-              );
-            }}
-          />
+          <MenuItem label="Word · 当前页" hint=".docx" onSelect={() => exportDocx(page)} />
+          <MenuItem label="Markdown · 当前页" onSelect={() => exportMd(page)} />
           <MenuItem
             label="Markdown · 整份"
             onSelect={() => {
@@ -236,6 +470,10 @@ export function ResumePanel() {
           onLabel={(label) => dispatch({ type: "pageLabel", ...base, label })}
           onAddSection={(title) => dispatch({ type: "addSection", ...base, title })}
           onRemoveSection={(sectionId) => dispatch({ type: "removeSection", ...base, sectionId })}
+          onRemoveBlock={(blockId) => dispatch({ type: "removeBlock", ...base, blockId })}
+          onBlockFields={(blockId, fields) =>
+            dispatch({ type: "blockFields", ...base, blockId, fields })
+          }
           onSectionTitle={(sectionId, title) =>
             dispatch({ type: "sectionTitle", ...base, sectionId, title })
           }
@@ -275,6 +513,41 @@ export function ResumePanel() {
         )}
       </div>
 
+      {/* 页签和折叠项走同一套菜单：同一页不该因为藏在「⋯」里就少几项能力。
+          区别只有「打开」和「关闭标签」——标签本身就是打开的，不需要再打开一次。 */}
+      {menu && menuPage && (
+        <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
+          {menu.from === "fold" && (
+            <MenuItem
+              label="打开"
+              hint={`第 ${pageIndex(resume, menuPage.id) + 1} 页`}
+              onSelect={() => openPage(menuPage.id)}
+            />
+          )}
+          {menu.from === "tab" && openPages.length > 1 && (
+            <MenuItem label="关闭标签" hint="页保留" onSelect={() => handleClose(menuPage)} />
+          )}
+          <MenuItem label="导出 Word" hint=".docx" onSelect={() => exportDocx(menuPage)} />
+          <MenuItem label="导出 Markdown" hint=".md" onSelect={() => exportMd(menuPage)} />
+          <MenuSep />
+          <MenuItem
+            label="删除这一页"
+            danger
+            disabled={sole}
+            hint={sole ? "至少要留一页" : undefined}
+            onSelect={() => setPendingDelete(menuPage.id)}
+          />
+        </ContextMenu>
+      )}
+
+      {pendingPage && (
+        <Confirm
+          title={`删除「${pendingPage.label}」？`}
+          desc="这一页的内容会被移除，无法撤销。如果只是想让它从页签栏消失，用「关闭标签」就好。"
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => handleDelete(pendingPage)}
+        />
+      )}
     </section>
   );
 }

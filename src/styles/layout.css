@@ -56,6 +56,27 @@
   background: transparent;
   transition: background 0.12s ease;
 }
+/* 折叠态：列宽为 0，分隔条要贴到窗口边缘才抓得住（否则一半在窗口外） */
+.gutter[data-hidden="true"] {
+  width: 9px;
+}
+.gutter[data-edge="side"][data-hidden="true"] {
+  left: 0;
+}
+.gutter[data-edge="doc"][data-hidden="true"] {
+  right: 0;
+}
+.gutter[data-hidden="true"]::after {
+  left: 4px;
+  width: 1px;
+  background: var(--line);
+}
+.gutter[data-hidden="true"]:hover::after {
+  left: 3px;
+  width: 2px;
+  background: var(--acc-line-2);
+}
+
 .gutter:hover::after {
   background: var(--acc-line-2);
 }

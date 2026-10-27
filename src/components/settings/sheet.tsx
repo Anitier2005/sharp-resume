@@ -329,6 +329,7 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
             probe.tone === "fail" && styles.probeFail,
           )}
           title={probe.text}
+          data-selectable
         >
           {probe.text || "配置即时保存"}
         </span>

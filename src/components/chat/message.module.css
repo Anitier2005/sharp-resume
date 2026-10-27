@@ -55,14 +55,10 @@
   flex-direction: column;
   gap: 10px;
 }
+/* 正文排版全交给 Markdown 组件（.md 里统一定义），
+   这里只兜住 margin，避免两套字号/行高互相覆盖（同特异性，看加载顺序会飘） */
 .turnAi p {
   margin: 0;
-  font-size: 0.75rem;
-  line-height: 1.78;
-  color: var(--fg-1);
-}
-.turnAi p.dim {
-  color: var(--fg-2);
 }
 
 .tool {

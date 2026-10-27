@@ -80,6 +80,17 @@
   background: color-mix(in srgb, var(--danger) 16%, #17171a);
 }
 
+/* 不可用项：颜色压到最淡，hover 也不再变色 —— 它只是用来解释「为什么不行」 */
+.item:disabled,
+.item.danger:disabled {
+  color: var(--fg-4);
+}
+.item:disabled:hover,
+.item.danger:disabled:hover {
+  background: transparent;
+  color: var(--fg-4);
+}
+
 /* ---------- 分组标签与分隔线 ---------- */
 .label {
   padding: 5px 7px 3px;

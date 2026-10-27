@@ -1,4 +1,7 @@
-/* Markdown 渲染：只补必要的排版，不引入新的字号层级 */
+/* Markdown 渲染：react-markdown 输出的标签统一在这里排版。
+   容器用 flex + gap 控制块间距，块元素自己的 margin 全部清零，
+   这样「一个空行算一个间隙」是确定的，不会出现双倍边距。 */
+
 .md {
   display: flex;
   flex-direction: column;
@@ -9,37 +12,70 @@
   word-break: break-word;
 }
 
-.md p {
+.md p,
+.md ul,
+.md ol,
+.md blockquote,
+.md pre,
+.md table,
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
   margin: 0;
 }
 
-.heading {
-  margin: 4px 0 0;
+/* 标题：不跟随 h1~h6 的原生字号（会撑破面板），统一一档，
+   靠字重和上方留白区分层级 */
+.md :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 4px;
   font-size: 0.78125rem;
   font-weight: 600;
   line-height: 1.6;
   color: var(--fg-1);
 }
 
-.list {
-  margin: 0;
+/* 列表 */
+.md ul,
+.md ol {
   padding-left: 18px;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.list li::marker {
+.md li > ul,
+.md li > ol {
+  margin-top: 4px;
+}
+.md li::marker {
   color: var(--fg-4);
 }
 
-.quote {
-  margin: 0;
+/* GFM 任务列表：勾选框当项目符号，所以去掉 ul 的原生标记 */
+.md :global(ul.contains-task-list) {
+  padding-left: 2px;
+  list-style: none;
+}
+.md li > input[type="checkbox"] {
+  margin: 0 5px 0 0;
+  vertical-align: -1px;
+  accent-color: var(--acc);
+}
+
+/* 引用（可嵌套） */
+.md blockquote {
   padding: 2px 0 2px 10px;
   border-left: 2px solid var(--acc-line);
   color: var(--fg-3);
 }
+.md blockquote > :is(p, ul, ol) + :is(p, ul, ol) {
+  margin-top: 6px;
+}
 
-.code {
+/* 行内代码 */
+.md code {
   padding: 1px 4px;
   border-radius: 3px;
   background: var(--bg-hover);
@@ -48,29 +84,99 @@
   color: var(--fg-2);
 }
 
-.block {
-  margin: 0;
+/* 代码块：内层 code 不再重复行内样式 */
+.md pre {
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: var(--bg-hover);
-  font-family: var(--mono);
   font-size: 0.6875rem;
   line-height: 1.7;
   color: var(--fg-2);
   overflow-x: auto;
   white-space: pre;
+  tab-size: 2;
+}
+.md pre code {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  font-size: inherit;
+  color: inherit;
+  white-space: pre;
 }
 
-.hr {
+/* 表格（GFM）：横向可滚，别把面板撑宽 */
+.tableWrap {
+  overflow-x: auto;
+}
+.md table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.6875rem;
+  line-height: 1.65;
+}
+.md :is(th, td) {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.md th {
+  background: var(--bg-hover);
+  font-weight: 600;
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+
+.md hr {
   height: 1px;
   margin: 2px 0;
   border: 0;
   background: var(--line);
 }
 
-.link {
+.md a {
   color: var(--acc-text);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.md strong {
+  font-weight: 600;
+  color: var(--fg-1);
+}
+.md del {
+  color: var(--fg-4);
+}
+
+.md img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+/* 脚注。react-markdown 会给脚注区加一个 sr-only 的标题「Footnotes」，
+   那个 h2 不能按正文标题显示，必须藏掉 */
+.md :global(.footnotes) {
+  padding-top: 6px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 0.6875rem;
+  color: var(--fg-3);
+}
+.md :global(.sr-only) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.md sup a {
+  text-decoration: none;
+}
+.md :global(.data-footnote-backref) {
+  margin-left: 3px;
+  text-decoration: none;
 }

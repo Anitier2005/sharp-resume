@@ -12,6 +12,12 @@ export interface WorkspaceContextValue {
   page: ResumePage | null;
   activePageId: string | null;
   setActivePageId: (id: string | null) => void;
+  /** 页签栏的快速检索列表：最近用过的在前，当前页一定在首位 */
+  openPages: string[];
+  /** 切到某页并把它顶到最前 */
+  openPage: (id: string) => void;
+  /** 关标签：只从快速检索里移除，不删页 */
+  closePage: (id: string) => void;
   expanded: Set<string>;
   toggleExpanded: (personId: string) => void;
   saveState: SaveState;
