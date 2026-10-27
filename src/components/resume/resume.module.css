@@ -17,6 +17,31 @@
   color: var(--fg-3);
 }
 
+/* 有简历但一页都没有：得给一个能走出去的按钮，不能只是干看着一句提示 */
+.emptyStack {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 0.71875rem;
+  color: var(--fg-3);
+}
+
+.emptyAction {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  color: var(--fg-1);
+  background: var(--bg-elev);
+}
+.emptyAction:hover {
+  background: var(--bg-hover);
+}
+
 /* ---------- 页签 ---------- */
 /* 页签栏。注意这里**不能**写 overflow:hidden：
    「⋯」和「导出」的下拉都是绝对定位的子元素，会被裁成半截。

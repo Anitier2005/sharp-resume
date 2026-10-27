@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { cx } from "@/lib/cx";
 import shared from "./shared.module.css";
 import styles from "./confirm.module.css";
@@ -75,6 +76,18 @@ export function Confirm({
   if (!open) return null;
 
   /**
+   * 挂到 `.win` 里面，不是 body。
+   *
+   * 设计令牌（`--bg-elev` / `--danger` / `--fg-*`）定义在 `.win` 上，
+   * 而 provider 在 `.win` 的外层 —— 确认窗直接渲染在那儿时所有 `var()` 都解析不出来：
+   * 卡片透明、按钮没有底色也没有描边，底下的会话文字直接透上来，
+   * 用户看到的就是「弹了个透明框、找不到按钮」。令牌必须跟着 DOM 走。
+   *
+   * 只在 `open` 为真时取节点：那时窗口一定已经挂载，不需要 state/effect 去等。
+   */
+  const host = document.querySelector<HTMLElement>(".win");
+
+  /**
    * Tab 也要关在窗里。
    *
    * 遮罩挡得住鼠标，挡不住键盘 —— 不拦的话 Tab 会把焦点带到下面那张纸上，
@@ -95,7 +108,7 @@ export function Confirm({
     }
   };
 
-  return (
+  const dialog = (
     <div
       ref={veilRef}
       className={cx(shared.veil, styles.veil)}
@@ -134,4 +147,8 @@ export function Confirm({
       </div>
     </div>
   );
+
+  // host 还没解析出来时（首帧）直接就地渲染：这个窗口里 .win 一定已经挂载，
+  // 但宁可第一帧样式不对，也不要把这层拦截整个丢掉
+  return host ? createPortal(dialog, host) : dialog;
 }

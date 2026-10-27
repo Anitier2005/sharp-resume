@@ -89,6 +89,14 @@ export function Paper({ person, page }: PaperProps) {
 
   const dismissed = seen.pageId === page.id ? seen.ids : NO_NOTES;
 
+  /**
+   * 整页空白：没有块，也没有手写成品。
+   *
+   * 这不是错误 —— agent 新建出来的页就是这样（`add_page` 只给一张空纸）。
+   * 但界面上必须说出来，否则「一张白纸」和「渲染挂了」长得一模一样。
+   */
+  const blank = (page.blocks ?? []).length === 0 && !page.layout?.html?.trim();
+
   const notes = useMemo(
     () => (page.notes ?? []).filter((note) => !dismissed.has(note.id)),
     [page.notes, dismissed],
@@ -161,6 +169,13 @@ export function Paper({ person, page }: PaperProps) {
         <>
           {/* 预设样式是常量字符串，随第一次编译一起到 */}
           <style>{doc.css}</style>
+          {/* 空白页给一句话：一张什么都没有的纸，用户分不清是「没内容」还是「坏了」 */}
+          {blank && (
+            <div className={styles.blank} data-print="hide">
+              <b>这一页还没有内容</b>
+              <span>在右侧「编辑」里加分区，或直接告诉会话那边你要写什么。</span>
+            </div>
+          )}
           {/* 批注的定位基准：单独包一层，省得去动纸面本身的 position */}
           <div className={resumeStyles.pageHost} ref={hostRef}>
             <div dangerouslySetInnerHTML={{ __html: doc.html }} />

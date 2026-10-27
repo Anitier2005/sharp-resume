@@ -43,6 +43,25 @@
   white-space: pre-wrap;
 }
 
+/* 空白页的说明：居中一行，克制到不像是「错误」。
+   用 --paper-* 系列，跟纸面同一套色，不跟着界面主题跳。 */
+.blank {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 72px 24px 0;
+  text-align: center;
+  font-size: 9px;
+  line-height: 1.8;
+  color: var(--paper-3);
+}
+.blank b {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--paper-2);
+}
+
 .paper ::selection {
   background: color-mix(in srgb, var(--acc-paper) 14%, #ffffff);
   color: var(--paper-fg);

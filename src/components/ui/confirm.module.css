@@ -21,6 +21,9 @@
   border-radius: 8px;
   box-shadow: 0 1px 2px rgba(20, 20, 15, 0.06),
     0 24px 60px -24px rgba(20, 20, 15, 0.45);
+  /* 列表超长时收缩列表，不能把按钮挤出卡片下沿 ——
+     agent 一次删十页时，按钮跑到屏幕外等于这个窗关不掉 */
+  overflow: hidden;
 }
 
 .title {
@@ -48,6 +51,9 @@
   overflow: auto;
   border-left: 2px solid var(--danger);
   padding-left: 8px;
+  /* 允许被压缩：卡片到 max-height 时先缩这里，`min-height:0` 是 flex 下的开关 */
+  flex: 0 1 auto;
+  min-height: 0;
 }
 .items li {
   font-size: 0.6875rem;
@@ -61,6 +67,7 @@
   justify-content: flex-end;
   gap: 6px;
   margin-top: 8px;
+  flex: none;
 }
 
 .acts button {

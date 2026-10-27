@@ -209,10 +209,34 @@ export function ResumePanel() {
     return () => observer.disconnect();
   }, [mode, page?.id]);
 
-  if (!person || !resume || !page) {
+  if (!person || !resume) {
     return (
       <section className={styles.doc}>
         <div className={styles.empty}>还没有简历。左侧点「新增候选人」开始。</div>
+      </section>
+    );
+  }
+
+  /**
+   * 有简历、但一页都没有。
+   *
+   * agent 能把所有页删光（`delete_page` 不做「最后一页」保护），删完必须留一条
+   * 能自己走出来的路 —— 早先这里复用「还没有简历」那句，也没有新建入口，
+   * 用户会卡在一个既没内容也没按钮的面板里。
+   */
+  if (!page) {
+    return (
+      <section className={styles.doc}>
+        <div className={styles.emptyStack}>
+          <div>这份简历还没有页面。</div>
+          <button
+            type="button"
+            className={styles.emptyAction}
+            onClick={() => dispatch({ type: "addPage", personId: person.id, resumeId: resume.id })}
+          >
+            新建一页
+          </button>
+        </div>
       </section>
     );
   }
