@@ -188,6 +188,11 @@ fn read_state(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let dir = data_dir(&app)?;
     let mut conn = db::open(&dir.join("app.db"))?;
     if let Some(workspace) = db::load(&conn)? {
+        // 内容已经升到 v5，但 meta 里的版本号可能还停在 4（老库第一次被新版本打开）。
+        // 不追平的话，库里会出现「写着 v4、实际是 v5」的状态，排查问题时最容易被它骗。
+        if db::version(&conn).unwrap_or(0) < model::VERSION {
+            db::save(&mut conn, &workspace)?;
+        }
         return serde_json::to_string(&workspace)
             .map(Some)
             .map_err(|error| format!("工作区序列化失败：{error}"));
@@ -470,4 +475,113 @@ pub fn run() {
         .manage(session::Sessions::default())
         .run(tauri::generate_context!())
         .expect("error while running Sharp Resume");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir()
+            .join("sharp-resume-lib-test")
+            .join(format!("{tag}-{stamp}"));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        dir
+    }
+
+    fn sample_v5() -> serde_json::Value {
+        json!({
+            "version": 5,
+            "people": [{
+                "id": "p1",
+                "fields": [{ "id": "f1", "label": "姓名", "value": "张三" }],
+                "items": [],
+                "messages": [],
+                "resumes": [{
+                    "id": "r1",
+                    "personId": "p1",
+                    "title": "简历",
+                    "updatedAt": 0,
+                    "pages": [{
+                        "id": "pg1",
+                        "kind": "native",
+                        "label": "中文",
+                        "blocks": [{
+                            "id": "b1",
+                            "kind": "fields",
+                            "fields": [
+                                { "id": "f2", "label": "姓名", "value": "张三" },
+                                { "id": "f3", "label": "职位", "value": "工程师" }
+                            ]
+                        }]
+                    }]
+                }]
+            }],
+            "ui": { "accent": "white" }
+        })
+    }
+
+    /// 模拟前端的一次自动保存：v5 的工作区发过来，必须能存进去、再原样读回来。
+    ///
+    /// 这个用例针对一个真实事故：`write_state` 曾经写死「只接受 version 4」，
+    /// 前端升到 v5 之后每一次保存都被拒绝，而前端只 console.error ——
+    /// 界面看着一切正常，重启就回到旧数据。
+    #[test]
+    fn v5_state_survives_save_and_reload() {
+        let dir = temp_dir("save");
+        let mut conn = db::open(&dir.join("app.db")).expect("建库");
+
+        let workspace = model::adopt(sample_v5()).expect("v5 要能采纳");
+        let payload = serde_json::to_string(&workspace).unwrap();
+        assert!(payload.contains("\"version\":5"), "前端发出去的就是 v5");
+
+        // write_state 走的路径：解析 → 校验 → 落库
+        let incoming: model::Workspace = serde_json::from_str(&payload).expect("解析");
+        model::validate(&incoming).expect("v5 必须能通过校验，不能因为版本号被拒");
+        db::save(&mut conn, &incoming).expect("v5 必须能存进库");
+
+        let loaded = db::load(&conn).unwrap().expect("库里应当有数据");
+        assert_eq!(loaded.version, 5);
+        assert_eq!(loaded.people.len(), 1);
+        let fields = &loaded.people[0].resumes[0].pages[0].blocks[0].fields;
+        assert_eq!(fields[0].value, "张三");
+        assert_eq!(fields[1].value, "工程师");
+
+        // 改一个字段再存一次 —— 这才是用户真正会做的事
+        let mut edited = loaded;
+        edited.people[0].resumes[0].pages[0].blocks[0].fields[0].value = "李四".into();
+        let payload = serde_json::to_string(&edited).unwrap();
+        let incoming: model::Workspace = serde_json::from_str(&payload).expect("解析");
+        model::validate(&incoming).expect("改完还要能过校验");
+        db::save(&mut conn, &incoming).expect("改完还要能存");
+
+        let again = db::load(&conn).unwrap().unwrap();
+        assert_eq!(
+            again.people[0].resumes[0].pages[0].blocks[0].fields[0].value,
+            "李四",
+            "改完的字必须在库里"
+        );
+        // 没动过的字段不能被顺手清掉
+        assert_eq!(again.people[0].resumes[0].pages[0].blocks[0].fields[1].value, "工程师");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 比本程序更新的数据要明确拒绝，而不是悄悄存进去
+    #[test]
+    fn newer_version_is_rejected_with_a_readable_message() {
+        let mut raw = sample_v5();
+        raw["version"] = json!(99);
+        let workspace: model::Workspace = serde_json::from_value(raw).expect("解析");
+        let error = model::validate(&workspace).expect_err("更高版本应当被拒");
+        assert!(error.contains("99"), "错误里要带上版本号：{error}");
+        assert!(error.contains("只到 v5"), "要说明本程序支持到哪一版：{error}");
+    }
 }

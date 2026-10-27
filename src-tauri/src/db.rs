@@ -431,6 +431,16 @@ fn load_children(
     Ok(Value::Array(out))
 }
 
+/// 库里记的模型版本。
+///
+/// 用来看「读出来已经是升级后的形状，但版本号还没跟上」这种情况：
+/// 老库的 meta 可能写着 4，内容其实是 v5（`load` 时已经 normalize）。
+pub fn version(conn: &Connection) -> Result<u32, String> {
+    Ok(meta(conn, "version")?
+        .and_then(|value| value.as_u64())
+        .unwrap_or(model::VERSION as u64) as u32)
+}
+
 fn meta(conn: &Connection, key: &str) -> Result<Option<Value>, String> {
     let mut stmt = conn
         .prepare("SELECT value FROM meta WHERE key = ?1")
