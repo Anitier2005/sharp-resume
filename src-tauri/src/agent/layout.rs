@@ -268,6 +268,7 @@ fn describe_page(args: &LayoutArgs) -> String {
 
     let mut header_fields = 0usize;
     let mut header_chars = 0usize;
+    let mut header_block = String::new();
     let mut extra_groups = 0usize;
     let mut media = 0usize;
     let mut partition_lines: Vec<String> = Vec::new();
@@ -293,6 +294,11 @@ fn describe_page(args: &LayoutArgs) -> String {
                     seen_header = true;
                     header_fields = fields.len();
                     header_chars = len;
+                    header_block = block
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
                 }
             }
             "section" => {
@@ -329,8 +335,9 @@ fn describe_page(args: &LayoutArgs) -> String {
                 total_bullets += bullets;
                 chars += section_chars;
                 partition_lines.push(format!(
-                    "· 分区「{}」：{} 条，{} 句要点，约 {} 字",
+                    "· 分区「{}」（块 {}）：{} 条，{} 句要点，约 {} 字",
                     if title.is_empty() { "未命名" } else { &title },
+                    block.get("id").and_then(Value::as_str).unwrap_or("?"),
                     items.len(),
                     bullets,
                     section_chars
@@ -347,6 +354,9 @@ fn describe_page(args: &LayoutArgs) -> String {
          页头 {header_fields} 个字段（约 {header_chars} 字）",
         pages.len()
     );
+    if !header_block.is_empty() {
+        out.push_str(&format!("｜块 {header_block}"));
+    }
     if extra_groups > 0 {
         out.push_str(&format!("，另有 {extra_groups} 组补充字段"));
     }
@@ -369,10 +379,66 @@ fn describe_page(args: &LayoutArgs) -> String {
     }
     out.push_str(&format!("正文合计约 {chars} 字\n"));
 
-    let style = page.get("style").cloned().unwrap_or_else(
-        || json!({ "density": "normal", "margin": 1.0, "align": "left" }),
-    );
-    out.push_str(&format!("当前版式：{style}"));
+    // 现在怎么排的：不说清的话，agent 会重复改同一块，或者把已有覆盖冲掉
+    let layout = page.get("layout");
+    // 预设可能是从旧的三档疏密映射来的（`style.density`）：不回落的话，
+    // 历史页面在快照里显示「classic」，实际渲染却是 roomy —— 说的和看到的不一致
+    let preset = layout
+        .and_then(|value| value.get("preset"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            page.get("style")
+                .and_then(|style| style.get("density"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("");
+    let html = layout
+        .and_then(|value| value.get("html"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let parts = layout
+        .and_then(|value| value.get("parts"))
+        .and_then(Value::as_object)
+        .map(|map| map.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    if !html.is_empty() {
+        out.push_str(&format!(
+            "当前版面：整页手写 HTML（{} 字），生成器不再介入\n",
+            html.chars().count()
+        ));
+    } else {
+        out.push_str(&format!(
+            "当前版面：结构化生成 · 预设 {}\n",
+            if preset.is_empty() { "classic" } else { preset }
+        ));
+        if !parts.is_empty() {
+            out.push_str(&format!("已手写过的块：{}\n", parts.join(" / ")));
+        }
+    }
+
+    // 可用图片：写 parts 或 html 时要引用 asset id，列出来才不用再问一次
+    let images: Vec<String> = person
+        .get("assets")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter(|asset| asset.get("kind").and_then(Value::as_str) == Some("image"))
+                .map(|asset| {
+                    format!(
+                        "{} {}",
+                        asset.get("id").and_then(Value::as_str).unwrap_or("?"),
+                        asset.get("name").and_then(Value::as_str).unwrap_or("")
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !images.is_empty() {
+        out.push_str(&format!("可用图片：{}", images.join("、")));
+    }
     out
 }
 
@@ -384,7 +450,7 @@ async fn run_turn(
     app: &tauri::AppHandle,
     args: &LayoutArgs,
     prompt: &str,
-) -> Result<Vec<Value>, String> {
+) -> Result<crate::agent::turn::TurnResult, String> {
     let key = format!("layout:{}:{}", args.resume_id, args.page_id);
     let system = SYSTEM.replace("{{page}}", &describe_page(args));
 
@@ -420,13 +486,16 @@ async fn run_turn(
         tools: None,
     };
 
-    let actions = std::sync::Mutex::new(Vec::new());
+    let out = crate::tools::Outbox::default();
+    // 排版 agent 也能转图片：作品集里放一张压好的图，比让用户自己去压缩现实
+    let root = crate::data_dir(app).ok();
     let ctx = ToolCtx {
         workspace: &args.workspace,
         person_id: &args.person_id,
         resume_id: &args.resume_id,
         page_id: &args.page_id,
-        actions: &actions,
+        out: &out,
+        root: root.as_deref(),
     };
 
     let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -474,7 +543,7 @@ async fn run_turn(
         );
     }
 
-    Ok(turn.actions)
+    Ok(turn)
 }
 
 /// 消费者：一直跑到信箱空为止。
@@ -513,7 +582,7 @@ async fn drain(app: tauri::AppHandle, key: String, page_id: String) {
 
         let prompt = compose(&notes);
         match run_turn(&app, &args, &prompt).await {
-            Ok(actions) => {
+            Ok(turn) => {
                 // 每轮都报一声，哪怕一个动作都没有。
                 // 界面靠它知道「这一轮问过了」——只在有改动时才报的话，
                 // 「它判断不用动」和「它压根没跑」在界面上长得一模一样。
@@ -523,7 +592,10 @@ async fn drain(app: tauri::AppHandle, key: String, page_id: String) {
                         "personId": args.person_id,
                         "resumeId": args.resume_id,
                         "pageId": args.page_id,
-                        "actions": actions,
+                        "actions": turn.actions,
+                        // 新材料与动作一起回传：模型可能在同一轮里刚转完图就引用它，
+                        // 分两次发会让前端出现「图还没到、HTML 已经指向它」的窗口
+                        "assets": turn.assets,
                     }),
                 );
             }
@@ -630,6 +702,40 @@ mod tests {
         assert!(text.contains("分区「Experience」"), "{text}");
         // 已有版式必须原样带上，否则模型每次都当第一次排
         assert!(text.contains("roomy"), "{text}");
+    }
+
+    /// 块 id 与图片 id 都要直接给出：排版 agent 写 parts 靠前者、引用图靠后者，
+    /// 少一个就得再调一次工具去问
+    #[test]
+    fn page_brief_hands_over_block_ids_and_image_ids() {
+        let mut args = sample();
+        args.workspace["people"][0]["assets"] = json!([
+            { "id": "a-photo", "kind": "image", "name": "证件照.jpg", "stored": "x.jpg" },
+            { "id": "a-doc", "kind": "file", "name": "证书.pdf", "stored": "y.pdf" }
+        ]);
+        let text = describe_page(&args);
+        assert!(text.contains("块 b1"), "页头块 id：{text}");
+        assert!(text.contains("块 s1"), "分区块 id：{text}");
+        assert!(text.contains("a-photo 证件照.jpg"), "可用图片：{text}");
+        assert!(!text.contains("a-doc"), "非图片不该混进来：{text}");
+    }
+
+    /// 已经有手写覆盖时要报出来，否则 agent 会重复改同一块
+    #[test]
+    fn page_brief_reports_existing_overrides() {
+        let mut args = sample();
+        args.workspace["people"][0]["resumes"][0]["pages"][1]["layout"] = json!({
+            "preset": "compact",
+            "parts": { "s1": "<section>手写</section>" }
+        });
+        let text = describe_page(&args);
+        assert!(text.contains("预设 compact"), "{text}");
+        assert!(text.contains("已手写过的块：s1"), "{text}");
+
+        args.workspace["people"][0]["resumes"][0]["pages"][1]["layout"] =
+            json!({ "html": "<article>x</article>" });
+        let text = describe_page(&args);
+        assert!(text.contains("整页手写"), "{text}");
     }
 
     #[test]

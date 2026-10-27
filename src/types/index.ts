@@ -34,6 +34,14 @@ export interface Field {
   id: string;
   label: string;
   value: string;
+  /**
+   * 这一项是图片时，指向资产池里的那份文件；有它时 `value` 当图注。
+   *
+   * 为什么字段要能装图片：证件照、作品截图、证书扫描件在用户眼里就是
+   * 「页面上的一项内容」，让他先传到材料区、再指望程序猜哪张是头像，
+   * 是把一个结构问题推给人去绕。
+   */
+  assetId?: string;
 }
 
 /** 人的一级：这个人是谁，完全由字段描述 */
@@ -101,6 +109,23 @@ export interface Block {
   fit?: string;
 }
 
+/**
+ * 成品层：这一页的版面。
+ *
+ * 与 `style` 那个「参数层」的区别：参数层只能从几档里挑，成品层是
+ * 「整页 / 某一块的真实 HTML」，排成什么样由排版 agent 自己决定。
+ * 生成器只在没有覆盖的地方介入 —— 所以内容变了，成品不会失效，
+ * 顶多是「按旧内容的量算出来的版面装新内容」，那是排版 agent 下一轮要处理的事。
+ */
+export interface PageLayout {
+  /** classic / compact / roomy / custom；缺省 = classic */
+  preset?: string;
+  /** 整页接管：存在时生成器完全不介入，parts 与 preset 都不再生效 */
+  html?: string;
+  /** 块 id → 这一块手写的 HTML；没有的块照常自动生成 */
+  parts?: Record<string, string>;
+}
+
 export interface ResumePage {
   id: string;
   /** native（我们自己排版）/ file（用户上传的整页原件） */
@@ -109,8 +134,10 @@ export interface ResumePage {
   /** file 页引用的材料 id */
   assetId?: string;
   note?: string;
-  /** 缺省 = 标准排版 */
+  /** 旧的三档疏密，只在读历史数据时出现；新写入一律走 layout */
   style?: PageStyle;
+  /** 成品层：排版 agent 写的版面覆盖 */
+  layout?: PageLayout;
   /** 唯一真相：页头、分区、图片都在这里按顺序排 */
   blocks: Block[];
   /** v4 遗留：只在读旧数据时出现，`normalizePage` 会把它搬进 blocks */

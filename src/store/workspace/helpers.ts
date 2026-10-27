@@ -10,6 +10,18 @@ export function touch(resume: Resume): Resume {
   return { ...resume, updatedAt: Date.now() };
 }
 
+/** 对某个人做变换（材料这类不属于某一页的数据走这里） */
+export function mapPerson(
+  state: Workspace,
+  personId: string,
+  fn: (person: Person) => Person,
+): Workspace {
+  return {
+    ...state,
+    people: state.people.map((person) => (person.id === personId ? fn(person) : person)),
+  };
+}
+
 export function mapResume(
   state: Workspace,
   personId: string,

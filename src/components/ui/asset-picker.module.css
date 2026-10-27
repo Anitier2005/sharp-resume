@@ -1,0 +1,145 @@
+/* 字段里的图片选择器：一个图标按钮 + 浮层。
+   浮层用绝对定位而不是撑开行：字段行是 dense 表单，展开一格会把整列推下去。 */
+
+.wrap {
+  position: relative;
+  flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--fg-4);
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.trigger:hover {
+  color: var(--fg-2);
+  background: var(--bg-elev);
+  border-color: var(--line);
+}
+.trigger[data-on="true"] {
+  color: var(--acc);
+  border-color: var(--acc-line);
+  background: var(--acc-softer);
+}
+
+/* 已经有图时：显示缩略图本身，按钮就是它 */
+.thumbBtn {
+  width: 34px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-elev);
+  cursor: pointer;
+}
+.thumbBtn img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.thumbBtn:hover {
+  border-color: var(--acc-line);
+}
+.thumbEmpty {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  font-size: 9px;
+  color: var(--fg-4);
+}
+
+.pop {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  right: 0;
+  width: 232px;
+  padding: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, 0.16));
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  max-height: 148px;
+  overflow-y: auto;
+}
+
+.cell {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-sunken);
+  cursor: pointer;
+}
+.cell:hover {
+  border-color: var(--acc);
+}
+.cell[data-on="true"] {
+  border-color: var(--acc);
+  box-shadow: 0 0 0 1px var(--acc);
+}
+.cell img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.empty {
+  padding: 12px 4px;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--fg-4);
+  text-align: center;
+}
+
+.foot {
+  display: flex;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  font: inherit;
+  font-size: 10px;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.btn:hover {
+  border-color: var(--acc-line);
+  color: var(--acc);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

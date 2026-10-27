@@ -10,7 +10,6 @@
 //!   - **取消**：每轮开始前检查标记，中断时保留已经说出去的话
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Mutex;
 
 use serde_json::Value;
 
@@ -26,10 +25,23 @@ pub struct TurnResult {
     pub used: Vec<String>,
     /// 页面控制工具产出的界面指令，按产出顺序。前端拿到后依次应用。
     pub actions: Vec<Value>,
+    /// 工具产出的新材料（图片转化会产出）。前端要把它们并进 state 的资产列表，
+    /// 否则模型下一轮引用的 `asset:` 是个不存在的 id。
+    pub assets: Vec<crate::model::Asset>,
 }
 
-fn drain(sink: &Mutex<Vec<Value>>) -> Vec<Value> {
-    sink.lock().map(|guard| guard.clone()).unwrap_or_default()
+fn drain_actions(out: &crate::tools::Outbox) -> Vec<Value> {
+    out.actions
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+fn drain_assets(out: &crate::tools::Outbox) -> Vec<crate::model::Asset> {
+    out.assets
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
 }
 
 /// 把工具调用翻译成一句给人看的状态
@@ -127,7 +139,8 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
         speech.push_str(&outcome.content);
 
         if outcome.tool_calls.is_empty() {
-            return Ok(TurnResult { content: speech, used, actions: drain(ctx.actions) });
+            return Ok(TurnResult { content: speech, used, actions: drain_actions(ctx.out),
+            assets: drain_assets(ctx.out) });
         }
         if cancel.load(Ordering::SeqCst) {
             break;
@@ -165,7 +178,8 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
     if speech.is_empty() {
         speech.push_str("（这一轮没有产出正文。可能是模型一直在调工具，或请求被中断。）");
     }
-    Ok(TurnResult { content: speech, used, actions: drain(ctx.actions) })
+    Ok(TurnResult { content: speech, used, actions: drain_actions(ctx.out),
+            assets: drain_assets(ctx.out) })
 }
 
 

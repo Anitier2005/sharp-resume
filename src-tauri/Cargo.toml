@@ -52,6 +52,15 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # 依赖链里已经有一份 html5ever（dom_query 带进来的），这里只是多一层白名单策略。
 ammonia = "4"
 
+# 图片转化：限尺寸、转格式、按比例裁剪。
+# 纯 Rust，没有 C 依赖（png / jpeg / webp 都是 Rust 实现），
+# 关掉默认特性只为少编几个用不上的编解码器（tiff / exr / hdr）。
+image = { version = "0.25", default-features = false, features = [
+  "png",
+  "jpeg",
+  "webp",
+] }
+
 # 读取 Windows「辅助功能 → 文本大小」的实际缩放值，供 UI 字号跟随。
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

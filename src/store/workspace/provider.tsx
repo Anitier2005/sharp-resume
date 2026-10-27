@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { Workspace } from "@/types";
+import type { Asset, Workspace } from "@/types";
 import { AUTO_TEXT_SCALE_FLOOR } from "@/types";
 import { SEED } from "@/data/seed";
 import { EMPTY_WORKSPACE } from "@/data/empty";
@@ -43,6 +43,8 @@ interface LayoutApplied {
   resumeId: string;
   pageId: string;
   actions: unknown[];
+  /** 本轮工具新产出的材料（图片转化）。与动作一起到，因为它们可能互为因果 */
+  assets?: Asset[];
 }
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
@@ -250,7 +252,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
     void listen<LayoutApplied>("layout:applied", (event) => {
       if (!alive) return;
-      const { personId, resumeId, actions } = event.payload;
+      const { personId, resumeId, actions, assets } = event.payload;
+      // 材料先落地：动作里可能马上引用它（模型常在同一轮里转完图就写进 HTML）
+      if (Array.isArray(assets) && assets.length) {
+        dispatch({ type: "addAssets", personId, assets });
+      }
       if (!Array.isArray(actions) || !actions.length) return;
       applyAgentActions(actions, {
         openPage: () => {},
@@ -258,6 +264,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         ask: () => {},
         pageStyle: (pageId, style) =>
           dispatch({ type: "pageStyle", personId, resumeId, pageId, style }),
+        pageLayout: (pageId, layout) =>
+          dispatch({ type: "pageLayout", personId, resumeId, pageId, layout }),
         requestLayout: () => {},
       });
     }).then(keep);

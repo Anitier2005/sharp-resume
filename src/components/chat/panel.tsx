@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Attachment, ChatAction, ChatMessage } from "@/types";
+import type { Asset, Attachment, ChatAction, ChatMessage } from "@/types";
 import { useWorkspace } from "@/store/workspace";
 import { uid } from "@/lib/uid";
 import { useToast } from "@/components/ui/toast-context";
@@ -271,7 +271,7 @@ export function ChatPanel() {
             }
           };
 
-          const sent = await invoke<{ id: string; actions: unknown[] }>("chat_send", {
+          const sent = await invoke<{ id: string; actions: unknown[]; assets?: Asset[] }>("chat_send", {
             args: {
               key: person.id,
               context,
@@ -317,12 +317,18 @@ export function ChatPanel() {
           setRemote(await invoke<ChatMessage[]>("chat_history", { key: person.id }));
 
           // 页面控制工具的指令在这里落地：切页、切视图、改快捷栏、调外观
+          // 工具新产出的材料先落地，动作里可能引用它
+          if (sent.assets?.length) {
+            dispatch({ type: "addAssets", personId: person.id, assets: sent.assets });
+          }
           const applied = applyAgentActions(sent.actions, {
             openPage: (pageId) => setActivePageId(pageId),
             patchUi: (patch) => dispatch({ type: "patchUi", patch }),
             ask: (questions) => setAsk(questions),
             pageStyle: (pageId, style) =>
               dispatch({ type: "pageStyle", personId: person.id, resumeId: resume.id, pageId, style }),
+            pageLayout: (pageId, layout) =>
+              dispatch({ type: "pageLayout", personId: person.id, resumeId: resume.id, pageId, layout }),
             requestLayout: (pageId, brief) => runLayoutFor(pageId, brief),
           });
           if (applied > 0) toast(`已按你的要求调整界面（${applied} 处）`);

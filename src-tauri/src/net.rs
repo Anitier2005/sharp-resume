@@ -471,13 +471,14 @@ mod tests {
         };
 
         let workspace = demo_workspace();
-        let sink = std::sync::Mutex::new(Vec::<serde_json::Value>::new());
+        let out = crate::tools::Outbox::default();
         let ctx = crate::tools::ToolCtx {
             workspace: &workspace,
             person_id: "p1",
             resume_id: "r1",
             page_id: "pg2",
-            actions: &sink,
+            out: &out,
+            root: None,
         };
 
         let mut messages = vec![

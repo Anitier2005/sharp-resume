@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   Field,
   LibraryItem,
+  PageLayout,
   PageStyle,
   Person,
   ResumePage,
@@ -37,6 +38,10 @@ export type Action =
   | { type: "pageLabel"; personId: string; resumeId: string; pageId: string; label: string }
   | { type: "pageHeader"; personId: string; resumeId: string; pageId: string; header: Field[] }
   | { type: "pageStyle"; personId: string; resumeId: string; pageId: string; style: PageStyle }
+  /** 成品层：整页/块级手写覆盖。整体替换，合并逻辑在工具那侧做完 */
+  | { type: "pageLayout"; personId: string; resumeId: string; pageId: string; layout: PageLayout }
+  /** 工具产出的新材料（图片转化等）。按 id 去重后并进人的材料列表 */
+  | { type: "addAssets"; personId: string; assets: Asset[] }
   /* ---------- 分区与条目 ---------- */
   | { type: "addSection"; personId: string; resumeId: string; pageId: string; title: string }
   | {

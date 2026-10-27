@@ -38,8 +38,25 @@ pub struct Field {
     pub label: String,
     #[serde(default)]
     pub value: String,
+    /// 这一项是图片时，指向资产池里的那份文件。
+    ///
+    /// 有它时 `value` 当图注用（可以空着）。字段能装图片这件事是必要的：
+    /// 证件照、作品截图、证书扫描件在用户脑子里就是「页面上的一项内容」，
+    /// 让他先去材料区传一张、再回来指望我们猜哪张是头像，是把结构问题推给人。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
     #[serde(flatten, default, skip_serializing_if = "is_empty")]
     pub extra: Map<String, Value>,
+}
+
+impl Field {
+    /// 这一项是不是图片（有引用且不是空串）
+    pub fn image_id(&self) -> Option<&str> {
+        self.asset_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+    }
 }
 
 /// 材料 / 资产。

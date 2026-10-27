@@ -9,26 +9,69 @@
 //! 应用在前端，页面层不参与任何决策。
 
 pub mod ask;
+pub mod image;
 pub mod layout;
 pub mod page;
 pub mod read;
 
+use std::path::Path;
+use std::sync::Mutex;
+
 use serde_json::{json, Value};
 
-/// 工具执行时能看到的东西：只读快照 + 当前定位 + 待回传的界面指令。
+use crate::model::Asset;
+
+/// 工具出站：本轮执行产生、要交给调用方落地的东西。
+///
+/// 分两类而不是塞进一个数组，因为它们的落地方式不同：
+///   `actions` → 交给 reducer 当界面指令分发
+///   `assets`  → 并进 state 的材料列表（是数据，不是动作）
+/// 合成一个结构体是为了让 `ToolCtx` 只多一个字段：以后再加一类出站结果
+/// （审计记录、警告）时，所有构造点都不用动。
+#[derive(Default)]
+pub struct Outbox {
+    /// 界面指令，上限由 `push_action` 控制
+    pub actions: Mutex<Vec<Value>>,
+    /// 工具新建的材料（现在只有图片转化会产出）
+    pub assets: Mutex<Vec<Asset>>,
+}
+
+/// 工具执行时能看到的东西：只读快照 + 当前定位 + 出站口。
 pub struct ToolCtx<'a> {
     pub workspace: &'a Value,
     pub person_id: &'a str,
     pub resume_id: &'a str,
     pub page_id: &'a str,
-    /// 页面控制类工具产出的指令。本轮结束后随回复一起回传前端执行。
-    /// 用 Mutex 是因为工具执行发生在 async 流程里，且将来可能并行。
-    pub actions: &'a std::sync::Mutex<Vec<Value>>,
+    pub out: &'a Outbox,
+    /// 数据目录。只有需要碰真实文件的工具才用得到（目前是图片转化）；
+    /// 浏览器调试模式没有数据目录，这类工具会明确报「当前环境不支持」。
+    pub root: Option<&'a Path>,
+}
+
+impl<'a> ToolCtx<'a> {
+    /// 只读场景（测试、离线）：没有数据目录，出站口由调用方提供
+    pub fn of(
+        workspace: &'a Value,
+        person_id: &'a str,
+        resume_id: &'a str,
+        page_id: &'a str,
+        out: &'a Outbox,
+    ) -> Self {
+        Self {
+            workspace,
+            person_id,
+            resume_id,
+            page_id,
+            out,
+            root: None,
+        }
+    }
 }
 
 /// 把一条界面指令放进出站队列。
 pub fn push_action(ctx: &ToolCtx, action: Value) -> Result<(), String> {
     let mut list = ctx
+        .out
         .actions
         .lock()
         .map_err(|_| "界面指令队列不可用".to_string())?;
@@ -39,16 +82,36 @@ pub fn push_action(ctx: &ToolCtx, action: Value) -> Result<(), String> {
     Ok(())
 }
 
+/// 把一份新材料放进出站队列。
+pub fn push_asset(ctx: &ToolCtx, asset: Asset) -> Result<(), String> {
+    let mut list = ctx
+        .out
+        .assets
+        .lock()
+        .map_err(|_| "材料队列不可用".to_string())?;
+    if list.len() < 8 {
+        list.push(asset);
+    }
+    Ok(())
+}
+
 /// 工具归属：统一的注册表，但不同 agent 看到的能力不同。
-#[derive(Clone, Copy, PartialEq, Eq)]
+///
+/// 分配方式是**每个工具声明一份角色列表**（`Tool::scopes`），而不是反过来
+/// 维护「每个角色有哪些工具」—— 那样同一个事实存两遍，加一个工具就要记得改两处。
+///
+/// 新增一个 agent 的成本：这个枚举加一项 → 想给它的工具在列表里加上它。
+/// 分发、越权拒绝、schema 生成、测试断言全部不用动。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scope {
-    /// 两个 agent 都能用
-    All,
-    /// 只有会话 agent
+    /// 会话 agent：和用户对话、读内容、转交排版
     Session,
-    /// 只有页排版 agent
+    /// 页排版 agent：拥有这一页版面的全部决定权
     Layout,
 }
+
+/// 两个 agent 都能用
+pub const EVERYONE: &[Scope] = &[Scope::Session, Scope::Layout];
 
 pub struct Tool {
     pub name: &'static str,
@@ -56,7 +119,13 @@ pub struct Tool {
     pub description: &'static str,
     pub params: fn() -> Value,
     pub run: fn(&Value, &ToolCtx) -> Result<String, String>,
-    pub scope: Scope,
+    /// 谁能调。这是唯一的能力配置点。
+    pub scopes: &'static [Scope],
+    /// 有没有副作用：会改数据、写文件、发起外部调用。
+    ///
+    /// 目前只用于把「只读工具」和「会改变状态的工具」分开，便于
+    /// `read_person` 这类工具在将来做并行；也让审查时一眼能看出哪些是写操作。
+    pub writes: bool,
 }
 
 pub const TOOLS: &[Tool] = &[
@@ -66,7 +135,8 @@ pub const TOOLS: &[Tool] = &[
                       用户问「我的信息里有什么」「还缺什么」时先调这个。",
         params: read::no_params,
         run: read::read_person,
-        scope: Scope::All,
+        scopes: EVERYONE,
+        writes: false,
     },
     Tool {
         name: "list_pages",
@@ -74,7 +144,8 @@ pub const TOOLS: &[Tool] = &[
                       不确定「一共几页」「第几页叫什么」时必须调它，不要猜。",
         params: read::no_params,
         run: read::list_pages,
-        scope: Scope::All,
+        scopes: EVERYONE,
+        writes: false,
     },
     Tool {
         name: "read_page",
@@ -83,7 +154,8 @@ pub const TOOLS: &[Tool] = &[
                       任何涉及「这一页写了什么」的问题都必须先读，不许凭记忆回答。",
         params: read::page_params,
         run: read::read_page,
-        scope: Scope::All,
+        scopes: EVERYONE,
+        writes: false,
     },
     Tool {
         name: "read_library",
@@ -91,7 +163,8 @@ pub const TOOLS: &[Tool] = &[
                       或要改写却没有足够细节时调它。",
         params: read::library_params,
         run: read::read_library,
-        scope: Scope::All,
+        scopes: EVERYONE,
+        writes: false,
     },
     /* ---------- 页面控制（只影响「看到什么」，不改内容） ---------- */
     Tool {
@@ -100,7 +173,8 @@ pub const TOOLS: &[Tool] = &[
                       不要凭记忆猜页码：不确定就先 list_pages。",
         params: page::open_page_params,
         run: page::open_page,
-        scope: Scope::Session,
+        scopes: &[Scope::Session],
+        writes: true,
     },
     Tool {
         name: "set_view",
@@ -108,7 +182,8 @@ pub const TOOLS: &[Tool] = &[
                       说「我要改」「回到表单」用 edit。只在用户明确要看/要改时切，别自作主张。",
         params: page::view_params,
         run: page::set_view,
-        scope: Scope::Session,
+        scopes: &[Scope::Session],
+        writes: true,
     },
     Tool {
         name: "set_open_pages",
@@ -116,7 +191,8 @@ pub const TOOLS: &[Tool] = &[
                       用户说「把这三页放到标签上」「只留英文页的标签」时用它，pageIds 从 list_pages 取。",
         params: page::open_pages_params,
         run: page::set_open_pages,
-        scope: Scope::Session,
+        scopes: &[Scope::Session],
+        writes: true,
     },
     Tool {
         name: "ask_user",
@@ -125,7 +201,8 @@ pub const TOOLS: &[Tool] = &[
                       能只问一句就别开表单（直接问更自然），要问三件以上才用表单。",
         params: ask::params,
         run: ask::ask,
-        scope: Scope::Session,
+        scopes: &[Scope::Session],
+        writes: false,
     },
     Tool {
         name: "set_ui",
@@ -134,21 +211,46 @@ pub const TOOLS: &[Tool] = &[
                       改完要把结果说清楚，让用户知道变了什么。",
         params: page::ui_params,
         run: page::set_ui,
-        scope: Scope::Session,
+        scopes: &[Scope::Session],
+        writes: true,
     },
     Tool {
         name: "request_layout",
         description: "把「这一页要怎么排」的要求交给该页的排版 agent（它负责留白与疏密，                      不碰内容）。用户抱怨太挤 / 太散 / 装不下时用它，别自己调样式。",
         params: layout::request_layout_params,
         run: layout::request_layout,
-        scope: Scope::Session,
+        scopes: &[Scope::Session],
+        writes: true,
     },
     Tool {
-        name: "set_page_style",
-        description: "设置当前页的排版参数：疏密、页边距、页头对齐。                      这是排版 agent 的专属工具；改完要说明你为什么这么排。",
-        params: layout::page_style_params,
-        run: layout::set_page_style,
-        scope: Scope::Layout,
+        name: "read_layout_guide",
+        description: "读取纸面组件手册：有哪些可用的 class、怎么拼、能写哪些标签、不能写什么。\
+                      第一次给某一页排版前读一次；之后按需要再查。不读就写 HTML 很容易用到不存在的组件。",
+        params: layout::guide_params,
+        run: layout::read_layout_guide,
+        scopes: &[Scope::Layout],
+        writes: false,
+    },
+    Tool {
+        name: "convert_image",
+        description: "把一张已有图片处理成合适的大小/格式/比例：压到最长边上限、转 jpeg 或 png、\
+                      按 1:1 / 3:4 / 16:9 居中裁剪。用户说「照片太大」「裁成正方形」「要 jpg」时用它，\
+                      不要建议用户自己去找压缩工具。处理完会得到一个新资产 id，原图不会被改。",
+        params: image::params,
+        run: image::convert,
+        scopes: EVERYONE,
+        writes: true,
+    },
+    Tool {
+        name: "set_page_layout",
+        description: "改这一页的成品版面。三档力度，按需选最轻的那档：\
+                      preset 换整体疏密；parts 只重写某几个块（块 id 从 read_page 取）；\
+                      html 整页接管，只在结构化确实做不出来时用。\
+                      这是排版 agent 的核心工具 —— 内容不在你手里，版面全部由你决定。",
+        params: layout::set_layout_params,
+        run: layout::set_page_layout,
+        scopes: &[Scope::Layout],
+        writes: true,
     },
 ];
 
@@ -172,7 +274,16 @@ pub fn specs(scope: Scope) -> Value {
 }
 
 fn visible(tool: &Tool, scope: Scope) -> bool {
-    tool.scope == Scope::All || tool.scope == scope
+    tool.scopes.contains(&scope)
+}
+
+/// 某个角色能用的全部工具名，按注册顺序。测试与审查用它做快照。
+pub fn names_for(scope: Scope) -> Vec<&'static str> {
+    TOOLS
+        .iter()
+        .filter(|tool| visible(tool, scope))
+        .map(|tool| tool.name)
+        .collect()
 }
 
 /// 按名字分发。未知工具不 panic —— 模型偶尔会编一个名字，要把错误当结果喂回去，
@@ -216,11 +327,52 @@ mod tests {
         assert_eq!(first["function"]["parameters"]["type"], "object");
     }
 
+    /// 分配机制的自检：能力只写在每个工具的 `scopes` 里。
+    ///
+    /// 这条测试的作用不是「断言现在长这样」，而是把「谁能干什么」固定在
+    /// 一个能一眼看完的地方 —— 加角色、加工具时如果漏了配置，这里会红。
+    #[test]
+    fn capability_map_is_one_line_per_tool() {
+        let session = names_for(Scope::Session);
+        let layout = names_for(Scope::Layout);
+
+        // 会话 agent：能读、能转交、能转图，但不能自己动版面
+        assert!(session.contains(&"request_layout"));
+        assert!(session.contains(&"convert_image"));
+        assert!(!session.contains(&"set_page_layout"));
+        assert!(!session.contains(&"read_layout_guide"));
+
+        // 排版 agent：能读、能写版面、能转图，但不能切页/改界面/问用户
+        assert!(layout.contains(&"set_page_layout"));
+        assert!(layout.contains(&"read_layout_guide"));
+        assert!(layout.contains(&"convert_image"));
+        assert!(!layout.contains(&"open_page"));
+        assert!(!layout.contains(&"ask_user"));
+
+        // 写操作必须标出来：审查时靠它快速看出哪些会改数据
+        let readers: Vec<&str> = TOOLS
+            .iter()
+            .filter(|tool| !tool.writes)
+            .map(|tool| tool.name)
+            .collect();
+        assert!(readers.contains(&"read_page"));
+        assert!(readers.contains(&"read_layout_guide"));
+        assert!(!readers.contains(&"set_page_layout"));
+        assert!(!readers.contains(&"convert_image"));
+    }
+
     #[test]
     fn unknown_tool_lists_alternatives() {
         let ws = json!({ "people": [] });
-        let sink = std::sync::Mutex::new(Vec::new());
-        let ctx = ToolCtx { workspace: &ws, person_id: "p", resume_id: "r", page_id: "g", actions: &sink };
+        let out = Outbox::default();
+        let ctx = ToolCtx {
+            workspace: &ws,
+            person_id: "p",
+            resume_id: "r",
+            page_id: "g",
+            out: &out,
+            root: None,
+        };
         let err = call("read_everything", &json!({}), &ctx, Scope::Session).unwrap_err();
         assert!(err.contains("read_page"), "{err}");
     }
@@ -229,26 +381,42 @@ mod tests {
         json!({
             "people": [{
                 "id": "p1",
+                "assets": [],
                 "resumes": [{
                     "id": "r1",
                     "pages": [
-                        { "id": "pg1", "label": "第 1 页" },
-                        { "id": "pg2", "label": "English" }
+                        {
+                            "id": "pg1",
+                            "kind": "native",
+                            "label": "第 1 页",
+                            "blocks": [
+                                { "id": "b1", "kind": "fields" },
+                                { "id": "b2", "kind": "section", "title": "工作" }
+                            ]
+                        },
+                        { "id": "pg2", "kind": "native", "label": "English", "blocks": [] }
                     ]
                 }]
             }]
         })
     }
 
-    fn ctx_of<'a>(ws: &'a Value, sink: &'a std::sync::Mutex<Vec<Value>>) -> ToolCtx<'a> {
-        ToolCtx { workspace: ws, person_id: "p1", resume_id: "r1", page_id: "pg1", actions: sink }
+    fn ctx_of<'a>(ws: &'a Value, out: &'a Outbox) -> ToolCtx<'a> {
+        ToolCtx {
+            workspace: ws,
+            person_id: "p1",
+            resume_id: "r1",
+            page_id: "pg1",
+            out,
+            root: None,
+        }
     }
 
     #[test]
     fn page_tools_emit_actions_not_state_changes() {
         let ws = sample_ws();
-        let sink = std::sync::Mutex::new(Vec::new());
-        let ctx = ctx_of(&ws, &sink);
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
 
         let text = call("open_page", &json!({ "index": 2 }), &ctx, Scope::Session).unwrap();
         assert!(text.contains("English"), "{text}");
@@ -257,7 +425,7 @@ mod tests {
         call("set_open_pages", &json!({ "pageIds": ["pg2"] }), &ctx, Scope::Session).unwrap();
         call("set_ui", &json!({ "mode": "dark", "sideW": 9999 }), &ctx, Scope::Session).unwrap();
 
-        let actions = sink.lock().unwrap().clone();
+        let actions = out.actions.lock().unwrap().clone();
         assert_eq!(actions[0], json!({ "type": "openPage", "pageId": "pg2" }));
         assert_eq!(actions[1], json!({ "type": "setView", "view": "preview" }));
         // 当前页是 pg1，必须被补回列表首位
@@ -270,8 +438,8 @@ mod tests {
     #[test]
     fn page_tools_reject_bad_arguments() {
         let ws = sample_ws();
-        let sink = std::sync::Mutex::new(Vec::new());
-        let ctx = ctx_of(&ws, &sink);
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
 
         assert!(call("open_page", &json!({ "pageId": "pg-nope" }), &ctx, Scope::Session)
             .unwrap_err()
@@ -281,19 +449,20 @@ mod tests {
         assert!(call("set_ui", &json!({ "accentHex": "blue" }), &ctx, Scope::Session).is_err());
         assert!(call("set_ui", &json!({}), &ctx, Scope::Session).is_err());
         // 失败不该留下任何指令
-        assert!(sink.lock().unwrap().is_empty());
+        assert!(out.actions.lock().unwrap().is_empty());
     }
 
     #[test]
     fn scope_keeps_layout_tools_out_of_session_agent() {
         let ws = sample_ws();
-        let sink = std::sync::Mutex::new(Vec::new());
-        let ctx = ctx_of(&ws, &sink);
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
 
-        // 会话 agent 调不了排版写工具
-        let err = call("set_page_style", &json!({ "density": "compact" }), &ctx, Scope::Session)
-            .unwrap_err();
-        assert!(err.contains("不能用"), "{err}");
+        // 会话 agent 动不了版面：它只能转交，不能直接写
+        for name in ["set_page_layout", "read_layout_guide"] {
+            let err = call(name, &json!({}), &ctx, Scope::Session).unwrap_err();
+            assert!(err.contains("不能用"), "{name}: {err}");
+        }
 
         // 排版 agent 调不了切页 / 改界面
         for name in ["open_page", "set_ui", "set_view", "ask_user"] {
@@ -306,28 +475,84 @@ mod tests {
         assert!(call("list_pages", &json!({}), &ctx, Scope::Session).is_ok());
     }
 
+    /// 连着改两次版面：第二次必须看到第一次的结果。
+    /// 曾经以快照为基线，第二次会把第一次的 preset 与块一起抹掉。
     #[test]
-    fn layout_tool_merges_style_instead_of_replacing() {
-        let mut ws = sample_ws();
-        ws["people"][0]["resumes"][0]["pages"][0]["style"] =
-            json!({ "density": "roomy", "margin": 1.1 });
-        let sink = std::sync::Mutex::new(Vec::new());
-        let ctx = ctx_of(&ws, &sink);
+    fn layout_tool_accumulates_within_one_turn() {
+        let ws = sample_ws();
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
 
-        call("set_page_style", &json!({ "margin": 0.9 }), &ctx, Scope::Layout).unwrap();
-        let actions = sink.lock().unwrap().clone();
-        let style = &actions[0]["style"];
-        // 没传的 density 不能被清掉
-        assert_eq!(style["density"], json!("roomy"));
-        assert_eq!(style["margin"], json!(0.9));
-        assert_eq!(actions[0]["type"], json!("patchPageStyle"));
+        call(
+            "set_page_layout",
+            &json!({ "preset": "compact", "parts": { "b1": "<h1>A</h1>" } }),
+            &ctx,
+            Scope::Layout,
+        )
+        .unwrap();
+        call(
+            "set_page_layout",
+            &json!({ "parts": { "b2": "<section>B</section>" } }),
+            &ctx,
+            Scope::Layout,
+        )
+        .unwrap();
+
+        let actions = out.actions.lock().unwrap().clone();
+        assert_eq!(actions.len(), 2);
+        let layout = &actions[1]["layout"];
+        assert_eq!(actions[1]["type"], json!("patchPageLayout"));
+        assert_eq!(actions[1]["pageId"], json!("pg1"));
+        assert_eq!(layout["preset"], json!("compact"), "没传的预设不能被清掉");
+        assert_eq!(layout["parts"]["b1"], json!("<h1>A</h1>"), "上一块要留着");
+        assert_eq!(layout["parts"]["b2"], json!("<section>B</section>"));
+    }
+
+    #[test]
+    fn layout_tool_rejects_unknown_blocks_and_oversized_parts() {
+        let ws = sample_ws();
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
+
+        let err = call(
+            "set_page_layout",
+            &json!({ "parts": { "nope": "<p>x</p>" } }),
+            &ctx,
+            Scope::Layout,
+        )
+        .unwrap_err();
+        assert!(err.contains("b1"), "报错要把正确的块 id 列出来：{err}");
+
+        let huge = "x".repeat(7000);
+        let err = call(
+            "set_page_layout",
+            &json!({ "parts": { "b1": huge } }),
+            &ctx,
+            Scope::Layout,
+        )
+        .unwrap_err();
+        assert!(err.contains("上限"), "{err}");
+    }
+
+    #[test]
+    fn layout_tool_can_undo_everything() {
+        let mut ws = sample_ws();
+        ws["people"][0]["resumes"][0]["pages"][0]["layout"] =
+            json!({ "preset": "compact", "parts": { "b1": "<h1>A</h1>" } });
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
+
+        call("set_page_layout", &json!({ "reset": true }), &ctx, Scope::Layout).unwrap();
+        let actions = out.actions.lock().unwrap().clone();
+        // 空对象是「没有任何覆盖」，不是「没给」—— 前端要据此清空
+        assert_eq!(actions[0]["layout"], json!({}));
     }
 
     #[test]
     fn ask_user_builds_a_form_and_rejects_bad_questions() {
         let ws = sample_ws();
-        let sink = std::sync::Mutex::new(Vec::new());
-        let ctx = ctx_of(&ws, &sink);
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
 
         let text = call(
             "ask_user",
@@ -342,7 +567,7 @@ mod tests {
         .unwrap();
         assert!(text.contains("3 道题"), "{text}");
 
-        let actions = sink.lock().unwrap().clone();
+        let actions = out.actions.lock().unwrap().clone();
         assert_eq!(actions[0]["type"], json!("ask"));
         assert_eq!(actions[0]["questions"][0]["id"], json!("q1"));
         assert_eq!(actions[0]["questions"][2]["options"][0], json!("规模"));

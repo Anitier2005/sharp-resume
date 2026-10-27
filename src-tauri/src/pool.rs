@@ -198,6 +198,49 @@ pub fn put(
 /// 从指定数据目录读池里的文件。
 ///
 /// 导出与测试只需要一个目录，不需要整个 `AppHandle` —— 少一层依赖才能直接测。
+/// 只依赖数据目录的写入：给工具用（工具拿不到 `AppHandle`）。
+///
+/// 与 `put` 的差别只有一处：不写 asset 索引表。索引由 `write_state` 之后的
+/// `sync` 按工作区里的资产统一补 —— 比让每个工具各写一遍更不容易漏。
+pub fn put_at(
+    root: &Path,
+    id: &str,
+    name: &str,
+    data: &[u8],
+) -> Result<crate::model::Asset, String> {
+    let sha = sha256_hex(data);
+    let dir = root.join("pool");
+    std::fs::create_dir_all(&dir).map_err(|error| format!("建资产池失败：{error}"))?;
+
+    let ext = name.rsplit('.').next();
+    let mut final_name = crate::snapshot::pool_name(&sha, ext)?;
+    let mut path = dir.join(&final_name);
+
+    // 同一份内容只落一份。哈希前缀撞了就退回完整哈希，绝不覆盖已有文件
+    if path.exists() {
+        let existing = std::fs::read(&path).map_err(|error| format!("读取池文件失败：{error}"))?;
+        if sha256_hex(&existing) != sha {
+            final_name = format!("{sha}.{}", ext.unwrap_or("bin"));
+            path = dir.join(&final_name);
+        }
+    }
+    if !path.exists() {
+        crate::storage::atomic_write(&path, data)?;
+    }
+
+    Ok(crate::model::Asset {
+        id: id.to_string(),
+        kind: "image".into(),
+        name: name.to_string(),
+        stored: final_name,
+        sha256: Some(sha),
+        size: Some(data.len() as u64),
+        mime: Some(mime_of(name)),
+        note: None,
+        extra: Default::default(),
+    })
+}
+
 pub fn read_at(root: &Path, stored: &str) -> Result<Vec<u8>, String> {
     let name = safe_stored(stored)?;
     let pool = root.join("pool").join(&name);

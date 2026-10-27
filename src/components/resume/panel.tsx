@@ -482,6 +482,9 @@ export function ResumePanel() {
             dispatch({ type: "sectionItems", ...base, sectionId, items })
           }
           onEntryPatch={(entryId, patch) => dispatch({ type: "entryPatch", ...base, entryId, patch })}
+          onAddAssets={(assets) =>
+            dispatch({ type: "addAssets", personId: person.id, assets })
+          }
         />
       )}
 

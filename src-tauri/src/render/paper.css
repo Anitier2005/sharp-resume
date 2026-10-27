@@ -5,8 +5,12 @@
  *   而这些样式对所有页都一样 —— 没有理由让模型每次都重写一遍。
  *   agent 想改哪一块，给那个元素加 style 覆盖即可（内联优先级天然更高）。
  *
- * 变量是给 agent 的抓手：改 --gap 比逐个元素改 margin 省事，
- * 但这不是「排版参数层」—— 它可以直接改任何元素的任何属性，这只是快捷方式。
+ * 这里是「组件库」，不是「参数层」：
+ *   参数层只能从几档里挑；组件是**可拼接的积木** —— 一个 class 就能把
+ *   一段内容变成两栏、把标题变成带底色的条、把图变成圆形头像。
+ *   组合权在 agent 手里，样式表只保证「每种组合都长得好、都能打印」。
+ *
+ * 命名约定：布局类互斥（cols-2 / cols-3 选一个），修饰类可叠加（fig + wide + round）。
  */
 
 .doc {
@@ -18,6 +22,7 @@
   --dim: #6b6b63;
   --line: #e2e2dc;
   --acc: #2c2c2a;
+  --soft: #f4f4f1;
 
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   font-size: var(--fs);
@@ -57,10 +62,12 @@
 .doc h1,
 .doc h2,
 .doc h3,
+.doc h4,
 .doc p,
 .doc ul,
 .doc ol,
-.doc figure {
+.doc figure,
+.doc blockquote {
   margin: 0;
 }
 .doc ul,
@@ -69,6 +76,10 @@
 }
 .doc li {
   margin: 0;
+}
+.doc b,
+.doc strong {
+  font-weight: 600;
 }
 
 /* ---------- 页头 ---------- */
@@ -107,6 +118,27 @@
   height: 1px;
   background: var(--line);
   margin-top: 10px;
+}
+
+/* 页头变体：居中 / 无分隔线 / 照片做圆形头像 */
+.doc .head.center {
+  text-align: center;
+}
+.doc .head.center .top {
+  flex-direction: column-reverse;
+  align-items: center;
+}
+.doc .head.center .photo {
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+}
+.doc .head.bare > .rule {
+  display: none;
+}
+.doc .head.thick > .rule {
+  height: 2px;
+  background: var(--acc);
 }
 
 /* ---------- 补充字段组 ---------- */
@@ -155,7 +187,197 @@
   margin-bottom: 1px;
 }
 
-/* ---------- 图片 ---------- */
+/* 分区标题变体 */
+/* 标题只画到自己脚下，不拉通整行 */
+.doc .sec.tight > .t {
+  display: inline-block;
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 6px;
+}
+.doc .sec.plain > .t {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+/* 标题变成一条浅底色带 */
+.doc .sec.band > .t {
+  background: var(--soft);
+  padding: 3px 7px;
+  border-bottom: none;
+  border-radius: 2px;
+}
+/* 标题在左、说明在右（「工作经历」…「2019 至今」） */
+.doc .sec > .t.split {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.doc .sec > .t.split > small {
+  font-weight: 400;
+  font-size: 0.86em;
+  color: var(--dim);
+  letter-spacing: 0;
+}
+
+/* ---------- 布局组件（可拼接） ---------- */
+
+/* 两栏 / 三栏：内容自动分到各列，适合技能、要点密集的段落 */
+.doc .cols-2 {
+  columns: 2;
+  column-gap: 18px;
+}
+.doc .cols-3 {
+  columns: 3;
+  column-gap: 14px;
+}
+.doc .cols-2 > *,
+.doc .cols-3 > * {
+  break-inside: avoid;
+}
+
+/* 两栏网格：左右各自成块，不会像 columns 那样流断 */
+.doc .grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+}
+.doc .grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px 12px;
+}
+/* 左窄右宽：左边放时间/地点，右边放内容 */
+.doc .split {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  gap: 10px;
+}
+
+/* 一行两端对齐：左边标题、右边时间。条目头部最常用 */
+.doc .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.doc .row > * {
+  min-width: 0;
+}
+.doc .row > .end {
+  flex: none;
+  color: var(--dim);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+/* 更紧凑的堆叠：条目之间不留空，靠分隔线断开 */
+.doc .stack > .entry {
+  margin-bottom: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--line);
+}
+.doc .stack > .entry:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* 带底色的块：适合把「技能」「证书」独立出来 */
+.doc .panel {
+  background: var(--soft);
+  padding: 8px 10px;
+  border-radius: 3px;
+  margin-bottom: var(--gap);
+  break-inside: avoid;
+}
+
+/* ---------- 分隔与留白 ---------- */
+
+.doc .rule {
+  height: 1px;
+  background: var(--line);
+  margin: 10px 0;
+  border: none;
+}
+.doc .rule-dash {
+  height: 0;
+  border-top: 1px dashed var(--line);
+  margin: 10px 0;
+}
+.doc .rule-strong {
+  height: 2px;
+  background: var(--acc);
+  margin: 10px 0;
+  border: none;
+}
+.doc .rule.space {
+  background: none;
+  height: 0;
+  margin: 6px 0;
+}
+.doc .tight {
+  margin-bottom: 0;
+}
+
+/* ---------- 强调与文本块 ---------- */
+
+.doc .lead {
+  font-size: 1.12em;
+  line-height: 1.6;
+}
+.doc .note {
+  color: var(--dim);
+  font-size: 0.88em;
+}
+.doc .accent {
+  color: var(--acc);
+}
+.doc .quote {
+  border-left: 2px solid var(--acc);
+  padding: 2px 0 2px 9px;
+  color: var(--dim);
+  margin-bottom: 8px;
+  break-inside: avoid;
+}
+.doc .mark {
+  background: none;
+  font-weight: 600;
+  color: var(--acc);
+}
+
+/* 标签云：技能、关键词 */
+.doc .tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 5px;
+  margin-bottom: 6px;
+}
+.doc .tag {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 0 7px;
+  font-size: 0.9em;
+  line-height: 1.7;
+  color: var(--dim);
+}
+.doc .tag.solid {
+  background: var(--acc);
+  border-color: var(--acc);
+  color: #fff;
+}
+
+/* 键值对：一行里「语言：英语（CET-6）」这种短项 */
+.doc .kv {
+  display: inline-block;
+  margin-right: 14px;
+  white-space: nowrap;
+}
+.doc .kv > span {
+  color: var(--dim);
+}
+
+/* ---------- 媒体 ---------- */
 
 .doc .fig {
   margin: 0 0 var(--gap);
@@ -181,9 +403,84 @@
   text-align: center;
 }
 
+/* 通栏图：作品集封面、示意图 */
+.doc .fig.wide {
+  width: 100%;
+}
+.doc .fig.wide img {
+  width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+}
+/* 小图：条目里的配图 */
+.doc .fig.thumb {
+  margin: 5px 0 0;
+}
+.doc .fig.thumb img {
+  max-width: 132px;
+  border: 1px solid var(--line);
+}
+/* 并排的一排图 */
+.doc .fig-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: var(--gap);
+}
+.doc .fig-row .fig {
+  margin: 0;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.doc .fig-row .fig img {
+  width: 100%;
+  height: 96px;
+  object-fit: cover;
+}
+/* 圆形：头像、图标位 */
+.doc .fig.round img,
+.doc .fig.round > img {
+  border-radius: 50%;
+}
+
 /* 整页原件：铺满，不参与排版 */
 .doc .full {
   display: block;
   width: 100%;
   height: auto;
+}
+
+/* ---------- 表格（技能矩阵、时间线） ---------- */
+
+.doc table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95em;
+  margin-bottom: 8px;
+  break-inside: avoid;
+}
+.doc th,
+.doc td {
+  text-align: left;
+  padding: 3px 6px 3px 0;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+.doc th {
+  font-weight: 600;
+  color: var(--dim);
+  font-size: 0.9em;
+  letter-spacing: 0.04em;
+}
+.doc table.plain th,
+.doc table.plain td {
+  border-bottom: none;
+}
+
+/* 打印时不许元素跨页断开的情形由这里兜底：
+   条目、图片、表格已经各自声明了 break-inside，剩下的交给浏览器 */
+@media print {
+  .doc .sec {
+    break-inside: auto;
+  }
 }

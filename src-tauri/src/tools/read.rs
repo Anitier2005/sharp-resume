@@ -59,20 +59,38 @@ fn text_of(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or("").trim().to_string()
 }
 
+/// 一个字段怎么说给模型听。
+///
+/// 图片字段要说清 assetId —— 模型后面要引用它（写进 HTML 的 `asset:` 或
+/// 设成页头照片），只告诉它「这里有一张图」等于没说。
+fn field_phrase(field: &Value) -> Option<String> {
+    let label = text_of(field, "label");
+    let value = text_of(field, "value");
+    let image = text_of(field, "assetId");
+
+    if !image.is_empty() {
+        let mark = format!("〔图片 {image}〕");
+        return Some(match (label.is_empty(), value.is_empty()) {
+            (true, true) => mark,
+            (true, false) => format!("图注「{value}」 {mark}"),
+            (false, true) => format!("{label}：{mark}"),
+            (false, false) => format!("{label}：{mark} 图注「{value}」"),
+        });
+    }
+
+    match (label.is_empty(), value.is_empty()) {
+        (true, true) => None,
+        (true, false) => Some(value),
+        (false, true) => Some(format!("{label}：")),
+        (false, false) => Some(format!("{label}：{value}")),
+    }
+}
+
 /// 一行一个字段，空值不占行
 fn field_lines(fields: &Value) -> String {
     items_of(fields)
         .iter()
-        .filter_map(|field| {
-            let label = text_of(field, "label");
-            let value = text_of(field, "value");
-            match (label.is_empty(), value.is_empty()) {
-                (true, true) => None,
-                (true, false) => Some(format!("- {value}")),
-                (false, true) => Some(format!("- {label}：")),
-                (false, false) => Some(format!("- {label}：{value}")),
-            }
-        })
+        .filter_map(|field| field_phrase(field).map(|line| format!("- {line}")))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -82,12 +100,12 @@ fn inline_fields(fields: &Value) -> String {
     items_of(fields)
         .iter()
         .filter_map(|field| {
-            let label = text_of(field, "label");
             let value = text_of(field, "value");
-            if value.is_empty() {
+            let image = text_of(field, "assetId");
+            if value.is_empty() && image.is_empty() {
                 return None;
             }
-            Some(if label.is_empty() { value } else { format!("{label}：{value}") })
+            field_phrase(field)
         })
         .collect::<Vec<_>>()
         .join(" ｜ ")
@@ -168,6 +186,28 @@ pub fn read_person(_args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         "\n经历库 {} 条（用 read_library 看内容）",
         items_of(&person["items"]).len()
     ));
+
+    // 材料清单：图片字段、页头照片、作品配图都要靠 assetId 引用，
+    // 不列出来模型就只能瞎编一个 id
+    let assets = items_of(&person["assets"]);
+    if assets.is_empty() {
+        out.push_str("\n\n材料：还没有（用户可以拖图进来，也能用 convert_image 从已有文件生成）");
+    } else {
+        out.push_str(&format!("\n\n材料 {} 份：\n", assets.len()));
+        for asset in &assets {
+            let kind = text_of(asset, "kind");
+            let name = text_of(asset, "name");
+            let mut line = format!("- {}（{kind}，id: {}）", name, text_of(asset, "id"));
+            if let Some(size) = asset["size"].as_u64() {
+                line.push_str(&format!(" {}KB", size / 1024));
+            }
+            if let Some(mime) = asset["mime"].as_str().filter(|value| !value.is_empty()) {
+                line.push_str(&format!(" {mime}"));
+            }
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
     Ok(out)
 }
 
@@ -219,59 +259,131 @@ pub fn read_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         out.push_str(" ← 用户正在看这一页");
     }
     out.push('\n');
+    // 现在的排版状态：不说清的话，agent 会重复改同一块，或者把已有的手写覆盖掉
+    out.push_str(&layout_state(page));
+    out.push('\n');
 
-    let header = inline_fields(&page["header"]);
-    out.push_str(if header.is_empty() {
-        "页头：（空）\n"
-    } else {
-        "页头："
-    });
-    if !header.is_empty() {
-        out.push_str(&header);
-        out.push('\n');
+    if text_of(page, "kind") == "file" {
+        out.push_str(&format!(
+            "\n这是一页**原件**：内容在文件里（asset:{}），不在字段中。\n             能做的只有调整它在成品里的呈现方式，改不了里面的字。",
+            text_of(page, "assetId")
+        ));
+        return Ok(out.trim_end().to_string());
     }
 
-    let sections = items_of(&page["sections"]);
-    if sections.is_empty() {
-        out.push_str("\n（这一页还没有任何分区）");
+    let blocks = items_of(&page["blocks"]);
+    if blocks.is_empty() {
+        out.push_str("\n（这一页还没有任何内容块）");
         return Ok(out);
     }
 
-    for (si, section) in sections.iter().enumerate() {
-        out.push_str(&format!(
-            "\n分区 {}「{}」（id: {}）\n",
-            si + 1,
-            label_of(section),
-            text_of(section, "id")
-        ));
-        let entries = items_of(&section["items"]);
-        if entries.is_empty() {
-            out.push_str("  （空）\n");
-            continue;
-        }
-        for (ei, entry) in entries.iter().enumerate() {
-            let (fields, ref_id) = effective_fields(entry, person);
-            let line = inline_fields(fields);
-            let suffix = match &ref_id {
-                Some(id) => format!("（引用库条目 {id}）"),
-                None => "（本页临时写的）".to_string(),
-            };
-            if line.is_empty() {
-                out.push_str(&format!("  {}. （没有字段）{suffix}\n", ei + 1));
-            } else {
-                out.push_str(&format!("  {}. {line}{suffix}\n", ei + 1));
-            }
-            let bullets = item_strings(&entry["bullets"]);
-            if bullets.is_empty() {
-                out.push_str("     （这一条还没有措辞）\n");
-            } else {
-                for bullet in bullets {
-                    out.push_str(&format!("     · {bullet}\n"));
+    for (bi, block) in blocks.iter().enumerate() {
+        let id = text_of(block, "id");
+        let kind = text_of(block, "kind");
+        match kind.as_str() {
+            "fields" => {
+                let role = if bi == 0 { "｜页头" } else { "" };
+                out.push_str(&format!("\n块 {id}（字段组{role}）\n"));
+                let lines = field_lines(&block["fields"]);
+                if lines.is_empty() {
+                    out.push_str("  （空）\n");
+                } else {
+                    // 缩进两格：块的层级要在文本里看得出来，模型才不会把
+                    // 「这一块的内容」和「下一块的内容」搅在一起
+                    for line in lines.lines() {
+                        out.push_str(&format!("  {line}\n"));
+                    }
                 }
             }
+            "section" => {
+                let title = text_of(block, "title");
+                out.push_str(&format!(
+                    "\n块 {id}（分区）{}\n",
+                    if title.is_empty() {
+                        "（无标题）".to_string()
+                    } else {
+                        format!("「{title}」")
+                    }
+                ));
+                let entries = items_of(&block["items"]);
+                if entries.is_empty() {
+                    out.push_str("  （空）\n");
+                    continue;
+                }
+                for (ei, entry) in entries.iter().enumerate() {
+                    let (fields, ref_id) = effective_fields(entry, person);
+                    let line = inline_fields(fields);
+                    let suffix = match &ref_id {
+                        Some(id) => format!("（库条目 {id}）"),
+                        None => String::new(),
+                    };
+                    if line.is_empty() {
+                        out.push_str(&format!("  {}. （没有字段）{suffix}\n", ei + 1));
+                    } else {
+                        out.push_str(&format!("  {}. {line}{suffix}\n", ei + 1));
+                    }
+                    let bullets = item_strings(&entry["bullets"]);
+                    if bullets.is_empty() {
+                        out.push_str("     （这一条还没有措辞）\n");
+                    } else {
+                        for bullet in bullets {
+                            out.push_str(&format!("     · {bullet}\n"));
+                        }
+                    }
+                }
+            }
+            "media" => {
+                let caption = text_of(block, "caption");
+                out.push_str(&format!(
+                    "\n块 {id}（图片）asset:{} {}\n",
+                    text_of(block, "assetId"),
+                    if caption.is_empty() {
+                        String::new()
+                    } else {
+                        format!("图注「{caption}」")
+                    }
+                ));
+            }
+            other => out.push_str(&format!("\n块 {id}（不认识的类型 {other}）\n")),
         }
     }
+
+    out.push_str("\n（块 id 是改这一块版面的凭据：要只动某块，用 set_page_layout 的 parts）");
     Ok(out.trim_end().to_string())
+}
+
+/// 这一页现在是怎么排的：结构化、哪些块手写过、有没有整页接管
+fn layout_state(page: &Value) -> String {
+    let layout = page.get("layout");
+    let preset = layout
+        .and_then(|value| value.get("preset"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let html = layout
+        .and_then(|value| value.get("html"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let parts = layout
+        .and_then(|value| value.get("parts"))
+        .and_then(Value::as_object)
+        .map(|map| map.len())
+        .unwrap_or(0);
+
+    if !html.is_empty() {
+        return format!(
+            "排版：整页手写 HTML（{} 字），生成器不再介入",
+            html.chars().count()
+        );
+    }
+    let mut out = format!(
+        "排版：结构化生成 · 预设 {}",
+        if preset.is_empty() { "classic" } else { preset }
+    );
+    if parts > 0 {
+        out.push_str(&format!(" · {parts} 个块手写过"));
+    }
+    out
 }
 
 pub fn read_library(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
@@ -343,23 +455,39 @@ mod tests {
                     "fields": [{ "id": "f2", "label": "公司", "value": "中远" }],
                     "notes": "负责驳船统计"
                 }],
+                "assets": [
+                    { "id": "a1", "kind": "image", "name": "证件照.jpg", "stored": "abc.jpg" },
+                    { "id": "a2", "kind": "file", "name": "证书.pdf", "stored": "def.pdf" }
+                ],
                 "resumes": [{
                     "id": "r1",
                     "title": "中文简历",
                     "pages": [{
                         "id": "pg1",
+                        "kind": "native",
                         "label": "通用版",
-                        "header": [{ "id": "f3", "label": "职位", "value": "单证" }],
-                        "sections": [{
-                            "id": "s1",
-                            "title": "工作经历",
-                            "items": [{
-                                "id": "e1",
-                                "refId": "it1",
-                                "fields": [],
-                                "bullets": ["日处理 240 票"]
-                            }]
-                        }]
+                        "layout": { "preset": "compact", "parts": { "s1": "<section>手写</section>" } },
+                        "blocks": [
+                            {
+                                "id": "pg1-head",
+                                "kind": "fields",
+                                "fields": [
+                                    { "id": "f3", "label": "职位", "value": "单证" },
+                                    { "id": "f4", "label": "照片", "assetId": "a1", "value": "蓝底一寸" }
+                                ]
+                            },
+                            {
+                                "id": "s1",
+                                "kind": "section",
+                                "title": "工作经历",
+                                "items": [{
+                                    "id": "e1",
+                                    "refId": "it1",
+                                    "fields": [],
+                                    "bullets": ["日处理 240 票"]
+                                }]
+                            }
+                        ]
                     }]
                 }]
             }]
@@ -368,13 +496,14 @@ mod tests {
 
     fn with_ctx<T>(run: impl FnOnce(&ToolCtx) -> T) -> T {
         let ws = workspace();
-        let sink = std::sync::Mutex::new(Vec::<serde_json::Value>::new());
+        let out = crate::tools::Outbox::default();
         let ctx = ToolCtx {
             workspace: &ws,
             person_id: "p1",
             resume_id: "r1",
             page_id: "pg1",
-            actions: &sink,
+            out: &out,
+            root: None,
         };
         run(&ctx)
     }
@@ -384,9 +513,44 @@ mod tests {
         let text = with_ctx(|ctx| read_page(&json!({}), ctx).unwrap());
         // 条目本身没有字段，应该显示库里的「公司：中远」，而不是「没有字段」
         assert!(text.contains("公司：中远"), "{text}");
-        assert!(text.contains("引用库条目 it1"), "{text}");
+        assert!(text.contains("库条目 it1"), "{text}");
         assert!(text.contains("日处理 240 票"), "{text}");
         assert!(text.contains("用户正在看这一页"), "{text}");
+    }
+
+    /// 读页必须读 blocks。曾经读 v4 的 header / sections，v5 之后恒为空，
+    /// 两个 agent 都只能看到「这一页什么都没有」—— 排版就是在闭眼干活
+    #[test]
+    fn page_text_comes_from_blocks_not_legacy_fields() {
+        let text = with_ctx(|ctx| read_page(&json!({}), ctx).unwrap());
+        // 块 id 是改版面的凭据，必须出现
+        assert!(text.contains("pg1-head"), "{text}");
+        assert!(text.contains("块 s1（分区）「工作经历」"), "{text}");
+        assert!(text.contains("职位：单证"), "{text}");
+    }
+
+    #[test]
+    fn image_fields_show_their_asset_id() {
+        let text = with_ctx(|ctx| read_page(&json!({}), ctx).unwrap());
+        // 只说「这里有一张图」等于没说：后面要引用就得有 id
+        assert!(text.contains("〔图片 a1〕"), "{text}");
+        assert!(text.contains("图注「蓝底一寸」"), "{text}");
+    }
+
+    #[test]
+    fn layout_state_tells_what_is_already_handwritten() {
+        let text = with_ctx(|ctx| read_page(&json!({}), ctx).unwrap());
+        // 不说清现状的话，agent 会重复改同一块，或者把已有覆盖冲掉
+        assert!(text.contains("预设 compact"), "{text}");
+        assert!(text.contains("1 个块手写过"), "{text}");
+    }
+
+    #[test]
+    fn person_lists_assets_so_ids_can_be_referenced() {
+        let text = with_ctx(|ctx| read_person(&json!({}), ctx).unwrap());
+        assert!(text.contains("材料 2 份"), "{text}");
+        assert!(text.contains("id: a1"), "{text}");
+        assert!(text.contains("id: a2"), "{text}");
     }
 
     #[test]

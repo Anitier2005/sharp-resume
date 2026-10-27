@@ -1,7 +1,7 @@
 import type { Person, Workspace } from "@/types";
 import { mapSections, newSectionBlock, withEntry, withHeader, withoutBlock } from "@/lib/blocks";
 import type { Action } from "./types";
-import { mapPage, mapResume, newPerson, newPage, newResume, touch, withExpanded } from "./helpers";
+import { mapPage, mapPerson, mapResume, newPerson, newPage, newResume, touch, withExpanded } from "./helpers";
 
 const patchPerson = (state: Workspace, personId: string, fn: (person: Person) => Person): Workspace => ({
   ...state,
@@ -143,6 +143,22 @@ export function reducer(state: Workspace, action: Action): Workspace {
         ...page,
         style: action.style,
       }));
+
+    case "pageLayout":
+      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) => ({
+        ...page,
+        layout: action.layout,
+      }));
+
+    case "addAssets":
+      // 按 id 去重：同一次工具调用的事件可能重复送达（界面重连、事件重放），
+      // 直接 push 会在材料区留下两张一模一样的图
+      return mapPerson(state, action.personId, (person) => {
+        const have = new Set((person.assets ?? []).map((asset) => asset.id));
+        const fresh = action.assets.filter((asset) => !have.has(asset.id));
+        if (!fresh.length) return person;
+        return { ...person, assets: [...(person.assets ?? []), ...fresh] };
+      });
 
     case "removePage":
       return mapResume(state, action.personId, action.resumeId, (resume) => ({

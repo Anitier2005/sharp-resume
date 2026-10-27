@@ -1,4 +1,4 @@
-import type { PageStyle, Workspace } from "@/types";
+import type { PageLayout, PageStyle, Workspace } from "@/types";
 
 /**
  * 执行会话 agent 下发的界面指令。
@@ -26,8 +26,10 @@ export interface AgentActionHooks {
   patchUi: (patch: Partial<Workspace["ui"]>) => void;
   /** 模型要求填表时调用；由面板弹出表单 */
   ask: (questions: AskQuestion[]) => void;
-  /** 排版 agent 给出的页样式 */
+  /** 排版 agent 给出的页样式（旧的三档疏密，只在读旧消息时出现） */
   pageStyle: (pageId: string, style: PageStyle) => void;
+  /** 排版 agent 写下的成品层覆盖：整页手写或某几块手写 */
+  pageLayout: (pageId: string, layout: PageLayout) => void;
   /** 会话 agent 要求某一页重新排版 */
   requestLayout: (pageId: string, brief: string) => void;
 }
@@ -79,6 +81,34 @@ function cleanQuestions(input: unknown): AskQuestion[] {
     out.push(question);
   }
   return out.slice(0, 8);
+}
+
+/**
+ * 校验成品层覆盖。
+ *
+ * 注意 `{}` 是合法值：那是「reset 之后没有任何覆盖」，不是「没给」。
+ * 把它当成无效会让「撤销所有手写」这条指令失效 —— 用户看到的就是点了没反应。
+ */
+function cleanLayout(input: unknown): PageLayout | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const source = input as Record<string, unknown>;
+  const layout: PageLayout = {};
+
+  if (typeof source.preset === "string" && source.preset.trim()) {
+    layout.preset = source.preset.trim();
+  }
+  if (typeof source.html === "string" && source.html.trim()) {
+    layout.html = source.html;
+  }
+  if (source.parts && typeof source.parts === "object" && !Array.isArray(source.parts)) {
+    const parts: Record<string, string> = {};
+    for (const [blockId, value] of Object.entries(source.parts as Record<string, unknown>)) {
+      if (typeof value === "string" && value.trim()) parts[blockId] = value;
+    }
+    if (Object.keys(parts).length) layout.parts = parts;
+  }
+
+  return layout;
 }
 
 function cleanPatch(input: unknown): Partial<Workspace["ui"]> {
@@ -136,6 +166,14 @@ export function applyAgentActions(actions: unknown, hooks: AgentActionHooks): nu
         const style = action.style;
         if (!pageId || !style || typeof style !== "object") break;
         hooks.pageStyle(pageId, style as PageStyle);
+        applied += 1;
+        break;
+      }
+      case "patchPageLayout": {
+        const pageId = typeof action.pageId === "string" ? action.pageId.trim() : "";
+        const layout = cleanLayout(action.layout);
+        if (!pageId || !layout) break;
+        hooks.pageLayout(pageId, layout);
         applied += 1;
         break;
       }

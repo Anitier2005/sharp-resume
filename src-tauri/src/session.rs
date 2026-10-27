@@ -264,6 +264,8 @@ pub fn chat_cancel(state: tauri::State<'_, Sessions>, key: String) {
 pub struct SendResult {
     pub id: String,
     pub actions: Vec<Value>,
+    /// 本轮工具新产出的材料，前端要并进 state
+    pub assets: Vec<crate::model::Asset>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -351,14 +353,18 @@ pub async fn chat_send(
         tools: None,
     };
 
-    // 页面控制工具产出的界面指令：本轮结束后随返回值一起交给前端执行
-    let actions = std::sync::Mutex::new(Vec::new());
+    // 工具出站：界面指令与新产出的材料，本轮结束后随返回值交给前端
+    let out = crate::tools::Outbox::default();
+    // 数据目录给图片转化这类要碰文件的工具用；拿不到就传 None，
+    // 工具会明确告诉模型「当前环境不支持」，而不是静默失败
+    let root = crate::data_dir(&app).ok();
     let ctx = crate::tools::ToolCtx {
         workspace: &args.workspace,
         person_id: &args.key,
         resume_id: &args.resume_id,
         page_id: &args.page_id,
-        actions: &actions,
+        out: &out,
+        root: root.as_deref(),
     };
 
     let reply_id = format!("m-{}", uuid_like());
@@ -397,7 +403,11 @@ pub async fn chat_send(
                     },
                 }),
             );
-            Ok(SendResult { id: reply_id, actions: turn.actions })
+            Ok(SendResult {
+                id: reply_id,
+                actions: turn.actions,
+                assets: turn.assets,
+            })
         }
         Ok(_) | Err(_) if flag.load(Ordering::SeqCst) => Err("已中断".into()),
         Err(error) => Err(error),

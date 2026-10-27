@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Close, Grip, Plus } from "@/components/ui/icons";
-import type { Field } from "@/types";
+import { AssetPicker } from "@/components/ui/asset-picker";
+import type { Asset, Field } from "@/types";
 import { uid } from "@/lib/uid";
 import { cx } from "@/lib/cx";
 import styles from "./fields.module.css";
@@ -22,12 +23,21 @@ export function FieldsEditor({
   addLabel = "加一个字段",
   placeholderLabel = "字段名",
   placeholderValue = "内容",
+  assets,
+  onAddAssets,
 }: {
   fields: Field[];
   onChange: (next: Field[]) => void;
   addLabel?: string;
   placeholderLabel?: string;
   placeholderValue?: string;
+  /**
+   * 这个人名下的材料。传了才显示「插入图片」按钮 ——
+   * 有些地方（比如材料自己的字段）没有可选的图，多一个按钮只是噪声。
+   */
+  assets?: Asset[];
+  /** 选图时上传了新文件：交给上层并进 state */
+  onAddAssets?: (assets: Asset[]) => void;
 }) {
   const listRef = useRef<HTMLDivElement | null>(null);
   /** 正在拖动的那一行；null 表示没在拖 */
@@ -77,6 +87,8 @@ export function FieldsEditor({
           onRemove={() => onChange(fields.filter((item) => item.id !== field.id))}
           placeholderLabel={placeholderLabel}
           placeholderValue={placeholderValue}
+          assets={assets}
+          onAddAssets={onAddAssets}
         />
       ))}
 
@@ -99,6 +111,8 @@ function FieldRow({
   onRemove,
   placeholderLabel,
   placeholderValue,
+  assets,
+  onAddAssets,
 }: {
   field: Field;
   dragging: boolean;
@@ -107,6 +121,8 @@ function FieldRow({
   onRemove: () => void;
   placeholderLabel: string;
   placeholderValue: string;
+  assets?: Asset[];
+  onAddAssets?: (assets: Asset[]) => void;
 }) {
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   /** 用户拖出来的高度；null 表示完全跟着内容走 */
@@ -168,7 +184,8 @@ function FieldRow({
           className={styles.value}
           rows={1}
           value={field.value}
-          placeholder={placeholderValue}
+          // 这一项是图时，值只剩图注，占位符要说清，否则用户不知道该填什么
+          placeholder={field.assetId ? "图注（可留空）" : placeholderValue}
           spellCheck={false}
           aria-label="字段值"
           onChange={(event) => onChange({ value: event.target.value })}
@@ -180,6 +197,19 @@ function FieldRow({
           onPointerDown={startResize}
         />
       </span>
+
+      {onAddAssets && (
+        <AssetPicker
+          // 没有材料时也要给按钮：不然「插第一张图」这条路根本走不通
+          assets={assets ?? []}
+          value={field.assetId}
+          onPick={(assetId) =>
+            // 去掉图片引用时不清 value：万一那是用户写的图注，删了更可惜
+            onChange({ assetId })
+          }
+          onAdd={onAddAssets}
+        />
+      )}
 
       <button type="button" className={styles.rm} aria-label="删除字段" onClick={onRemove}>
         <Close size={9} />

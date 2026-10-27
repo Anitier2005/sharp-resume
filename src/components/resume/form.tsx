@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Block, Field, Person, ResumePage, SectionEntry } from "@/types";
+import type { Asset, Block, Field, Person, ResumePage, SectionEntry } from "@/types";
 import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem } from "@/components/ui/menu";
 import { ChevronRight, Close, Plus, ArrowUp, ArrowDown } from "@/components/ui/icons";
@@ -32,6 +32,8 @@ export interface FormProps {
   onSectionTitle: (sectionId: string, title: string) => void;
   onSectionItems: (sectionId: string, items: SectionEntry[]) => void;
   onEntryPatch: (entryId: string, patch: Partial<SectionEntry>) => void;
+  /** 字段里上传了新图：要把材料并进人身上，否则选完就丢了 */
+  onAddAssets: (assets: Asset[]) => void;
 }
 
 export function ResumeForm({
@@ -46,6 +48,7 @@ export function ResumeForm({
   onSectionTitle,
   onSectionItems,
   onEntryPatch,
+  onAddAssets,
 }: FormProps) {
   const toast = useToast();
   const [open, setOpen] = useState<Record<string, boolean>>({ header: true });
@@ -122,7 +125,12 @@ export function ResumeForm({
           </button>
           {isOpen("header", true) && (
             <div className={styles.body}>
-              <FieldsEditor fields={headerFields} onChange={onHeader} />
+              <FieldsEditor
+                fields={headerFields}
+                onChange={onHeader}
+                assets={person.assets ?? []}
+                onAddAssets={onAddAssets}
+              />
             </div>
           )}
         </div>
@@ -230,6 +238,8 @@ export function ResumeForm({
                             fields={entry.fields}
                             onChange={(fields) => onEntryPatch(entry.id, { fields })}
                             addLabel="加一个字段"
+                            assets={person.assets ?? []}
+                            onAddAssets={onAddAssets}
                           />
                         )}
 
@@ -350,6 +360,8 @@ export function ResumeForm({
                     fields={block.fields ?? []}
                     onChange={(fields) => onBlockFields(block.id, fields)}
                     addLabel="加一个字段"
+                    assets={person.assets ?? []}
+                    onAddAssets={onAddAssets}
                   />
                 </div>
               )}
