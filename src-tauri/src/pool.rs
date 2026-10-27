@@ -275,6 +275,10 @@ pub fn used_stored(workspace: &Workspace) -> HashSet<String> {
 
     // 写成普通函数而不是闭包：闭包会一直可变借用 used，后面就没法再直接 insert
     fn note_asset(used: &mut HashSet<String>, asset: &crate::model::Asset) {
+        // 链接不是文件：stored 里放的是网址，算进来会让「引用统计」多出一个不存在的文件
+        if asset.kind == "link" {
+            return;
+        }
         if !asset.stored.trim().is_empty() && !asset.stored.starts_with("data:") {
             used.insert(asset.stored.clone());
         }
@@ -396,5 +400,65 @@ mod tests {
         assert_eq!(mime_of("证书.PNG"), "image/png");
         assert_eq!(mime_of("a.mp4"), "video/mp4");
         assert_eq!(mime_of("a.unknown"), "application/octet-stream");
+    }
+    /// 引用统计：一份文件可能藏在四个地方，漏掉任何一处都会让它在保存后被误回收
+    #[test]
+    fn used_stored_counts_every_place_a_file_can_hide() {
+        let ws: Workspace = serde_json::from_value(serde_json::json!({
+            "version": 5,
+            "assets": [{ "id": "a0", "kind": "image", "name": "池.png", "stored": "pool.png" }],
+            "people": [{
+                "id": "p1",
+                "fields": [],
+                "assets": [
+                    { "id": "a1", "kind": "image", "name": "证件照.png", "stored": "photo.png" },
+                    { "id": "a2", "kind": "link", "name": "作品链接", "stored": "https://example.com" }
+                ],
+                "items": [{
+                    "id": "i1",
+                    "fields": [],
+                    "notes": "",
+                    "assets": [{ "id": "a3", "kind": "file", "name": "证书.pdf", "stored": "cert.pdf" }]
+                }],
+                "messages": [],
+                "resumes": [{
+                    "id": "r1",
+                    "personId": "p1",
+                    "title": "简历",
+                    "updatedAt": 0,
+                    "pages": [
+                        { "id": "pg1", "kind": "file", "label": "扫描件", "assetId": "a3", "blocks": [] },
+                        { "id": "pg2", "kind": "native", "label": "正文", "blocks": [
+                            { "id": "b1", "kind": "media", "assetId": "a1" }
+                        ]}
+                    ]
+                }]
+            }]
+        }))
+        .expect("测试数据");
+
+        let used = used_stored(&ws);
+        assert!(used.contains("pool.png"), "顶层池里的文件要算");
+        assert!(used.contains("photo.png"), "人身上的证件照要算");
+        assert!(used.contains("cert.pdf"), "库条目上的证书要算");
+        assert_eq!(used.len(), 3, "链接不是文件，不该算进来：{used:?}");
+    }
+
+    #[test]
+    fn data_url_assets_are_not_pool_files() {
+        // 浏览器调试模式存的是 data URL，把它当成池文件会让回收逻辑找不到东西
+        let ws: Workspace = serde_json::from_value(serde_json::json!({
+            "version": 5,
+            "people": [{
+                "id": "p1",
+                "fields": [],
+                "assets": [{ "id": "a1", "kind": "image", "name": "x.png", "stored": "data:image/png;base64,AAA" }],
+                "items": [],
+                "messages": [],
+                "resumes": []
+            }]
+        }))
+        .expect("测试数据");
+        assert!(used_stored(&ws).is_empty());
     }
 }

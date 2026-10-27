@@ -44,7 +44,8 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
          PRAGMA synchronous=NORMAL;
-         PRAGMA foreign_keys=ON;",
+         PRAGMA foreign_keys=ON;
+         PRAGMA busy_timeout=5000;",
     )
     .map_err(|error| format!("初始化数据库参数失败：{error}"))?;
     migrate(&conn)?;

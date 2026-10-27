@@ -536,12 +536,23 @@ mod legacy {
         let fields = if person.get("fields").map(Value::is_array).unwrap_or(false) {
             person.get("fields").cloned().unwrap_or_else(|| Value::Array(Vec::new()))
         } else {
+            // 年限在 v1 里是**数字**，直接丢给 text() 会拿到空串、整个字段消失。
+            // 前端原来是拼成「3 年」，这里保持一致，否则迁移一次少一个字段。
+            let years = match person.get("years") {
+                Some(Value::Number(value)) => format!("{value} 年"),
+                Some(Value::String(value)) if !value.trim().is_empty() => {
+                    let value = value.trim().trim_end_matches('年').trim();
+                    if value.is_empty() { String::new() } else { format!("{value} 年") }
+                }
+                _ => String::new(),
+            };
+            let years = Value::String(years);
             Value::Array(compact(vec![
                 field("姓名", person.get("name")),
                 field("职位", person.get("role")),
                 field("邮箱", person.get("email")),
                 field("城市", person.get("location")),
-                field("年限", person.get("years")),
+                field("年限", Some(&years)),
             ]))
         };
 
@@ -980,5 +991,99 @@ mod tests {
         assert_eq!(workspace.ui.accent, "white");
         assert_eq!(workspace.ui.mode, "light");
         assert!(workspace.ui.open_pages.is_empty());
+    }
+
+    #[test]
+    fn v1_workspace_upgrades_without_losing_anything() {
+        let raw = json!({
+            "version": 1,
+            "people": [{
+                "id": "p1",
+                "name": "张三",
+                "role": "工程师",
+                "email": "z@example.com",
+                "location": "上海",
+                "years": 3,
+                "experiences": [{
+                    "id": "e1",
+                    "company": "某公司",
+                    "role": "开发",
+                    "period": "2020—2023",
+                    "bullets": ["做了 A", "做了 B"]
+                }],
+                "projects": [],
+                "education": [],
+                "skills": [],
+                "resumes": [{
+                    "id": "r1",
+                    "title": "简历",
+                    "pages": [{
+                        "id": "pg1",
+                        "label": "中文",
+                        "headline": "张三",
+                        "experienceIds": ["e1"]
+                    }]
+                }]
+            }]
+        });
+
+        let ws = adopt(raw).expect("v1 要能升级");
+        let person = &ws.people[0];
+
+        // 年限在 v1 是数字：必须变成「3 年」，不能被当成空串丢掉
+        let years = person.fields.iter().find(|f| f.label == "年限").expect("年限字段");
+        assert_eq!(years.value, "3 年");
+        assert_eq!(person.fields.len(), 5, "姓名/职位/邮箱/城市/年限 一个都不能少");
+
+        // 经历进库，v1 的 bullets 是「记录」而不是页面措辞
+        assert_eq!(person.items.len(), 1);
+        assert_eq!(person.items[0].notes, "做了 A\n做了 B");
+
+        // 页面的 experienceIds 变成「工作经历」分区，条目引用库里那一条
+        let page = &person.resumes[0].pages[0];
+        let section = page
+            .blocks
+            .iter()
+            .find(|block| block.kind == "section")
+            .expect("应当有分区块");
+        assert_eq!(section.title, "工作经历");
+        assert_eq!(section.items[0].ref_id.as_deref(), Some("e1"));
+        // 页头块在最前
+        assert_eq!(page.blocks[0].kind, "fields");
+    }
+
+    #[test]
+    fn adopting_twice_is_stable() {
+        let raw = json!({
+            "version": 4,
+            "people": [{
+                "id": "p1",
+                "fields": [{ "id": "f1", "label": "姓名", "value": "张三" }],
+                "items": [],
+                "messages": [],
+                "resumes": [{
+                    "id": "r1",
+                    "personId": "p1",
+                    "title": "简历",
+                    "updatedAt": 0,
+                    "pages": [{
+                        "id": "pg1",
+                        "label": "中文",
+                        "header": [{ "id": "f2", "label": "姓名", "value": "张三" }],
+                        "sections": []
+                    }]
+                }]
+            }],
+            "ui": { "accent": "white" }
+        });
+
+        let once = adopt(raw.clone()).expect("v4 升级");
+        let twice = adopt(serde_json::to_value(&once).unwrap()).expect("再升一次");
+        assert_eq!(once.version, VERSION);
+        assert_eq!(
+            serde_json::to_string(&once).unwrap(),
+            serde_json::to_string(&twice).unwrap(),
+            "连读两次结果必须一致，否则每次启动都会多插块"
+        );
     }
 }

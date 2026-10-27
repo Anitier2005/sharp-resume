@@ -6,9 +6,12 @@ import { uid } from "@/lib/uid";
 /**
  * 材料的存取。
  *
- * 桌面端：文件写进 `<数据目录>/assets/`，state 里只留文件名；
- * 浏览器（`npm run dev`）：没有文件系统，退化成 data URL 塞进 stored。
+ * 桌面端：文件进 `<数据目录>/pool/`（资产池，按内容寻址，同一份文件只落一份），
+ * state 里只留存储名；浏览器（`npm run dev`）：没有文件系统，退化成 data URL 塞进 stored。
  * 两条路对上层是同一个 `resolveUrl()`，界面不用关心自己在哪跑。
+ *
+ * 为什么不再用 `asset_put`：那套写 `assets/` 目录、按原文件名存，同一张图拖两次就是两份。
+ * 资产池把「存在哪」和「谁在用」分开了 —— 引用统计由后端在每次保存后同步。
  */
 
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif", "svg"]);
@@ -40,8 +43,13 @@ export async function saveAsset(file: File): Promise<Asset> {
 
   if (isTauri()) {
     const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-    const stored = await invoke<string>("asset_put", { id, name: file.name, data: bytes });
-    return { id, kind, name: file.name, stored };
+    // 资产池按内容寻址：同一份文件拖两次只落一份，存储名由后端算（sha256 前 16 位）
+    const saved = await invoke<{ stored: string; sha256: string }>("pool_put", {
+      id,
+      name: file.name,
+      data: bytes,
+    });
+    return { id, kind, name: file.name, stored: saved.stored };
   }
 
   return { id, kind, name: file.name, stored: await readAsDataUrl(file) };
@@ -70,7 +78,7 @@ export async function resolveUrl(asset: Asset): Promise<string | null> {
   if (cached) return cached;
 
   try {
-    const bytes = await invoke<number[]>("asset_get", { stored: asset.stored });
+    const bytes = await invoke<number[]>("pool_get", { stored: asset.stored });
     const blob = new Blob([new Uint8Array(bytes)]);
     const url = URL.createObjectURL(blob);
     urlCache.set(asset.stored, url);
@@ -80,18 +88,17 @@ export async function resolveUrl(asset: Asset): Promise<string | null> {
   }
 }
 
-/** 删除材料的底层文件（从 state 里摘掉之后调用） */
+/**
+ * 从 state 里摘掉一份材料后调用：只清显示缓存。
+ *
+ * **不删文件**。同一个文件可能还被别的页引用着，删不删由后端按引用统计决定
+ * （引用归零才挪进 `pool/.trash/<日期>/`）。前端直接删会误伤共用同一张图的页。
+ */
 export async function dropAsset(asset: Asset): Promise<void> {
-  if (!isTauri() || asset.kind === "link" || asset.stored.startsWith("data:")) return;
   const cached = urlCache.get(asset.stored);
   if (cached) {
     URL.revokeObjectURL(cached);
     urlCache.delete(asset.stored);
-  }
-  try {
-    await invoke("asset_drop", { stored: asset.stored });
-  } catch {
-    /* 文件不在也不该拦住用户 */
   }
 }
 

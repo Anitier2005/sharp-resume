@@ -179,8 +179,10 @@ fn app_info(app: tauri::AppHandle) -> AppInfo {
 ///   2. 数据库是空的、但旁边躺着老的 workspace.json → 导进来，然后把老文件
 ///      改名成 `workspace.json.imported` 留档。不改名的话每次启动都会重导一遍，
 ///      用户在数据库里做的改动会被旧文件「复活」。
-///   3. 老文件是 v1–v3 → 原样交还前端迁移。迁移逻辑暂时还在前端，
-///      迁移完前端会用 v4 调一次 write_state，那时才真正入库。
+///
+/// **v1 到 v5 的升级只在这里做一次**：`model::adopt` 一条路走到底，前端拿到的
+/// 永远是当前版本的完整结构。前端曾经也留着一份同样的迁移逻辑，两份规则迟早会漂移
+/// （实际已经漂移过一次：年限字段在前端保住了，在后端被当成空串丢掉）。
 #[tauri::command]
 fn read_state(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let dir = data_dir(&app)?;
@@ -199,13 +201,9 @@ fn read_state(app: tauri::AppHandle) -> Result<Option<String>, String> {
         return Ok(None);
     };
     let value: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|error| format!("工作区结构不符合 v4：{error}"))?;
-    if value.get("version").and_then(serde_json::Value::as_u64) != Some(4) {
-        return Ok(Some(text));
-    }
+        .map_err(|error| format!("工作区文件不是合法 JSON：{error}"))?;
 
-    let workspace: model::Workspace = serde_json::from_str(&text)
-        .map_err(|error| format!("工作区结构不符合 v4：{error}"))?;
+    let workspace = model::adopt(value)?;
     model::validate(&workspace)?;
     db::save(&mut conn, &workspace)?;
 
@@ -224,20 +222,27 @@ fn read_state(app: tauri::AppHandle) -> Result<Option<String>, String> {
 /// 非空时先解析 + 校验，不合法直接拒绝：宁可这次保存失败，
 /// 也不把坏数据写进库 —— 那会连累之后每一次读取。
 #[tauri::command]
-fn write_state(app: tauri::AppHandle, json: String) -> Result<(), String> {
-    let dir = data_dir(&app)?;
-    let mut conn = db::open(&dir.join("app.db"))?;
+fn write_state(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, db::Shared>,
+    json: String,
+) -> Result<(), String> {
     if json.trim().is_empty() {
-        return db::clear(&conn);
+        return state.with(|conn| db::clear(conn));
     }
 
     let workspace: model::Workspace = serde_json::from_str(&json)
         .map_err(|error| format!("拒绝写入：结构不合法（{error}）"))?;
-    if workspace.version != 4 {
-        return Err(format!("拒绝写入：只接受 version 4，收到 {}", workspace.version));
-    }
+    // 版本号不在这里锁死。以前写的是「只接受 version 4」，
+    // 结果前端一升到 v5，每一次自动保存都被拒绝，用户改什么都存不进去。
+    // 该拦的是「比本程序更新」的数据 —— 那件事 `validate` 已经在做。
     model::validate(&workspace)?;
-    db::save(&mut conn, &workspace)
+    state.with(|conn| db::save(conn, &workspace))?;
+
+    // 保存后同步资产引用：某个文件从「有人用」变成「没人用」时挪进回收站。
+    // 放在这里而不是删除时：前端只管把引用从 state 里摘掉，文件回收是后端的事。
+    let _ = pool::sync(&app, &state, &workspace);
+    Ok(())
 }
 
 /// 在文件管理器里打开数据目录，方便用户备份 / 拷走。
