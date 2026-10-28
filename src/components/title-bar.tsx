@@ -1,10 +1,8 @@
-import { useState } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { isTauri } from "@/lib/storage";
 import { useToast } from "@/components/ui/toast-context";
 import { Logo } from "@/components/ui/logo";
 import { PanelLeft, PanelRight, WinClose, WinMax, WinMin } from "@/components/ui/icons";
-import { SettingsSheet } from "@/components/settings/sheet";
 import styles from "./title-bar.module.css";
 
 async function windowAction(action: "minimize" | "maximize" | "close") {
@@ -19,8 +17,6 @@ export function TitleBar() {
   const { state, resume, dispatch } = useWorkspace();
   const toast = useToast();
   const desktop = isTauri();
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const { accent, mode } = state.ui;
   const showSide = state.ui.showSide !== false;
   const showDoc = state.ui.showDoc !== false;
 
@@ -66,15 +62,7 @@ export function TitleBar() {
           <PanelRight size={12} />
         </button>
 
-        <button
-          type="button"
-          className={styles.appearance}
-          aria-label="设置"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <span className={styles.dot} data-accent={accent} data-mode={mode} />
-          设置
-        </button>
+        {/* 设置入口已挪到左栏底部菜单：顶栏只留窗口级动作（显隐分栏、最小化…） */}
 
         <div className={styles.winbtns}>
           <button type="button" aria-label="最小化" onClick={() => run("minimize")}>
@@ -89,7 +77,6 @@ export function TitleBar() {
         </div>
       </div>
 
-      <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

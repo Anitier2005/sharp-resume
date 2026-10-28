@@ -133,44 +133,16 @@ fs.mkdirSync(target, { recursive: true })
 // —— 复制 ——
 fs.copyFileSync(SRC, path.join(target, EXE_NAME))
 
-// 进程内 OCR 的运行时伴侣：两个 DLL（加载期链接，缺了 exe 起不来）+ tessdata 训练数据。
-//
-// 默认构建（lite）不带 tesseract，产物旁边本来就没有这些文件 —— 所以这里按
-// 「构建时到底带没带 OCR」决定拷不拷（build.rs 在带 OCR 时会先把 DLL 放到 exe 旁），
-// 而不是无条件从 vendor 源拷：lite 包被要求带 17MB 用不上的文件是没道理的。
-const OCR_DLLS = ['tesseract50.dll', 'leptonica-1.82.0.dll']
-const OCR_LANGS = ['eng.traineddata', 'chi_sim.traineddata']
-/**
- * 判断这一份 exe 到底带没带 OCR。
- *
- * 不能只看「DLL 在不在」：target/release 是两次构建共用的目录，编过 OCR 版之后
- * 那两个 DLL 会一直留在那儿，下一次 lite 构建会被误判成 OCR 版、把 17MB 一起打出去。
- * 所以读 exe 本体：lite 版里有「这一版没有内置 OCR」那句提示（extract.rs 的
- * cfg(not(feature = "ocr")) 分支），OCR 版没有。
- */
-const exeBytes = fs.readFileSync(SRC)
+// OCR 版也是单文件：DLL 与语言包都在编译期 include_bytes! 进了 exe，
+// 第一次识别时释放到系统临时目录再动态加载 —— 所以这里没有「额外伴侣文件」要拷。
+// 只做一件事：按 exe 里的标志串说明这次打的是哪一版，免得交付时拿错。
 const liteMarker = Buffer.from('这一版没有内置 OCR', 'utf8')
-const withOcr = !exeBytes.includes(liteMarker) &&
-  OCR_DLLS.every((name) => fs.existsSync(path.join(path.dirname(SRC), name)))
+const isLite = fs.readFileSync(SRC).includes(liteMarker)
+info(isLite ? '这是 lite 版（无内置 OCR）' : '这是 OCR 版（内置 tesseract）')
 
-if (withOcr) {
-  for (const name of OCR_DLLS) {
-    fs.copyFileSync(path.join(path.dirname(SRC), name), path.join(target, name))
-  }
-  fs.mkdirSync(path.join(target, 'tessdata'), { recursive: true })
-  for (const name of OCR_LANGS) {
-    const src = path.resolve('src-tauri/tesseract/tessdata', name)
-    if (!fs.existsSync(src)) fail(`缺 OCR 语言包 ${src}`)
-    fs.copyFileSync(src, path.join(target, 'tessdata', name))
-  }
-  info(`OCR 伴侣已带上：${OCR_DLLS.join('、')} + tessdata(${OCR_LANGS.join('、')})`)
-} else {
-  info('lite 构建：不含内置 OCR（图片转文字走设置里的 OCR 接口）')
-}
-
-// —— 自检：exe 必须在；带 OCR 时两个 DLL 与 tessdata 也必须齐 ——
+// —— 自检：交付目录里只该有这一个 exe ——
 const finalFiles = fs.readdirSync(target)
-const expected = withOcr ? [EXE_NAME, ...OCR_DLLS, 'tessdata'] : [EXE_NAME]
+const expected = [EXE_NAME]
 const missing = expected.filter((n) => !finalFiles.includes(n))
 if (missing.length) {
   fail(`自检失败：缺 ${missing.join('、')}`)

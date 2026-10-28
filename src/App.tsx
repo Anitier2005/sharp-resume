@@ -14,14 +14,28 @@ import { configureKnowledge } from "@/lib/knowledge";
     COLLAPSE 是「松手时低于它就当作想收起」的阈值 —— 刻意压得很低（80px 只剩一条缝），
     因为拖动过程中用户经常只是想把栏拉窄看看，把阈值设在 260 会让面板在仍可读的时候
     突然消失。真要收起就拖到底，或者用顶栏的开关。 */
-const SIDE_COLLAPSE = 80;
+/**
+ * 拖动时允许的最小**可用**宽度。
+ *
+ * 以前是「拖到 80px 以下才收起」，于是 80–200px 这段会拖出一个半死不活的面板：
+ * 「新增候选人」折成两行、页签挤碎、状态栏换行。宁可整栏收起来，
+ * 也不给一个读不了的宽度 —— 所以低于这个值就直接当收起处理。
+ */
+const SIDE_MIN = 210;
 const SIDE_MAX = 420;
-const DOC_COLLAPSE = 80;
+const DOC_MIN = 300;
 const DOC_MAX = 720;
 const CENTER_MIN = 360;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), Math.max(min, max));
+
+/**
+ * 拖动用的「中途吸附」：低于最小宽度直接归零（收起），否则夹在 [min, max]。
+ * 与 clamp 的区别在于它不保留 0–min 之间的尴尬宽度。
+ */
+const snap = (value: number, min: number, max: number) =>
+  value < min ? 0 : Math.min(Math.max(value, min), Math.max(min, max));
 
 function Shell() {
   const { state, dispatch } = useWorkspace();
@@ -62,26 +76,28 @@ function Shell() {
       const startDoc = showDoc ? docW : 0;
       const total = window.innerWidth;
 
-      /** 拖动中允许一路到 0（= 视觉上已经收起），松手时再决定是折叠还是停在拖到的位置 */
+      /**
+       * 拖动中就按「低于最小宽度 = 收起」表现：鼠标一过门槛整栏消失，
+       * 用户立刻看得懂发生了什么，而不是先看到一团折行的字再松手才塌掉。
+       */
       const onMove = (ev: PointerEvent) => {
         const dx = ev.clientX - startX;
         const next =
           edge === "side"
             ? {
-                // 窗口太窄时宁可挤中间区，也要让侧栏能停在拖到的位置，不然一拖就折叠
-                side: clamp(
+                side: snap(
                   startSide + dx,
-                  0,
-                  Math.max(SIDE_COLLAPSE, Math.min(SIDE_MAX, total - startDoc - CENTER_MIN)),
+                  SIDE_MIN,
+                  Math.max(SIDE_MIN, Math.min(SIDE_MAX, total - startDoc - CENTER_MIN)),
                 ),
                 doc: startDoc,
               }
             : {
                 side: startSide,
-                doc: clamp(
+                doc: snap(
                   startDoc - dx,
-                  0,
-                  Math.max(DOC_COLLAPSE, Math.min(DOC_MAX, total - startSide - CENTER_MIN)),
+                  DOC_MIN,
+                  Math.max(DOC_MIN, Math.min(DOC_MAX, total - startSide - CENTER_MIN)),
                 ),
               };
         liveRef.current = next;
@@ -93,13 +109,11 @@ function Shell() {
         if (next) {
           const patch: Partial<Workspace["ui"]> = {};
           if (edge === "side") {
-            // 只有拖到「一条缝」才收起；80–260 之间保持用户拖到的宽度，
-            // 面板自己会横向滚动，不会被压成一团
-            patch.showSide = next.side >= SIDE_COLLAPSE;
-            if (patch.showSide) patch.sideW = Math.round(clamp(next.side, SIDE_COLLAPSE, SIDE_MAX));
+            patch.showSide = next.side >= SIDE_MIN;
+            if (patch.showSide) patch.sideW = Math.round(clamp(next.side, SIDE_MIN, SIDE_MAX));
           } else {
-            patch.showDoc = next.doc >= DOC_COLLAPSE;
-            if (patch.showDoc) patch.docW = Math.round(clamp(next.doc, DOC_COLLAPSE, DOC_MAX));
+            patch.showDoc = next.doc >= DOC_MIN;
+            if (patch.showDoc) patch.docW = Math.round(clamp(next.doc, DOC_MIN, DOC_MAX));
           }
           // 折叠时故意不改 sideW/docW：下次展开还是原来的宽度
           dispatch({ type: "patchUi", patch });

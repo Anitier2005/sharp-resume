@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem, MenuSep } from "@/components/ui/menu";
-import { BookOpen, ChevronRight, Layers, Plus, Search, User } from "@/components/ui/icons";
+import { ChevronRight, Gear, Layers, Plus, Search, User } from "@/components/ui/icons";
 import { LibraryDrawer } from "@/components/library/drawer";
 import { KnowledgePanel } from "@/components/knowledge/panel";
+import { SettingsSheet } from "@/components/settings/sheet";
 import { ContextMenu } from "@/components/ui/context-menu";
 import { Confirm } from "@/components/ui/confirm";
 import { MenuItem as CtxItem, MenuSep as CtxSep } from "@/components/ui/menu";
@@ -23,8 +24,9 @@ export function Sidebar() {
   const [renaming, setRenaming] = useState<string | null>(null);
   /** 经历库属于「人」，抽屉也开在这里；面板自己从 store 取当前人 */
   const [libOpen, setLibOpen] = useState(false);
-  /** 知识库是全局的（跨候选人），所以入口挂在侧栏而不是某个人下面 */
+  /** 知识库是全局的（跨候选人）；设置同理，两者都收在底部菜单里 */
   const [kbOpen, setKbOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   /** 右键菜单：记下坐标与目标，null 表示关闭 */
   const [ctx, setCtx] = useState<
     | { x: number; y: number; kind: "person"; personId: string }
@@ -93,15 +95,6 @@ export function Sidebar() {
         新增候选人
       </button>
 
-      <button
-        type="button"
-        className={styles.row}
-        title="全局知识库：给模型查事实用，按候选人切换不影响"
-        onClick={() => setKbOpen(true)}
-      >
-        <BookOpen size={12} />
-        知识库
-      </button>
 
       <div className={styles.sec}>候选人</div>
 
@@ -268,9 +261,24 @@ export function Sidebar() {
         )}
       </div>
 
+      {/* 底部：一句状态 + 一个菜单。知识库与设置都是「全局功能」，
+          塞进候选人树或顶栏会让它们看起来属于某个人/某个窗口状态 */}
       <div className={styles.foot}>
         <span className={styles.live} />
-        本地工作区 · 自动保存
+        <span className={styles.footText}>本地工作区 · 自动保存</span>
+        <span className={styles.footGrow} />
+        <Dropdown
+          width={176}
+          trigger={
+            <button type="button" className={styles.menuBtn} aria-label="菜单">
+              <Gear size={12} />
+              菜单
+            </button>
+          }
+        >
+          <MenuItem label="知识库" onSelect={() => setKbOpen(true)} />
+          <MenuItem label="设置" onSelect={() => setSettingsOpen(true)} />
+        </Dropdown>
       </div>
 
       {ctx && (
@@ -347,6 +355,7 @@ export function Sidebar() {
 
       <LibraryDrawer open={libOpen} onClose={() => setLibOpen(false)} />
       <KnowledgePanel open={kbOpen} onClose={() => setKbOpen(false)} />
+      <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </aside>
   );
 }

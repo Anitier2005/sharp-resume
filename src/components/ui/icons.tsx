@@ -187,3 +187,11 @@ export const BookOpen = (p: IconProps) => (
     <path d="M12 6.5v14" />
   </svg>
 );
+
+/** 齿轮：底部「菜单」入口 */
+export const Gear = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.8, ...p })}>
+    <circle cx="12" cy="12" r="3.2" />
+    <path d="M12 4.2v2M12 17.8v2M4.2 12h2M17.8 12h2M6.5 6.5l1.4 1.4M16.1 16.1l1.4 1.4M17.5 6.5l-1.4 1.4M7.9 16.1l-1.4 1.4" />
+  </svg>
+);

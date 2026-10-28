@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
-import { Close, Plus, Trash } from "@/components/ui/icons";
+import { Check, Close, Pencil, Plus, Trash } from "@/components/ui/icons";
 import { useVeilWheelLock } from "@/components/ui/veil";
 import { Modal } from "@/components/ui/modal";
 import { Confirm } from "@/components/ui/confirm";
@@ -98,9 +98,10 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
    * 所以单独一份设置，换对话模型不会顺手把它们换掉。
    */
   const [aux, setAux] = useState<AuxSettings>(loadAux);
-  /** 正在新建 / 删除的类别；null = 没有弹层 */
-  const [creating, setCreating] = useState<ModelKind | null>(null);
-  const [removing, setRemoving] = useState<ModelKind | null>(null);
+  /** 正在编辑的模型：kind + 原始条目（有 model = 编辑，没有 = 新建） */
+  const [editing, setEditing] = useState<{ kind: ModelKind; model?: ModelConfig } | null>(null);
+  /** 等待确认删除的那一条 */
+  const [removing, setRemoving] = useState<{ kind: ModelKind; model: ModelConfig } | null>(null);
 
   const spec = findModel(ai.model);
 
@@ -137,7 +138,8 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
     configureKnowledge(kind === "embedding" ? next : aux.embedding);
   };
 
-  const createModel = (kind: ModelKind, model: ModelConfig, apiKey: string) => {
+  /** 保存（新建或编辑）：存清单，并把它设为该用途的当前模型 */
+  const saveModel = (kind: ModelKind, model: ModelConfig, apiKey: string) => {
     saveCustomModel(model);
     setModels(listModels("chat"));
     if (kind === "chat") {
@@ -150,27 +152,29 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
       const choice: AuxModelChoice = { model: model.id, baseUrl: model.baseUrl, apiKey: apiKey.trim() };
       setAux({ ...aux, [kind]: choice });
       saveAux({ [kind]: choice });
+      if (kind === "embedding") configureKnowledge(choice);
     }
-    setCreating(null);
-    toast(`已新建模型 ${model.label}`);
+    setEditing(null);
+    toast(`已保存 ${model.label}`);
   };
 
-  const dropModel = (kind: ModelKind) => {
-    const id = kind === "chat" ? ai.model : aux[kind]?.model ?? "";
-    const label = findModel(id)?.label ?? id;
+  const dropModel = (kind: ModelKind, model: ModelConfig) => {
     setRemoving(null);
-    removeCustomModel(id);
+    removeCustomModel(model.id);
     const chatModels = listModels("chat");
     setModels(chatModels);
     if (kind === "chat") {
       // 删掉的正是当前在用的那条：回退到第一条内置，否则设置里会留一个查不到的 id
-      const fallback = chatModels.find((item) => !isCustomModel(item.id));
-      if (fallback) write(aiFromModel(fallback, ai));
-    } else {
+      if (ai.model === model.id) {
+        const fallback = chatModels.find((item) => !isCustomModel(item.id));
+        if (fallback) write(aiFromModel(fallback, ai));
+      }
+    } else if (aux[kind]?.model === model.id) {
       setAux({ ...aux, [kind]: null });
       saveAux({ [kind]: null });
+      if (kind === "embedding") configureKnowledge(null);
     }
-    toast(`已删除自定义模型 ${label}`);
+    toast(`已删除 ${model.label}`);
   };
 
   const runProbe = async () => {
@@ -228,66 +232,53 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
       <div className={styles.body}>
         {tab === "model" ? (
           <>
+            {/* 对话模型 */}
             <div className={styles.group}>
-              <span className={styles.groupTitle}>对话模型</span>
-              <div className={styles.modelRow}>
-                <select
-                  className={styles.select}
-                  value={ai.model}
-                  onChange={(event) => pickModel(event.target.value)}
-                >
-                  {models.map((item) => (
-                    <option value={item.id} key={item.id}>
-                      {item.label} · {item.provider}
-                      {isCustomModel(item.id) ? "（自定义）" : ""}
-                    </option>
-                  ))}
-                </select>
+              <div className={styles.groupHead}>
+                <div className={styles.groupLead}>
+                  <span className={styles.groupTitle}>对话模型</span>
+                  <span className={styles.groupNote}>改写、读页、调工具都用它</span>
+                </div>
                 <button
                   type="button"
-                  className={cx(shared.btnGhost, styles.modelBtn)}
-                  title="新建自定义模型"
-                  aria-label="新建自定义模型"
-                  onClick={() => setCreating("chat")}
+                  className={cx(shared.btnGhost, styles.addModel)}
+                  onClick={() => setEditing({ kind: "chat" })}
                 >
                   <Plus size={11} />
+                  添加模型
                 </button>
-                {isCustomModel(ai.model) && (
-                  <button
-                    type="button"
-                    className={cx(shared.btnGhost, styles.modelBtn)}
-                    title={`删除自定义模型 ${ai.model}`}
-                    aria-label="删除自定义模型"
-                    onClick={() => setRemoving("chat")}
-                  >
-                    <Trash size={11} />
-                  </button>
-                )}
               </div>
-              {spec?.note && <span className={styles.hint}>{spec.note}</span>}
 
-              <label className={shared.fld}>
-                <span className={shared.fldK}>Base URL</span>
-                <input
-                  value={ai.baseUrl}
-                  spellCheck={false}
-                  onChange={(event) => write({ baseUrl: event.target.value })}
-                />
-              </label>
-              <label className={shared.fld}>
-                <span className={shared.fldK}>API Key · 只存在本机，不进工作区</span>
-                <input
-                  type="password"
-                  value={ai.apiKey}
-                  spellCheck={false}
-                  placeholder="sk-…"
-                  onChange={(event) => write({ apiKey: event.target.value })}
-                />
-              </label>
-            </div>
+              <ModelList
+                items={models}
+                active={ai.model}
+                empty="还没有模型，点右上「添加模型」"
+                onPick={(item) => pickModel(item.id)}
+                onEdit={(item) => setEditing({ kind: "chat", model: item })}
+                onDelete={(item) => setRemoving({ kind: "chat", model: item })}
+              />
 
-            <div className={styles.group}>
-              <span className={styles.groupTitle}>生成参数</span>
+              <div className={styles.formRow}>
+                <label className={shared.fld}>
+                  <span className={shared.fldK}>接口地址</span>
+                  <input
+                    value={ai.baseUrl}
+                    spellCheck={false}
+                    onChange={(event) => write({ baseUrl: event.target.value })}
+                  />
+                </label>
+                <label className={shared.fld}>
+                  <span className={shared.fldK}>API Key · 只存在本机</span>
+                  <input
+                    type="password"
+                    value={ai.apiKey}
+                    spellCheck={false}
+                    placeholder="sk-…"
+                    onChange={(event) => write({ apiKey: event.target.value })}
+                  />
+                </label>
+              </div>
+
               <div className={styles.row}>
                 <label className={shared.fld}>
                   <span className={shared.fldK}>温度 · {ai.temperature.toFixed(2)}</span>
@@ -328,156 +319,115 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
                   </div>
                 </div>
               )}
-
-              <span className={styles.hint}>
-                上下文窗口与思维强度档位来自模型清单：内置项写在{" "}
-                <code>config/models.json</code>，自定义项只存在本机（换机器不同步）。
-              </span>
             </div>
 
+            {/* 嵌入模型 */}
             <div className={styles.group}>
-              <span className={styles.groupTitle}>嵌入模型 · 知识库</span>
-              <div className={styles.modelRow}>
-                <select
-                  className={styles.select}
-                  value={aux.embedding?.model ?? ""}
-                  onChange={(event) => {
-                    const id = event.target.value;
-                    if (id) pickAux("embedding", id);
-                    else {
-                      setAux({ ...aux, embedding: null });
-                      saveAux({ embedding: null });
-                      configureKnowledge(null);
-                    }
-                  }}
-                >
-                  <option value="">未启用 · 只用关键词检索</option>
-                  {listModels("embedding").map((item) => (
-                    <option value={item.id} key={item.id}>
-                      {item.label} · {item.provider}
-                      {isCustomModel(item.id) ? "（自定义）" : ""}
-                    </option>
-                  ))}
-                </select>
+              <div className={styles.groupHead}>
+                <div className={styles.groupLead}>
+                  <span className={styles.groupTitle}>嵌入模型</span>
+                  <span className={styles.groupNote}>知识库的语义召回；不选就只用关键词检索</span>
+                </div>
                 <button
                   type="button"
-                  className={cx(shared.btnGhost, styles.modelBtn)}
-                  title="新建嵌入模型"
-                  aria-label="新建嵌入模型"
-                  onClick={() => setCreating("embedding")}
+                  className={cx(shared.btnGhost, styles.addModel)}
+                  onClick={() => setEditing({ kind: "embedding" })}
                 >
                   <Plus size={11} />
+                  添加模型
                 </button>
-                {aux.embedding && isCustomModel(aux.embedding.model) && (
-                  <button
-                    type="button"
-                    className={cx(shared.btnGhost, styles.modelBtn)}
-                    title="删除这个自定义嵌入模型"
-                    aria-label="删除自定义嵌入模型"
-                    onClick={() => setRemoving("embedding")}
-                  >
-                    <Trash size={11} />
-                  </button>
-                )}
               </div>
-              <div className={styles.formRow}>
-                <label className={shared.fld}>
-                  <span className={shared.fldK}>Base URL · 留空沿用对话模型</span>
-                  <input
-                    value={aux.embedding?.baseUrl ?? ""}
-                    disabled={!aux.embedding}
-                    spellCheck={false}
-                    onChange={(event) => patchAux("embedding", { baseUrl: event.target.value })}
-                  />
-                </label>
-                <label className={shared.fld}>
-                  <span className={shared.fldK}>API Key · 留空沿用对话模型</span>
-                  <input
-                    type="password"
-                    value={aux.embedding?.apiKey ?? ""}
-                    disabled={!aux.embedding}
-                    spellCheck={false}
-                    onChange={(event) => patchAux("embedding", { apiKey: event.target.value })}
-                  />
-                </label>
-              </div>
-              <span className={styles.hint}>
-                只用于知识库的语义召回（查询时算一次向量）
-                {aux.embedding && findModel(aux.embedding.model)?.dim
-                  ? ` · ${findModel(aux.embedding.model)?.dim} 维`
-                  : ""}
-                ；不配也不影响使用，检索会退化成关键词匹配。
-              </span>
+
+              <ModelList
+                items={listModels("embedding")}
+                active={aux.embedding?.model ?? ""}
+                empty="还没有嵌入模型 —— 不配也能用，检索会退化成关键词匹配"
+                allowNone
+                onNone={() => {
+                  setAux({ ...aux, embedding: null });
+                  saveAux({ embedding: null });
+                  configureKnowledge(null);
+                }}
+                onPick={(item) => pickAux("embedding", item.id)}
+                onEdit={(item) => setEditing({ kind: "embedding", model: item })}
+                onDelete={(item) => setRemoving({ kind: "embedding", model: item })}
+              />
+
+              {aux.embedding && (
+                <div className={styles.formRow}>
+                  <label className={shared.fld}>
+                    <span className={shared.fldK}>接口地址 · 留空沿用对话模型</span>
+                    <input
+                      value={aux.embedding.baseUrl}
+                      spellCheck={false}
+                      onChange={(event) => patchAux("embedding", { baseUrl: event.target.value })}
+                    />
+                  </label>
+                  <label className={shared.fld}>
+                    <span className={shared.fldK}>API Key · 留空沿用对话模型</span>
+                    <input
+                      type="password"
+                      value={aux.embedding.apiKey}
+                      spellCheck={false}
+                      onChange={(event) => patchAux("embedding", { apiKey: event.target.value })}
+                    />
+                  </label>
+                </div>
+              )}
             </div>
 
+            {/* OCR 模型 */}
             <div className={styles.group}>
-              <span className={styles.groupTitle}>OCR 模型 · 图片转文字</span>
-              <div className={styles.modelRow}>
-                <select
-                  className={styles.select}
-                  value={aux.ocr?.model ?? ""}
-                  onChange={(event) => {
-                    const id = event.target.value;
-                    if (id) pickAux("ocr", id);
-                    else {
-                      setAux({ ...aux, ocr: null });
-                      saveAux({ ocr: null });
-                    }
-                  }}
-                >
-                  <option value="">未启用</option>
-                  {listModels("ocr").map((item) => (
-                    <option value={item.id} key={item.id}>
-                      {item.label} · {item.provider}
-                      {isCustomModel(item.id) ? "（自定义）" : ""}
-                    </option>
-                  ))}
-                </select>
+              <div className={styles.groupHead}>
+                <div className={styles.groupLead}>
+                  <span className={styles.groupTitle}>OCR 模型</span>
+                  <span className={styles.groupNote}>模型看不了图时，图片先交给它转成文字</span>
+                </div>
                 <button
                   type="button"
-                  className={cx(shared.btnGhost, styles.modelBtn)}
-                  title="新建 OCR 模型"
-                  aria-label="新建 OCR 模型"
-                  onClick={() => setCreating("ocr")}
+                  className={cx(shared.btnGhost, styles.addModel)}
+                  onClick={() => setEditing({ kind: "ocr" })}
                 >
                   <Plus size={11} />
+                  添加模型
                 </button>
-                {aux.ocr && isCustomModel(aux.ocr.model) && (
-                  <button
-                    type="button"
-                    className={cx(shared.btnGhost, styles.modelBtn)}
-                    title="删除这个自定义 OCR 模型"
-                    aria-label="删除自定义 OCR 模型"
-                    onClick={() => setRemoving("ocr")}
-                  >
-                    <Trash size={11} />
-                  </button>
-                )}
               </div>
-              <div className={styles.formRow}>
-                <label className={shared.fld}>
-                  <span className={shared.fldK}>Base URL · 留空沿用对话模型</span>
-                  <input
-                    value={aux.ocr?.baseUrl ?? ""}
-                    disabled={!aux.ocr}
-                    spellCheck={false}
-                    onChange={(event) => patchAux("ocr", { baseUrl: event.target.value })}
-                  />
-                </label>
-                <label className={shared.fld}>
-                  <span className={shared.fldK}>API Key · 留空沿用对话模型</span>
-                  <input
-                    type="password"
-                    value={aux.ocr?.apiKey ?? ""}
-                    disabled={!aux.ocr}
-                    spellCheck={false}
-                    onChange={(event) => patchAux("ocr", { apiKey: event.target.value })}
-                  />
-                </label>
-              </div>
-              <span className={styles.hint}>
-                默认构建没有内置 OCR：模型看不了图时，图片会先交给这个接口转成文字。
-              </span>
+
+              <ModelList
+                items={listModels("ocr")}
+                active={aux.ocr?.model ?? ""}
+                empty="还没有 OCR 模型 —— 只有「模型不能看图」时才会用到"
+                allowNone
+                onNone={() => {
+                  setAux({ ...aux, ocr: null });
+                  saveAux({ ocr: null });
+                }}
+                onPick={(item) => pickAux("ocr", item.id)}
+                onEdit={(item) => setEditing({ kind: "ocr", model: item })}
+                onDelete={(item) => setRemoving({ kind: "ocr", model: item })}
+              />
+
+              {aux.ocr && (
+                <div className={styles.formRow}>
+                  <label className={shared.fld}>
+                    <span className={shared.fldK}>接口地址 · 留空沿用对话模型</span>
+                    <input
+                      value={aux.ocr.baseUrl}
+                      spellCheck={false}
+                      onChange={(event) => patchAux("ocr", { baseUrl: event.target.value })}
+                    />
+                  </label>
+                  <label className={shared.fld}>
+                    <span className={shared.fldK}>API Key · 留空沿用对话模型</span>
+                    <input
+                      type="password"
+                      value={aux.ocr.apiKey}
+                      spellCheck={false}
+                      onChange={(event) => patchAux("ocr", { apiKey: event.target.value })}
+                    />
+                  </label>
+                </div>
+              )}
             </div>
           </>
         ) : (
@@ -607,31 +557,26 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
 
       {/* 两个弹层挂在面板根节点里：设置面板本身就是个浮层，
           再 portal 出去反而会丢掉「哪一层在上面」的顺序 */}
-      {creating && (
+      {editing && (
         <CreateModel
-          kind={creating}
-          baseUrl={creating === "chat" ? ai.baseUrl : aux[creating]?.baseUrl || ai.baseUrl}
-          taken={listModels(creating).map((item) => item.id)}
-          onCancel={() => setCreating(null)}
-          onSubmit={(model, apiKey) => createModel(creating, model, apiKey)}
+          kind={editing.kind}
+          initial={editing.model}
+          baseUrl={
+            editing.kind === "chat" ? ai.baseUrl : aux[editing.kind]?.baseUrl || ai.baseUrl
+          }
+          taken={listModels(editing.kind).map((item) => item.id)}
+          onCancel={() => setEditing(null)}
+          onSubmit={(model, apiKey) => saveModel(editing.kind, model, apiKey)}
         />
       )}
 
       {removing && (
         <Confirm
           open
-          title={`删除自定义模型「${
-            removing === "chat"
-              ? spec?.label ?? ai.model
-              : findModel(aux[removing]?.model ?? "")?.label ?? "这条"
-          }」？`}
-          description={
-            removing === "chat"
-              ? "只从这台机器的模型清单里移除，服务端配置和密钥都不受影响。删完会退到第一条内置模型。"
-              : "只从这台机器的模型清单里移除。这个位置会变成「未启用」，该功能回落到关键词检索/纯文字。"
-          }
+          title={`删除模型「${removing.model.label}」？`}
+          description="只从这台机器的模型清单里移除；服务端配置和密钥都不受影响。删完这个用途会回落到「不使用」。"
           onCancel={() => setRemoving(null)}
-          onConfirm={() => dropModel(removing)}
+          onConfirm={() => dropModel(removing.kind, removing.model)}
         />
       )}
     </div>
@@ -639,7 +584,91 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
 }
 
 /* ==========================================================================
-   新建自定义模型
+   模型列表
+   ========================================================================== */
+
+/**
+ * 一行一个模型：点名字选中，右侧是编辑 / 删除。
+ *
+ * 为什么不用原生 <select>：系统下拉在深浅两套主题里都是另一套外观（灰底、系统字体、
+ * 高亮条），和应用的发丝线、令牌色完全对不上 —— 而且它没法放「编辑」「删除」。
+ */
+function ModelList({
+  items,
+  active,
+  empty,
+  allowNone,
+  onNone,
+  onPick,
+  onEdit,
+  onDelete,
+}: {
+  items: ModelConfig[];
+  active: string;
+  empty: string;
+  /** 嵌入 / OCR 允许「不使用」：这个用途本来就是可选的 */
+  allowNone?: boolean;
+  onNone?: () => void;
+  onPick: (model: ModelConfig) => void;
+  onEdit: (model: ModelConfig) => void;
+  onDelete: (model: ModelConfig) => void;
+}) {
+  return (
+    <div className={styles.modelList}>
+      {allowNone && (
+        <div className={cx(styles.modelItem, !active && styles.modelOn)}>
+          <button type="button" className={styles.modelMain} onClick={onNone}>
+            <span className={styles.modelName}>不使用</span>
+            <span className={styles.modelMeta}>关掉这项能力</span>
+          </button>
+          {!active && <Check size={11} className={styles.modelCheck} />}
+        </div>
+      )}
+
+      {items.map((item) => {
+        const on = item.id === active;
+        const custom = isCustomModel(item.id);
+        return (
+          <div key={item.id} className={cx(styles.modelItem, on && styles.modelOn)}>
+            <button type="button" className={styles.modelMain} onClick={() => onPick(item)}>
+              <span className={styles.modelName}>{item.label}</span>
+              <span className={styles.modelMeta}>
+                {item.provider}
+                {custom ? " · 自定义" : ""}
+              </span>
+            </button>
+            {on && <Check size={11} className={styles.modelCheck} />}
+            {custom && (
+              <div className={styles.modelActs}>
+                <button
+                  type="button"
+                  title="编辑"
+                  aria-label={`编辑 ${item.label}`}
+                  onClick={() => onEdit(item)}
+                >
+                  <Pencil size={11} />
+                </button>
+                <button
+                  type="button"
+                  title="删除"
+                  aria-label={`删除 ${item.label}`}
+                  onClick={() => onDelete(item)}
+                >
+                  <Trash size={11} />
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {items.length === 0 && <span className={styles.modelEmpty}>{empty}</span>}
+    </div>
+  );
+}
+
+/* ==========================================================================
+   新建 / 编辑自定义模型
    ========================================================================== */
 
 /**
@@ -649,26 +678,31 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
  */
 function CreateModel({
   kind,
+  initial,
   baseUrl,
   taken,
   onCancel,
   onSubmit,
 }: {
   kind: ModelKind;
+  /** 有值 = 编辑已有模型：预填并锁定 id（改 id 等于新建一条，容易产生重复） */
+  initial?: ModelConfig;
   baseUrl: string;
   taken: string[];
   onCancel: () => void;
   onSubmit: (model: ModelConfig, apiKey: string) => void;
 }) {
-  const [label, setLabel] = useState("");
-  const [id, setId] = useState("");
-  const [url, setUrl] = useState(baseUrl);
+  const [label, setLabel] = useState(initial?.label ?? "");
+  const [id, setId] = useState(initial?.id ?? "");
+  const [url, setUrl] = useState(initial?.baseUrl || baseUrl);
   const [key, setKey] = useState("");
-  const [window_, setWindow] = useState(kind === "embedding" ? "8192" : "64000");
-  const [temp, setTemp] = useState(kind === "chat" ? "0.4" : "0");
-  const [levels, setLevels] = useState("");
-  const [vision, setVision] = useState(kind === "ocr");
-  const [dim, setDim] = useState("");
+  const [window_, setWindow] = useState(
+    String(initial?.contextWindow ?? (kind === "embedding" ? 8192 : 64000)),
+  );
+  const [temp, setTemp] = useState(String(initial?.defaultTemperature ?? (kind === "chat" ? 0.4 : 0)));
+  const [levels, setLevels] = useState((initial?.reasoning ?? []).join(", "));
+  const [vision, setVision] = useState(initial?.vision ?? kind === "ocr");
+  const [dim, setDim] = useState(initial?.dim ? String(initial.dim) : "");
 
   const modelId = id.trim() || label.trim();
   /** 同名会覆盖：说清楚而不是拦下来 —— 改错重填一次比「先删再建」顺手 */
@@ -699,9 +733,9 @@ function CreateModel({
 
   return (
     <Modal
-      title={
-        kind === "chat" ? "新建对话模型" : kind === "embedding" ? "新建嵌入模型" : "新建 OCR 模型"
-      }
+      title={`${initial ? "编辑" : "新建"}${
+        kind === "chat" ? "对话模型" : kind === "embedding" ? "嵌入模型" : "OCR 模型"
+      }`}
       subtitle="任何 OpenAI 兼容接口都可以"
       onCancel={onCancel}
       bodyClassName={styles.form}
@@ -732,6 +766,7 @@ function CreateModel({
           value={id}
           placeholder="qwen3-32b"
           spellCheck={false}
+          disabled={Boolean(initial)}
           onChange={(event) => setId(event.target.value)}
         />
       </label>

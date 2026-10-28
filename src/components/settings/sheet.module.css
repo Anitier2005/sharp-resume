@@ -269,3 +269,105 @@
   line-height: 1.6;
   color: var(--fg-4);
 }
+
+/* ---------- 模型列表 ---------- */
+/* 分组头：左边标题+说明，右边「添加模型」。
+   说明放在标题下面一行而不是塞进标题里 —— 标题要短，用户扫一眼就知道这一组是什么 */
+.groupHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.groupLead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.groupNote {
+  font-size: 0.59375rem;
+  line-height: 1.5;
+  color: var(--fg-4);
+}
+.addModel {
+  flex: none;
+  height: 24px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.625rem;
+}
+
+.modelList {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-elev);
+}
+.modelItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--line-soft);
+}
+.modelItem:first-child {
+  border-top: 0;
+}
+.modelItem:hover {
+  background: var(--acc-softer);
+}
+.modelOn {
+  background: var(--acc-soft);
+}
+.modelMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  text-align: left;
+}
+.modelName {
+  font-size: 0.6875rem;
+  color: var(--fg-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modelMeta {
+  flex: none;
+  font-size: 0.59375rem;
+  color: var(--fg-4);
+}
+.modelCheck {
+  flex: none;
+  color: var(--acc-text);
+}
+.modelActs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+.modelActs button {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--fg-3);
+}
+.modelActs button:hover {
+  background: var(--bg-elev);
+  color: var(--acc-text);
+}
+.modelEmpty {
+  padding: 8px;
+  font-size: 0.59375rem;
+  line-height: 1.6;
+  color: var(--fg-4);
+}
