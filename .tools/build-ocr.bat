@@ -1,33 +1,33 @@
 @echo off
 rem ============================================================================
-rem Sharp Resume Â· Windows release æ„å»ºï¼ˆOCR ç‰ˆï¼šå†…ç½® tesseractï¼‰
-rem ä¸ build.bat çš„å”¯ä¸€åŒºåˆ«ï¼šå¤šå¼€ ocr featureã€‚äº§ç‰©æ—ä¼šå¸¦ä¸¤ä¸ª DLL + tessdataï¼ˆçº¦ 17MBï¼‰ï¼Œ
-rem æ„å»ºæœŸéœ€è¦ LIBCLANG_PATH / TESSERACT_* / LEPTONICA_*ï¼ˆä¸‹é¢çš„ç¯å¢ƒå—å·²ç»è®¾å¥½ï¼‰ã€‚
+rem Sharp Resume ¡¤ Windows release ¹¹½¨£¨OCR °æ£ºÄÚÖÃ tesseract£©
+rem Óë build.bat µÄÎ¨Ò»Çø±ğ£º¶à¿ª ocr feature¡£²úÎïÅÔ»á´øÁ½¸ö DLL + tessdata£¨Ô¼ 17MB£©£¬
+rem ¹¹½¨ÆÚĞèÒª LIBCLANG_PATH / TESSERACT_* / LEPTONICA_*£¨ÏÂÃæµÄ»·¾³¿éÒÑ¾­ÉèºÃ£©¡£
 rem
-rem ä¸ºä»€ä¹ˆéœ€è¦è¿™ä¸ªè„šæœ¬ï¼ˆä¸¤æ¡éƒ½ä¼šè®© cargo build ç›´æ¥å¤±è´¥ï¼‰ï¼š
+rem ÎªÊ²Ã´ĞèÒªÕâ¸ö½Å±¾£¨Á½Ìõ¶¼»áÈÃ cargo build Ö±½ÓÊ§°Ü£©£º
 rem
-rem   1) cargo æ‰¾ cl.exe ä¾èµ– VS å¼€å‘è€…å‘½ä»¤è¡Œï¼ˆvswhere â†’ æŸ¥æ³¨å†Œè¡¨ï¼‰ã€‚
-rem      å—é™ç¯å¢ƒé‡Œ reg.exe ä¼šè¢«æ‹¦æˆªï¼Œvswhere æ‹¿ä¸åˆ°å®‰è£…è·¯å¾„ï¼Œ
-rem      æŠ¥ `failed to find tool "cl.exe"`ã€‚è¿™é‡Œç›´æ¥æŠŠ MSVC ä¸ Windows SDK çš„
-rem      include/lib/bin æ‹¼è¿›ç¯å¢ƒå˜é‡ï¼Œç»•å¼€æ³¨å†Œè¡¨æŸ¥è¯¢ã€‚
+rem   1) cargo ÕÒ cl.exe ÒÀÀµ VS ¿ª·¢ÕßÃüÁîĞĞ£¨vswhere ¡ú ²é×¢²á±í£©¡£
+rem      ÊÜÏŞ»·¾³Àï reg.exe »á±»À¹½Ø£¬vswhere ÄÃ²»µ½°²×°Â·¾¶£¬
+rem      ±¨ `failed to find tool "cl.exe"`¡£ÕâÀïÖ±½Ó°Ñ MSVC Óë Windows SDK µÄ
+rem      include/lib/bin Æ´½ø»·¾³±äÁ¿£¬ÈÆ¿ª×¢²á±í²éÑ¯¡£
 rem
-rem   2) æœ¬æœº Windows SDKï¼ˆ10.0.28000.0ï¼‰çš„ ucrt åº“æ˜¯**æ®‹ç¼ºçš„**ï¼Œåªæœ‰ 8 ä¸ª libï¼Œ
-rem      ç¼º legacy_stdio_definitions.lib / oldnames.lib / msvcrt.libã€‚
-rem      æœ¬å·¥ç¨‹ç”¨é™æ€ CRTï¼ˆstatic_vcruntimeï¼‰ï¼Œå®é™…åªéœ€è¦å‰ä¸¤ä¸ªä¸”ç”¨ä¸åˆ°é‡Œé¢çš„
-rem      ç¬¦å·ï¼Œå› æ­¤ .tools\libstub æ”¾äº†ä¸¤ä¸ªç©ºå£³å¯¼å…¥åº“é¡¶ä¸Šï¼›çœŸå®åº“å­˜åœ¨æ—¶ä¼šä¼˜å…ˆå‘½ä¸­
-rem      SDK é‡Œçš„é‚£ä»½ï¼ˆlibstub æ’åœ¨ LIB æœ€åï¼‰ï¼Œä¸å½±å“æ­£å¸¸æœºå™¨ã€‚
+rem   2) ±¾»ú Windows SDK£¨10.0.28000.0£©µÄ ucrt ¿âÊÇ**²ĞÈ±µÄ**£¬Ö»ÓĞ 8 ¸ö lib£¬
+rem      È± legacy_stdio_definitions.lib / oldnames.lib / msvcrt.lib¡£
+rem      ±¾¹¤³ÌÓÃ¾²Ì¬ CRT£¨static_vcruntime£©£¬Êµ¼ÊÖ»ĞèÒªÇ°Á½¸öÇÒÓÃ²»µ½ÀïÃæµÄ
+rem      ·ûºÅ£¬Òò´Ë .tools\libstub ·ÅÁËÁ½¸ö¿Õ¿Çµ¼Èë¿â¶¥ÉÏ£»ÕæÊµ¿â´æÔÚÊ±»áÓÅÏÈÃüÖĞ
+rem      SDK ÀïµÄÄÇ·İ£¨libstub ÅÅÔÚ LIB ×îºó£©£¬²»Ó°ÏìÕı³£»úÆ÷¡£
 rem
-rem ç”¨æ³•ï¼š
-rem   .tools\build.bat                       æ„å»º release exe
-rem   set MSVC_ROOT=... & set SDK_VER=...    è¦†ç›–è‡ªåŠ¨æ¢æµ‹çš„è·¯å¾„
+rem ÓÃ·¨£º
+rem   .tools\build.bat                       ¹¹½¨ release exe
+rem   set MSVC_ROOT=... & set SDK_VER=...    ¸²¸Ç×Ô¶¯Ì½²âµÄÂ·¾¶
 rem
-rem äº§ç‰©ï¼šsrc-tauri\target\release\sharp-resume.exe
-rem æ‰“åŒ…ï¼šå›åˆ°ä»“åº“æ ¹ç›®å½•è·‘ npm run package:clean
+rem ²úÎï£ºsrc-tauri\target\release\sharp-resume.exe
+rem ´ò°ü£º»Øµ½²Ö¿â¸ùÄ¿Â¼ÅÜ npm run package:clean
 rem ============================================================================
 setlocal
 
-rem å·¥å…·é“¾ä½ç½®ä¼šéš VS é‡è£…å˜åŒ–ï¼ˆæœ¬æœº 2026-10-26 ä» C ç›˜ BuildTools æ¢æˆäº† E ç›˜ Communityï¼‰ï¼Œ
-rem æ‰€ä»¥æŒ‰å€™é€‰é¡ºåºæ¢æµ‹ï¼Œæ‰¾åˆ°ç¬¬ä¸€ä¸ªå­˜åœ¨çš„ VC\Tools\MSVC\<ç‰ˆæœ¬> å°±ç”¨å®ƒã€‚
+rem ¹¤¾ßÁ´Î»ÖÃ»áËæ VS ÖØ×°±ä»¯£¨±¾»ú 2026-10-26 ´Ó C ÅÌ BuildTools »»³ÉÁË E ÅÌ Community£©£¬
+rem ËùÒÔ°´ºòÑ¡Ë³ĞòÌ½²â£¬ÕÒµ½µÚÒ»¸ö´æÔÚµÄ VC\Tools\MSVC\<°æ±¾> ¾ÍÓÃËü¡£
 if not defined MSVC_ROOT (
   for %%B in (
     "E:\Program Files\Microsoft Visual Studio\18\Community"
@@ -42,7 +42,7 @@ if not defined MSVC_ROOT (
 if not defined SDK_ROOT  set "SDK_ROOT=C:\Program Files (x86)\Windows Kits\10"
 if not defined SDK_VER   set "SDK_VER=10.0.28000.0"
 
-rem Community è£…çš„æ˜¯ 64 ä½å®¿ä¸»ï¼ˆbin\Hostx64\x64ï¼‰ï¼ŒBuildTools ä¹‹å‰åªæœ‰ 32 ä½å®¿ä¸»
+rem Community ×°µÄÊÇ 64 Î»ËŞÖ÷£¨bin\Hostx64\x64£©£¬BuildTools Ö®Ç°Ö»ÓĞ 32 Î»ËŞÖ÷
 set "CL_DIR=%MSVC_ROOT%\bin\Hostx64\x64"
 if not exist "%CL_DIR%\cl.exe" set "CL_DIR=%MSVC_ROOT%\bin\Hostx86\x64"
 set "RC_DIR=%SDK_ROOT%\bin\%SDK_VER%\x64"
@@ -63,13 +63,13 @@ set "LIB=%MSVC_ROOT%\lib\x64;%SDK_ROOT%\Lib\%SDK_VER%\ucrt\x64;%SDK_ROOT%\Lib\%S
 set "PATH=%CL_DIR%;%RC_DIR%;%PATH%"
 
 rem ----------------------------------------------------------------------------
-rem è¿›ç¨‹å†… OCRï¼ˆtesseract-sysï¼‰çš„æ„å»ºæœŸä¾èµ–ã€‚ä¸‰æ ·ç¼ºä¸€ä¸å¯ï¼š
-rem   1) LIBCLANG_PATH â€”â€” bindgen è¿è¡Œæ—¶è¦ libclang.dllï¼ˆpip install libclang è£…çš„é‚£ä»½ï¼‰
-rem   2) TESSERACT_* / LEPTONICA_* â€”â€” C åº“çš„å¤´æ–‡ä»¶ä¸å¯¼å…¥åº“ä½ç½®ï¼ˆvendor åœ¨ src-tauri/tesseract/ï¼‰
-rem      æ³¨æ„å€¼å¿…é¡»æ˜¯**åæ–œæ **è·¯å¾„ï¼šlink.exe çš„ /LIBPATH ä¸è®¤æ­£æ–œæ 
-rem   3) VS è‡ªå¸¦çš„ CMake è¿› PATH â€”â€” æœ¬èº«ä¸å‚ä¸ OCR æ„å»ºï¼Œä½†ä¾èµ–æ ‘é‡Œè¦ç”¨ cmake çš„
-rem      æ„å»ºè„šæœ¬æ²¡äº†å®ƒä¼šç›´æ¥å¤±è´¥ï¼Œé¡ºæ‰‹ä¸€èµ·ç»™
-rem ç¯å¢ƒå˜é‡å·²å®šä¹‰æ—¶ï¼ˆå¤–éƒ¨ CI æƒ³æ¢ libclang ä½ç½®ï¼‰å°Šé‡å¤–éƒ¨å€¼ã€‚
+rem ½ø³ÌÄÚ OCR£¨tesseract-sys£©µÄ¹¹½¨ÆÚÒÀÀµ¡£ÈıÑùÈ±Ò»²»¿É£º
+rem   1) LIBCLANG_PATH ¡ª¡ª bindgen ÔËĞĞÊ±Òª libclang.dll£¨pip install libclang ×°µÄÄÇ·İ£©
+rem   2) TESSERACT_* / LEPTONICA_* ¡ª¡ª C ¿âµÄÍ·ÎÄ¼şÓëµ¼Èë¿âÎ»ÖÃ£¨vendor ÔÚ src-tauri/tesseract/£©
+rem      ×¢ÒâÖµ±ØĞëÊÇ**·´Ğ±¸Ü**Â·¾¶£ºlink.exe µÄ /LIBPATH ²»ÈÏÕıĞ±¸Ü
+rem   3) VS ×Ô´øµÄ CMake ½ø PATH ¡ª¡ª ±¾Éí²»²ÎÓë OCR ¹¹½¨£¬µ«ÒÀÀµÊ÷ÀïÒªÓÃ cmake µÄ
+rem      ¹¹½¨½Å±¾Ã»ÁËËü»áÖ±½ÓÊ§°Ü£¬Ë³ÊÖÒ»Æğ¸ø
+rem »·¾³±äÁ¿ÒÑ¶¨ÒåÊ±£¨Íâ²¿ CI Ïë»» libclang Î»ÖÃ£©×ğÖØÍâ²¿Öµ¡£
 rem ----------------------------------------------------------------------------
 if not defined LIBCLANG_PATH (
   for /f "delims=" %%D in ('python -c "import clang,os;print(os.path.join(os.path.dirname(clang.__file__),'native'))" 2^>nul') do set "LIBCLANG_PATH=%%D"
@@ -80,14 +80,14 @@ set "TESSERACT_LINK_LIBS=tesseract50"
 set "LEPTONICA_INCLUDE_PATH=%~dp0..\src-tauri\tesseract\include"
 set "LEPTONICA_LINK_PATHS=%~dp0..\src-tauri\tesseract\lib\x64"
 set "LEPTONICA_LINK_LIBS=lept"
-rem VS è‡ªå¸¦çš„ CMakeï¼ˆMSVC_ROOT ä¸Šæº¯å››çº§æ˜¯ VS æ ¹ï¼‰ï¼šä¾èµ–æ ‘é‡Œè¦ cmake çš„æ„å»ºè„šæœ¬æ²¡äº†å®ƒä¼šç›´æ¥å¤±è´¥
+rem VS ×Ô´øµÄ CMake£¨MSVC_ROOT ÉÏËİËÄ¼¶ÊÇ VS ¸ù£©£ºÒÀÀµÊ÷ÀïÒª cmake µÄ¹¹½¨½Å±¾Ã»ÁËËü»áÖ±½ÓÊ§°Ü
 for %%C in ("%MSVC_ROOT%\..\..\..\..\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin") do (
   if exist "%%~C\cmake.exe" set "PATH=%PATH%;%%~C"
 )
 
 pushd "%~dp0..\src-tauri"
-rem custom-protocol å¿…é¡»å¸¦ä¸Šï¼šå¦åˆ™ release ç‰ˆä¸å†…åµŒ dist/ï¼Œå¯åŠ¨åå»è¿ devUrlï¼Œçª—å£å…¨é»‘ã€‚
-rem é»˜è®¤ liteï¼šä¸å¸¦ ocr featureï¼Œtesseract ä¸å‚ä¸ç¼–è¯‘ï¼Œäº§ç‰©æ—ä¹Ÿä¸ä¼šæœ‰ DLL/tessdataã€‚
+rem custom-protocol ±ØĞë´øÉÏ£º·ñÔò release °æ²»ÄÚÇ¶ dist/£¬Æô¶¯ºóÈ¥Á¬ devUrl£¬´°¿ÚÈ«ºÚ¡£
+rem Ä¬ÈÏ lite£º²»´ø ocr feature£¬tesseract ²»²ÎÓë±àÒë£¬²úÎïÅÔÒ²²»»áÓĞ DLL/tessdata¡£
 cargo build --release --features ocr,custom-protocol
 set "RC=%ERRORLEVEL%"
 popd

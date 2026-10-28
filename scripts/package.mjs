@@ -140,7 +140,18 @@ fs.copyFileSync(SRC, path.join(target, EXE_NAME))
 // 而不是无条件从 vendor 源拷：lite 包被要求带 17MB 用不上的文件是没道理的。
 const OCR_DLLS = ['tesseract50.dll', 'leptonica-1.82.0.dll']
 const OCR_LANGS = ['eng.traineddata', 'chi_sim.traineddata']
-const withOcr = OCR_DLLS.every((name) => fs.existsSync(path.join(path.dirname(SRC), name)))
+/**
+ * 判断这一份 exe 到底带没带 OCR。
+ *
+ * 不能只看「DLL 在不在」：target/release 是两次构建共用的目录，编过 OCR 版之后
+ * 那两个 DLL 会一直留在那儿，下一次 lite 构建会被误判成 OCR 版、把 17MB 一起打出去。
+ * 所以读 exe 本体：lite 版里有「这一版没有内置 OCR」那句提示（extract.rs 的
+ * cfg(not(feature = "ocr")) 分支），OCR 版没有。
+ */
+const exeBytes = fs.readFileSync(SRC)
+const liteMarker = Buffer.from('这一版没有内置 OCR', 'utf8')
+const withOcr = !exeBytes.includes(liteMarker) &&
+  OCR_DLLS.every((name) => fs.existsSync(path.join(path.dirname(SRC), name)))
 
 if (withOcr) {
   for (const name of OCR_DLLS) {
