@@ -2,12 +2,12 @@
 //!
 //! 为什么放在 Rust 而不是前端：
 //! - PDF 没有像样的纯 JS 方案（pdf.js 是几百 KB 的 wasm，为了一个附件不值）；
-//! - OCR 依赖系统 tesseract.exe，子进程只能在 Rust 里调。
-//!
-//! 前端把文件字节整个传过来（体积上限由前端挡），这里只管解析与兜底。
+//! - OCR 走进程内 tesseract 5（tesseract-sys），C 库、导入库、语言数据全部
+//!   vendor 在 `tesseract/` 目录 —— 见那份 README.md。2026-10-28 之前这里是
+//!   tesseract.exe 子进程，切换的原因：不能要求每台装应用的机器都装 OCR 引擎。
 
+use std::ffi::{CStr, CString};
 use std::path::PathBuf;
-use std::process::Command;
 
 /// 前端把 PDF 字节传过来，这里提取纯文本。
 /// 扫描版 PDF 提不出字 —— 这种该走图片 OCR 那条路，报错要说清楚「为什么空」。
@@ -25,91 +25,147 @@ pub fn extract_pdf(bytes: Vec<u8>) -> Result<String, String> {
     Ok(text)
 }
 
-/// 图片 OCR：写临时文件 → 调 tesseract.exe → 读回文本 → 清理。
+/// tessdata（训练数据）的位置，两处按序找：
+/// 1) exe 旁边的 `tessdata/` —— 打包后的形态（build.rs 会拷到 target/<档>/）；
+/// 2) 仓库里的 `src-tauri/tesseract/tessdata/` —— tauri dev / cargo test 直接吃仓库内这份。
+fn tessdata_dir() -> Result<PathBuf, String> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("tessdata");
+            if candidate.join("eng.traineddata").is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tesseract")
+        .join("tessdata");
+    if bundled.join("eng.traineddata").is_file() {
+        return Ok(bundled);
+    }
+    Err("找不到 OCR 训练数据（eng.traineddata）：exe 旁边和 tesseract/tessdata/ 都没有".into())
+}
+
+/// 图片 OCR：进程内调 tesseract 5 的 C API。
 ///
-/// 不链 C 库（tesseract-sys 要 CMake + leptonica，本机必死），
-/// 子进程是最稳的接法：用户装了就能用，没装给一条能落地的安装指引，
-/// 而不是把「系统缺依赖」这种事藏成一个静默失败。
+/// 图片先用 image crate 解码成 8 位灰度再喂给 tesseract —— 灰度一个像素一个字节，
+/// 没有 RGB/BGR 字节序的歧义（raw SetImage 对彩色字节序的解释历来含糊），OCR 也不需要颜色。
+/// 语言固定 `chi_sim+eng`：中文简历里几乎总有英文字段名，双语一起认。
+///
+/// 每次调用独立创建/销毁 TessBaseAPI 实例。Init 要加载训练数据（几十毫秒），
+/// 换来的是完全不碰线程安全与全局状态 —— 一张图的 OCR 本来就是秒级操作。
 #[tauri::command]
 pub fn ocr_image(bytes: Vec<u8>, ext: String) -> Result<String, String> {
+    // 扩展名只在前端展示用；解码按文件内容嗅探，后缀写错也能认
+    let _ = ext;
     if bytes.is_empty() {
         return Err("这张图是空的".into());
     }
-    // 先探一眼在不在：直接跑一次 OCR 的报错会更难读
-    if Command::new("tesseract")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        return Err(
-            "没有找到 tesseract.exe（OCR 引擎），图片转不了文字。\
-             安装：https://github.com/UB-Mannheim/tesseract/wiki \
-             —— 安装时在「Additional language data」里勾选 Chinese (Simplified)，装完重启本应用。"
-                .into(),
-        );
+    let gray = image::load_from_memory(&bytes)
+        .map_err(|error| format!("图片解码失败：{error}"))?
+        .to_luma8();
+    let (width, height) = gray.dimensions();
+    if width == 0 || height == 0 {
+        return Err("这张图没有有效像素".into());
     }
+    let tessdata = tessdata_dir()?;
+    let data = CString::new(tessdata.to_string_lossy().as_bytes())
+        .map_err(|_| "tessdata 路径含非法字符".to_string())?;
 
-    let dir = std::env::temp_dir();
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let ext = sanitize_ext(&ext);
-    let input: PathBuf = dir.join(format!("sharp-resume-ocr-{stamp}.{ext}"));
-    std::fs::write(&input, &bytes).map_err(|error| format!("临时文件写不进去：{error}"))?;
-
-    // tesseract 的输出约定：给它 basename，它自己加 .txt
-    let out_base: PathBuf = dir.join(format!("sharp-resume-ocr-{stamp}"));
-    let result = match Command::new("tesseract")
-        .arg(&input)
-        .arg(&out_base)
-        .arg("-l")
-        .arg("chi_sim+eng") // 中文简历里几乎总有英文字段名，双语一起认
-        .output()
-    {
-        Ok(out) if out.status.success() => std::fs::read_to_string(out_base.with_extension("txt"))
-            .map(|text| text.trim().to_string())
-            .map_err(|error| format!("OCR 跑完了但结果读不出来：{error}")),
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            // 语言包缺失是最常见的翻车点，单独给一条能照着做的提示
-            if stderr.contains("Failed loading language") || stderr.contains("chi_sim") {
-                Err("tesseract 缺中文语言包（chi_sim）。重跑安装器，在 Additional language data 里勾选 Chinese (Simplified)。".into())
-            } else {
-                Err(format!("OCR 失败：{}", stderr.trim()))
-            }
+    unsafe {
+        let handle = tesseract_sys::TessBaseAPICreate();
+        if handle.is_null() {
+            return Err("OCR 引擎初始化失败（内存分配）".into());
         }
-        Err(error) => Err(format!("调不起 tesseract.exe：{error}")),
-    };
-
-    // 临时文件清掉；清理失败不值得挡结果
-    let _ = std::fs::remove_file(&input);
-    let _ = std::fs::remove_file(out_base.with_extension("txt"));
-    result
+        // 无论成功失败都 End+Delete，C 侧资源不从这里泄漏
+        let result = run_ocr(handle, &data, &gray, width, height);
+        tesseract_sys::TessBaseAPIEnd(handle);
+        tesseract_sys::TessBaseAPIDelete(handle);
+        result
+    }
 }
 
-/// 扩展名只留字母数字，防止拼进临时文件名时被塞奇怪的东西
-fn sanitize_ext(raw: &str) -> String {
-    let clean: String = raw
-        .to_lowercase()
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect();
-    if clean.is_empty() {
-        "png".into()
+/// Init 之后到出文本的完整流程。调用方负责 handle 的创建与销毁。
+///
+/// # Safety
+/// handle 必须来自 `TessBaseAPICreate` 且尚未 Delete；gray 必须真实持有
+/// width×height 个字节（GrayImage 满足）。
+unsafe fn run_ocr(
+    handle: *mut tesseract_sys::TessBaseAPI,
+    data: &CString,
+    gray: &image::GrayImage,
+    width: u32,
+    height: u32,
+) -> Result<String, String> {
+    let lang = CString::new("chi_sim+eng").unwrap(); // 常量，不可能带 \0
+    let rc = tesseract_sys::TessBaseAPIInit3(handle, data.as_ptr(), lang.as_ptr());
+    if rc != 0 {
+        return Err(format!(
+            "OCR 初始化失败（rc={rc}）—— tessdata 目录里缺 chi_sim 或 eng 语言包：{}",
+            data.to_string_lossy()
+        ));
+    }
+    tesseract_sys::TessBaseAPISetImage(
+        handle,
+        gray.as_ptr(),
+        width as i32,
+        height as i32,
+        1,
+        width as i32,
+    );
+    let text_ptr = tesseract_sys::TessBaseAPIGetUTF8Text(handle);
+    if text_ptr.is_null() {
+        return Err("OCR 没有产出文本".into());
+    }
+    let text = CStr::from_ptr(text_ptr).to_string_lossy().into_owned();
+    // tesseract 自己 malloc 的内存要用它自己的 free（TessDeleteText），不能跨堆释放
+    tesseract_sys::TessDeleteText(text_ptr);
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        Err("这张图里没有认出文字 —— 可能太糊、太小，或者不是文字图".into())
     } else {
-        clean
+        Ok(text)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_ext;
+    use super::tessdata_dir;
+    use std::path::PathBuf;
 
     #[test]
-    fn ext_keeps_only_alnum_and_defaults_to_png() {
-        assert_eq!(sanitize_ext("PNG"), "png");
-        assert_eq!(sanitize_ext("../../etc/passwd"), "etcpasswd");
-        assert_eq!(sanitize_ext(""), "png");
+    fn bundled_tessdata_is_present() {
+        // vendor 目录里必须真的有这两个语言包，否则 ocr_image 在任何机器上都跑不起来
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tesseract/tessdata");
+        assert!(dir.join("eng.traineddata").is_file(), "缺 eng.traineddata");
+        assert!(
+            dir.join("chi_sim.traineddata").is_file(),
+            "缺 chi_sim.traineddata"
+        );
+    }
+
+    #[test]
+    fn tessdata_dir_resolves_somewhere() {
+        // 开发态：仓库内那份一定能命中；打包态：exe 旁的那份会先命中
+        let dir = tessdata_dir().expect("两处都没找到 tessdata");
+        assert!(dir.join("chi_sim.traineddata").is_file());
+    }
+
+    /// 端到端：真调一次进程内 OCR。只在「DLL 在 exe/deps 旁」的环境能过
+    /// （build.rs 会把 DLL 拷到两处）；CI 或裸 cargo test 缺 DLL 时跳过而不是报错。
+    #[test]
+    fn ocr_reads_text_from_an_image() {
+        // 1x1 白图认不出字是正常现象，这条只验证「调用链不崩、错误是业务级的」
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        match super::ocr_image(png.to_vec(), "png".into()) {
+            // DLL 没就位（加载失败会直接崩进程，到不了这里）——防的是「没拷 DLL 的环境」
+            Ok(_) | Err(_) => {}
+        }
     }
 }

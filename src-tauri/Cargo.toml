@@ -61,10 +61,13 @@ image = { version = "0.25", default-features = false, features = [
   "webp",
 ] }
 
-# 附件 PDF 的文本提取。纯 Rust（lopdf 系），无 C 依赖 ——
-# 图片 OCR 不在这里做：tesseract-sys 要 CMake + leptonica，本机必死，
-# 改走系统 tesseract.exe 子进程（见 extract.rs，没有就给出安装指引）。
+# 附件 PDF 的文本提取。纯 Rust（lopdf 系），无 C 依赖。
 pdf-extract = "0.7"
+
+# 图片 OCR 走进程内 tesseract（取代旧的 tesseract.exe 子进程）。
+# 库本体、导入库、头文件、语言数据全部 vendor 在 tesseract/ 目录（见其 README.md），
+# build script 靠 .tools/*.bat 设的 TESSERACT_*/LEPTONICA_*/LIBCLANG_PATH 环境变量找到它们。
+tesseract-sys = "0.6.3"
 
 # 读取 Windows「辅助功能 → 文本大小」的实际缩放值，供 UI 字号跟随。
 [target.'cfg(windows)'.dependencies]

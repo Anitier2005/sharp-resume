@@ -60,6 +60,29 @@ set "INCLUDE=%MSVC_ROOT%\include;%SDK_ROOT%\Include\%SDK_VER%\ucrt;%SDK_ROOT%\In
 set "LIB=%MSVC_ROOT%\lib\x64;%SDK_ROOT%\Lib\%SDK_VER%\ucrt\x64;%SDK_ROOT%\Lib\%SDK_VER%\um\x64;%~dp0libstub"
 set "PATH=%CL_DIR%;%RC_DIR%;%PATH%"
 
+rem ----------------------------------------------------------------------------
+rem 进程内 OCR（tesseract-sys）的构建期依赖。三样缺一不可：
+rem   1) LIBCLANG_PATH —— bindgen 运行时要 libclang.dll（pip install libclang 装的那份）
+rem   2) TESSERACT_* / LEPTONICA_* —— C 库的头文件与导入库位置（vendor 在 src-tauri/tesseract/）
+rem      注意值必须是**反斜杠**路径：link.exe 的 /LIBPATH 不认正斜杠
+rem   3) VS 自带的 CMake 进 PATH —— 本身不参与 OCR 构建，但依赖树里要用 cmake 的
+rem      构建脚本没了它会直接失败，顺手一起给
+rem 环境变量已定义时（外部 CI 想换 libclang 位置）尊重外部值。
+rem ----------------------------------------------------------------------------
+if not defined LIBCLANG_PATH (
+  for /f "delims=" %%D in ('python -c "import clang,os;print(os.path.join(os.path.dirname(clang.__file__),'native'))" 2^>nul') do set "LIBCLANG_PATH=%%D"
+)
+set "TESSERACT_INCLUDE_PATHS=%~dp0..\src-tauri\tesseract\include"
+set "TESSERACT_LINK_PATHS=%~dp0..\src-tauri\tesseract\lib\x64"
+set "TESSERACT_LINK_LIBS=tesseract50"
+set "LEPTONICA_INCLUDE_PATH=%~dp0..\src-tauri\tesseract\include"
+set "LEPTONICA_LINK_PATHS=%~dp0..\src-tauri\tesseract\lib\x64"
+set "LEPTONICA_LINK_LIBS=lept"
+rem VS 自带的 CMake（MSVC_ROOT 上溯四级是 VS 根）：依赖树里要 cmake 的构建脚本没了它会直接失败
+for %%C in ("%MSVC_ROOT%\..\..\..\..\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin") do (
+  if exist "%%~C\cmake.exe" set "PATH=%PATH%;%%~C"
+)
+
 pushd "%~dp0..\src-tauri"
 rem custom-protocol 必须带上：否则 release 版不内嵌 dist/，启动后去连 devUrl，窗口全黑。
 cargo build --release --features custom-protocol

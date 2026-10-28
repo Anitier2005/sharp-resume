@@ -133,10 +133,28 @@ fs.mkdirSync(target, { recursive: true })
 // —— 复制 ——
 fs.copyFileSync(SRC, path.join(target, EXE_NAME))
 
-// —— 自检：目录里只能有一个文件，且与源一致 ——
+// 进程内 OCR 的运行时伴侣：两个 DLL（加载期链接，缺了 exe 起不来）+ tessdata 训练数据。
+// 直接从 vendor 源拷（src-tauri/tesseract/），不依赖 build.rs 有没有先拷进 target/。
+const OCR_DLLS = ['tesseract50.dll', 'leptonica-1.82.0.dll']
+const OCR_LANGS = ['eng.traineddata', 'chi_sim.traineddata']
+for (const name of OCR_DLLS) {
+  const src = path.resolve('src-tauri/tesseract/bin/x64', name)
+  if (!fs.existsSync(src)) fail(`缺 OCR 运行库 ${src}（tesseract/ 目录不完整？）`)
+  fs.copyFileSync(src, path.join(target, name))
+}
+fs.mkdirSync(path.join(target, 'tessdata'), { recursive: true })
+for (const name of OCR_LANGS) {
+  const src = path.resolve('src-tauri/tesseract/tessdata', name)
+  if (!fs.existsSync(src)) fail(`缺 OCR 语言包 ${src}`)
+  fs.copyFileSync(src, path.join(target, 'tessdata', name))
+}
+info(`OCR 伴侣已带上：${OCR_DLLS.join('、')} + tessdata(${OCR_LANGS.join('、')})`)
+
+// —— 自检：exe + 两个 DLL + tessdata 目录，一样都不能少 ——
 const finalFiles = fs.readdirSync(target)
-if (finalFiles.length !== 1 || finalFiles[0] !== EXE_NAME) {
-  fail(`自检失败：目录内容异常 → ${finalFiles.join('、') || '(空)'}`)
+const missing = [EXE_NAME, ...OCR_DLLS, 'tessdata'].filter((n) => !finalFiles.includes(n))
+if (missing.length) {
+  fail(`自检失败：缺 ${missing.join('、')}`)
 }
 
 const srcSize = fs.statSync(SRC).size

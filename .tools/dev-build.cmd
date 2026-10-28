@@ -43,6 +43,20 @@ set "INCLUDE=%MSVC_ROOT%\include;%SDK_ROOT%\Include\%SDK_VER%\ucrt;%SDK_ROOT%\In
 set "LIB=%MSVC_ROOT%\lib\x64;%SDK_ROOT%\Lib\%SDK_VER%\ucrt\x64;%SDK_ROOT%\Lib\%SDK_VER%\um\x64;%~dp0libstub"
 set "PATH=%CL_DIR%;%RC_DIR%;%PATH%"
 
+rem 进程内 OCR（tesseract-sys）的构建期依赖，与 build.bat 同一套；说明看那边
+if not defined LIBCLANG_PATH (
+  for /f "delims=" %%D in ('python -c "import clang,os;print(os.path.join(os.path.dirname(clang.__file__),'native'))" 2^>nul') do set "LIBCLANG_PATH=%%D"
+)
+set "TESSERACT_INCLUDE_PATHS=%~dp0..\src-tauri\tesseract\include"
+set "TESSERACT_LINK_PATHS=%~dp0..\src-tauri\tesseract\lib\x64"
+set "TESSERACT_LINK_LIBS=tesseract50"
+set "LEPTONICA_INCLUDE_PATH=%~dp0..\src-tauri\tesseract\include"
+set "LEPTONICA_LINK_PATHS=%~dp0..\src-tauri\tesseract\lib\x64"
+set "LEPTONICA_LINK_LIBS=lept"
+for %%C in ("%MSVC_ROOT%\..\..\..\..\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin") do (
+  if exist "%%~C\cmake.exe" set "PATH=%PATH%;%%~C"
+)
+
 echo ============================================================
 echo  MSVC : %MSVC_ROOT%
 echo  SDK  : %SDK_ROOT% %SDK_VER%
@@ -57,7 +71,7 @@ popd
 
 echo.
 echo ============================================================
-if "%RC%"=="0" echo  [OK] 编译成功 -> src-tauri\target\debug\sharp-resume.exe
+if "%RC%"=="0" echo  [OK] 编译成功�������� src-tauri\target\debug\sharp-resume.exe
 if not "%RC%"=="0" echo  [FAIL] 编译失败，exit=%RC%，上面的红字就是原因
 echo  结束时间 %DATE% %TIME%
 echo ============================================================
