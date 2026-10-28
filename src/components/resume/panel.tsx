@@ -586,7 +586,7 @@ export function ResumePanel() {
           >
             <MenuItem label="空白页" hint="自己写" onSelect={addBlankPage} />
             <MenuItem
-              label="上传图片作为页…"
+              label="添加文件"
               hint="整页原件"
               onSelect={() => fileRef.current?.click()}
             />

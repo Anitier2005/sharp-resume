@@ -29,7 +29,19 @@ import styles from "./panel.module.css";
  *
  * 预置条目来自编译期嵌入的清单，改不了；想改就「复制为我的条目」。
  */
-export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function KnowledgePanel({
+  open,
+  onClose,
+  embedded = false,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /**
+   * 跑在独立窗口里：不要遮罩、不要圆角与外框、不要自己的关闭键 ——
+   * 窗口标题栏已经有一个了，两个 X 会让人不知道该点哪个。
+   */
+  embedded?: boolean;
+}) {
   const veilRef = useRef<HTMLDivElement | null>(null);
   const toast = useToast();
 
@@ -58,9 +70,9 @@ export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () =
     void reload();
   }, [open, reload]);
 
-  // ESC 关闭：捕获阶段拦下，别让底下的编辑器也收到
+  // ESC 关闭：捕获阶段拦下，别让底下的编辑器也收到（窗口模式不需要，关窗即可）
   useEffect(() => {
-    if (!open) return;
+    if (!open || embedded) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.stopPropagation();
@@ -68,7 +80,7 @@ export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () =
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
-  }, [open, onClose]);
+  }, [open, onClose, embedded]);
 
   useVeilWheelLock(veilRef, open);
 
@@ -162,10 +174,17 @@ export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () =
 
   if (!open) return null;
 
-  const dialog = (
-    <div ref={veilRef} className={shared.veil} data-print="hide">
-      <div className={styles.box} role="dialog" aria-modal="true" aria-label="知识库">
-        <header className={styles.head}>
+  const box = (
+    <div
+      className={embedded ? `${styles.box} ${styles.windowBox}` : styles.box}
+      role={embedded ? undefined : "dialog"}
+      aria-modal={embedded ? undefined : true}
+      aria-label="知识库"
+    >
+      {/* 窗口模式不画这一条：窗口标题栏已经写着「知识库」，
+          再放一个同名大标题只是把内容往下推 44px */}
+      {!embedded && (
+        <div className={styles.head}>
           <div className={styles.title}>
             <BookOpen size={13} />
             <b>知识库</b>
@@ -173,7 +192,8 @@ export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () =
           <button type="button" className={shared.overlayClose} aria-label="关闭" onClick={onClose}>
             <Close size={11} />
           </button>
-        </header>
+        </div>
+      )}
 
         <div className={styles.body}>
           <div className={styles.side}>
@@ -326,13 +346,25 @@ export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () =
           </div>
         </div>
       </div>
+  );
+
+  // 窗口模式：直接铺满，不套遮罩也不 portal（整个页面就是它）
+  const surface = embedded ? (
+    box
+  ) : (
+    <div ref={veilRef} className={shared.veil} data-print="hide">
+      {box}
     </div>
   );
 
-  const host = typeof document === "undefined" ? null : document.querySelector<HTMLElement>(".win");
+  const host =
+    typeof document === "undefined" || embedded
+      ? null
+      : document.querySelector<HTMLElement>(".win");
+
   return (
     <>
-      {host ? createPortal(dialog, host) : dialog}
+      {host ? createPortal(surface, host) : surface}
       {/* 确认窗必须挂在 portal 之外单独渲染：它自己也 portal 进 .win，
           嵌在对话框树里会因为层级关系被盖住 */}
       {confirming && doc && (

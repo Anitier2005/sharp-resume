@@ -11,7 +11,7 @@
  * 方便新代码只记一个入口。
  */
 export { Button, type ButtonProps, type ButtonVariant, type ButtonSize } from "./button";
-export { Field, Input, Textarea, ReadonlyValue } from "./field";
+export { Field, Input, PasswordInput, Textarea, ReadonlyValue } from "./field";
 export { Select, type SelectOption, type SelectProps } from "./select";
 export { Slider, type SliderProps } from "./slider";
 export { Segmented, Chip, type SegmentedOption } from "./choice";

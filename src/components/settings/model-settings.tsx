@@ -1,31 +1,47 @@
-import { useMemo, useState } from "react";
-import { aiFromModel, loadAi, loadAux, saveAi, saveAux, type AuxModelChoice } from "@/lib/ai";
+import { useMemo, useState, type ChangeEvent } from "react";
 import {
+  aiFromModel,
+  loadAi,
+  loadAux,
+  saveAi,
+  saveAux,
+  type AiSettings,
+  type AuxModelChoice,
+} from "@/lib/ai";
+import {
+  CONTEXT_PRESETS,
+  defaultProfile,
   findModel,
   isCustomModel,
   listModels,
+  kindOf,
+  listProfiles,
   removeCustomModel,
+  removeProfile,
   saveCustomModel,
+  saveProfile,
   type ModelConfig,
   type ModelKind,
+  type ModelProfile,
 } from "@/lib/model-config";
 import { configureKnowledge } from "@/lib/knowledge";
 import { notifySettingsChanged } from "@/lib/settings-window";
-import { Button, Field, Input, Segmented, Slider } from "@/components/ui";
+import { Button, Field, Input, ListEmpty, PasswordInput, Select, Tooltip } from "@/components/ui";
 import { Confirm } from "@/components/ui/confirm";
-import { ChevronLeft } from "@/components/ui/icons";
+import { Check, ChevronLeft, Gear, Plus, Trash } from "@/components/ui/icons";
+import { cx } from "@/lib/cx";
 import styles from "./settings.module.css";
 
 /**
  * 模型设置（独立窗口）。
  *
- * 结构就是三层：**三个 tab（按用途分）→ 该用途的模型列表 → 单个模型的设置**。
+ * 三层：**三个 tab（按用途）→ 该用途的模型列表 → 单个模型的设置**。
  *
- * 之前是一个长页面把所有东西摊在一起：三组列表、三组接口地址、三组说明文字，
- * 一屏里十几个输入框，改一个温度要在里面找半天。现在同一时刻只显示一件事。
+ * 列表里「点行 = 选中这个模型」，「行尾齿轮 = 进它的设置」——
+ * 这两件事以前挤在同一个点击上：想看看某条配置，一点就把当前模型换掉了。
  *
- * 没有「保存」按钮：字段改完即写（localStorage + 通知主窗口）。
- * 设置页里的每一个输入都是「所见即所得」的开关，再要一次确认只是多一步。
+ * 每个模型下可以有若干**配置**（官方 / 公司代理 / 临时 key）。配置是一组
+ * 「网关 + 密钥 + 参数」，切换只换指针，不用重填。字段改完即写，没有保存按钮。
  */
 
 const TABS: { key: ModelKind; label: string }[] = [
@@ -34,7 +50,6 @@ const TABS: { key: ModelKind; label: string }[] = [
   { key: "ocr", label: "OCR" },
 ];
 
-/** 新建草稿的默认值：按用途给一套能直接跑的缺省 */
 function blank(kind: ModelKind, baseUrl: string): ModelConfig {
   return {
     kind,
@@ -54,20 +69,38 @@ export function ModelSettings() {
   const [tab, setTab] = useState<ModelKind>("chat");
   const [ai, setAi] = useState(loadAi);
   const [aux, setAux] = useState(loadAux);
-  /** 详情页显示哪一条；null = 停在列表 */
-  const [openId, setOpenId] = useState<string | null>(null);
+  /**
+   * 详情页显示哪个模型；null = 停在列表。
+   * 支持 `?open=<modelId>` 直接落到某个模型的详情（窗口可以被外部指到具体一条）。
+   */
+  const [openId, setOpenId] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get("open"),
+  );
   /** 新建草稿：还没落盘的模型 */
   const [draft, setDraft] = useState<ModelConfig | null>(null);
-  const [confirming, setConfirming] = useState<ModelConfig | null>(null);
-  /** 自定义模型存在 localStorage，写完之后用它触发一次重读 */
+  const [dropModel, setDropModel] = useState<ModelConfig | null>(null);
+  const [dropProfile, setDropProfile] = useState<ModelProfile | null>(null);
+  /** 模型与配置都存在 localStorage，写完之后用它触发一次重读 */
   const [tick, setTick] = useState(0);
 
   const models = useMemo(() => listModels(tab), [tab, tick]);
   const activeId = tab === "chat" ? ai.model : (aux[tab]?.model ?? "");
-  const editing = draft ?? (openId ? findModel(openId) ?? null : null);
+  const activeProfileId = tab === "chat" ? ai.profileId : aux[tab]?.profileId;
 
-  /** 对话模型的选择直接影响主窗口，写完通知它重读 */
-  const writeAi = (next: typeof ai) => {
+  const editing = draft ?? (openId ? (findModel(openId) ?? null) : null);
+  const isDraft = draft !== null;
+  const custom = editing !== null && (isDraft || isCustomModel(editing.id));
+  const profiles = useMemo(
+    () => (editing && !isDraft ? listProfiles(editing) : []),
+    // tick 变了说明磁盘上的配置变了，必须重算
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [editing, tick, isDraft],
+  );
+  const current = profiles.find((item) => item.id === activeProfileId) ?? profiles[0] ?? null;
+
+  /* ---------------- 写入 ---------------- */
+
+  const writeAi = (next: AiSettings) => {
     setAi(next);
     saveAi(next);
     void notifySettingsChanged("ai");
@@ -81,38 +114,97 @@ export function ModelSettings() {
     void notifySettingsChanged("aux");
   };
 
-  /** 点列表一行 = 选中它并进设置 */
-  const choose = (model: ModelConfig) => {
-    setDraft(null);
-    setOpenId(model.id);
+  /** 把某套配置落到运行时设置上（对话写 ai，嵌入/OCR 写 aux） */
+  const applyToRuntime = (model: ModelConfig, profile: ModelProfile) => {
     if (tab === "chat") {
-      if (ai.model !== model.id) writeAi(aiFromModel(model, ai));
-    } else if (aux[tab]?.model !== model.id) {
-      writeAux(tab, { model: model.id, baseUrl: model.baseUrl, apiKey: "" });
+      writeAi({
+        ...ai,
+        model: model.id,
+        profileId: profile.id,
+        baseUrl: profile.baseUrl || model.baseUrl,
+        apiKey: profile.apiKey,
+        temperature: profile.temperature ?? model.defaultTemperature,
+        reasoning: profile.reasoning ?? model.reasoning[0],
+        contextWindow: profile.contextWindow ?? model.contextWindow,
+      });
+    } else {
+      writeAux(tab, {
+        model: model.id,
+        profileId: profile.id,
+        baseUrl: profile.baseUrl,
+        apiKey: profile.apiKey,
+      });
     }
   };
 
-  /** 修改当前模型的自身字段（名称、窗口、维度…）；网关与密钥不在这里 */
+  /** 点列表一行 = 选中这个模型（用它当前生效的那套配置） */
+  const choose = (model: ModelConfig) => {
+    const list = listProfiles(model);
+    let profile = list.find((item) => item.id === activeProfileId) ?? list[0];
+    if (!profile) {
+      // 配置被删光了的模型：选中时补一套默认的，否则选中了也没有可用网关
+      profile = defaultProfile(model);
+      saveProfile(model.id, profile);
+      setTick((value) => value + 1);
+    }
+    applyToRuntime(model, profile);
+  };
+
+  /**
+   * 正在看配置是否就是当前生效的那套。
+   *
+   * 老数据里 `ai` 没有 profileId（那时还没有「配置」这个概念），
+   * 这时把第一条当作生效的那条 —— 否则第一次打开时没有任何一条打勾，
+   * 用户会以为「当前配置」是空的。
+   */
+  const liveProfileId =
+    editing && activeId === editing.id ? (activeProfileId ?? profiles[0]?.id) : null;
+  const isLive = (profile: ModelProfile) =>
+    editing !== null && activeId === editing.id && liveProfileId === profile.id;
+
+  /** 改配置字段：写盘；如果它正在生效，同时同步到运行时 */
+  const patchProfile = (profile: ModelProfile, patch: Partial<ModelProfile>) => {
+    if (!editing) return;
+    const next = { ...profile, ...patch };
+    saveProfile(editing.id, next);
+    setTick((value) => value + 1);
+    if (isLive(profile)) applyToRuntime(editing, next);
+  };
+
+  /** 选中某套配置 */
+  const activate = (profile: ModelProfile) => {
+    if (!editing) return;
+    applyToRuntime(editing, profile);
+  };
+
+  const addProfile = () => {
+    if (!editing) return;
+    const profile: ModelProfile = {
+      id: `p-${Date.now().toString(36)}`,
+      label: `配置 ${profiles.length + 1}`,
+      baseUrl: editing.baseUrl,
+      apiKey: "",
+      temperature: editing.defaultTemperature,
+      reasoning: editing.reasoning[0],
+      contextWindow: editing.contextWindow,
+    };
+    saveProfile(editing.id, profile);
+    setTick((value) => value + 1);
+    // 新加的这套直接生效：用户点「添加配置」就是想马上用它
+    applyToRuntime(editing, profile);
+  };
+
+  /* ---------------- 模型本身 ---------------- */
+
   const patchModel = (patch: Partial<ModelConfig>) => {
     if (!editing) return;
     const next = { ...editing, ...patch };
-    if (draft) {
+    if (isDraft) {
       setDraft(next);
       return;
     }
     saveCustomModel(next);
     setTick((value) => value + 1);
-  };
-
-  /** 网关与密钥始终属于「这个用途」，不跟着某一条模型走 —— 否则换模型就得重填一次 */
-  const patchEndpoint = (patch: { baseUrl?: string; apiKey?: string }) => {
-    if (tab === "chat") {
-      writeAi({ ...ai, ...patch });
-      return;
-    }
-    const current = aux[tab];
-    if (!current) return;
-    writeAux(tab, { ...current, ...patch });
   };
 
   const commitDraft = () => {
@@ -121,20 +213,25 @@ export function ModelSettings() {
     if (!id) return;
     const model = { ...draft, label: draft.label.trim() || id };
     saveCustomModel(model);
+    const profile = defaultProfile(model);
+    saveProfile(model.id, profile);
     setDraft(null);
     setTick((value) => value + 1);
-    choose(model);
+    setOpenId(model.id);
+    applyToRuntime(model, profile);
   };
 
   const drop = (model: ModelConfig) => {
-    setConfirming(null);
+    setDropModel(null);
     removeCustomModel(model.id);
     setOpenId(null);
     setTick((value) => value + 1);
     if (tab === "chat" && ai.model === model.id) {
-      // 删掉的正是当前在用的：退到第一条内置，别留一个查不到的 id
       const fallback = listModels("chat").find((item) => !isCustomModel(item.id));
-      if (fallback) writeAi(aiFromModel(fallback, ai));
+      if (fallback) {
+        const first = listProfiles(fallback)[0];
+        if (first) writeAi(aiFromModel(fallback, ai));
+      }
     } else if (tab !== "chat" && aux[tab]?.model === model.id) {
       writeAux(tab, null);
     }
@@ -145,15 +242,10 @@ export function ModelSettings() {
     setOpenId(null);
   };
 
-  const endpoint = tab === "chat"
-    ? { baseUrl: ai.baseUrl, apiKey: ai.apiKey }
-    : { baseUrl: aux[tab]?.baseUrl ?? "", apiKey: aux[tab]?.apiKey ?? "" };
-
   /* ---------------- 详情 ---------------- */
 
   if (editing) {
-    const custom = draft !== null || isCustomModel(editing.id);
-    const isDraft = draft !== null;
+    const kindLabel = editing.kind === "embedding" ? "嵌入" : editing.kind === "ocr" ? "OCR" : "对话";
     return (
       <div className={styles.page}>
         <header className={styles.head}>
@@ -161,104 +253,200 @@ export function ModelSettings() {
             <ChevronLeft size={12} />
           </Button>
           <b>{isDraft ? "添加模型" : editing.label}</b>
+          {!isDraft && custom && (
+            <Button variant="quiet" size="sm" onClick={() => setDropModel(editing)}>
+              删除模型
+            </Button>
+          )}
         </header>
 
-        <div className={styles.fields}>
-          <Field label="显示名称">
-            <Input
-              data-autofocus
-              value={editing.label}
-              placeholder={isDraft ? "例如：内网 Qwen3" : undefined}
-              disabled={!custom}
-              onChange={(event) => patchModel({ label: event.target.value })}
-            />
-          </Field>
-          <Field label="模型名">
-            <Input
-              value={editing.id}
-              placeholder="qwen3-32b"
-              spellCheck={false}
-              // 已保存的自定义模型不允许改 id：改 id 等于另建一条，会留下一个孤儿
-              disabled={!isDraft && !custom ? true : !isDraft}
-              onChange={(event) => patchModel({ id: event.target.value })}
-            />
-          </Field>
-
-          <Field label="接口地址" wide>
-            <Input
-              value={endpoint.baseUrl}
-              spellCheck={false}
-              placeholder="https://your-gateway/v1"
-              onChange={(event) => patchEndpoint({ baseUrl: event.target.value })}
-            />
-          </Field>
-          <Field label="API Key" wide>
-            <Input
-              type="password"
-              value={endpoint.apiKey}
-              spellCheck={false}
-              placeholder={tab === "chat" ? "sk-…" : "留空沿用对话模型"}
-              onChange={(event) => patchEndpoint({ apiKey: event.target.value })}
-            />
-          </Field>
-
-          {tab === "chat" && (
-            <Field label={`温度 · ${ai.temperature.toFixed(2)}`}>
-              <Slider
-                ariaLabel="温度"
-                min={0}
-                max={1}
-                step={0.05}
-                value={ai.temperature}
-                onChange={(value) => writeAi({ ...ai, temperature: value })}
+        <section className={styles.group}>
+          <span className={styles.groupTitle}>模型 · {kindLabel}</span>
+          <div className={styles.fields}>
+            <Field label="显示名称">
+              <Input
+                data-autofocus
+                value={editing.label}
+                placeholder={isDraft ? "例如：内网 Qwen3" : undefined}
+                disabled={!custom}
+                onChange={(event) => patchModel({ label: event.target.value })}
               />
             </Field>
-          )}
-
-          <Field label="上下文窗口">
-            <Input
-              value={String(editing.contextWindow)}
-              inputMode="numeric"
-              disabled={!custom}
-              onChange={(event) =>
-                patchModel({ contextWindow: Number(event.target.value.replace(/\D/g, "")) || 0 })
-              }
-            />
-          </Field>
-
-          {tab === "chat" && editing.reasoning.length > 0 && (
-            <Field label="思维强度" wide>
-              <Segmented
-                ariaLabel="思维强度"
-                value={ai.reasoning ?? editing.reasoning[0] ?? ""}
-                options={editing.reasoning.map((level) => ({ value: level, label: level }))}
-                onChange={(level) => writeAi({ ...ai, reasoning: level })}
+            <Field label="模型名">
+              <Input
+                value={editing.id}
+                placeholder="qwen3-32b"
+                spellCheck={false}
+                // 保存后的自定义模型不允许改 id：改 id 等于另建一条，会留下孤儿配置
+                disabled={!isDraft}
+                onChange={(event) => patchModel({ id: event.target.value })}
               />
             </Field>
-          )}
-        </div>
+            {editing.kind !== "ocr" && custom && (
+              <Field label="思维强度档位 · 逗号分隔" wide>
+                <Input
+                  value={editing.reasoning.join(", ")}
+                  placeholder="low, medium, high"
+                  spellCheck={false}
+                  onChange={(event) =>
+                    patchModel({
+                      reasoning: event.target.value
+                        .split(/[,，\s]+/)
+                        .map((item) => item.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                />
+              </Field>
+            )}
+          </div>
+        </section>
 
-        <div className={styles.actions}>
-          {isDraft ? (
-            <Button variant="primary" disabled={!draft?.id.trim()} onClick={commitDraft}>
-              添加
-            </Button>
-          ) : (
-            custom && (
-              <Button variant="quiet" onClick={() => setConfirming(editing)}>
-                删除这个模型
-              </Button>
-            )
-          )}
-        </div>
+        {isDraft ? (
+          <DraftProfile draft={draft!} onCommit={commitDraft} />
+        ) : (
+          <>
+            <section className={styles.group}>
+              <div className={styles.groupHead}>
+                <span className={styles.groupTitle}>配置</span>
+                <Button size="sm" leading={<Plus size={10} />} onClick={addProfile}>
+                  添加配置
+                </Button>
+              </div>
+              <div className={styles.list}>
+                {profiles.map((profile) => {
+                  const live = isLive(profile);
+                  return (
+                    <div
+                      key={profile.id}
+                      className={cx(styles.row, styles.rowStatic, live && styles.rowOn)}
+                    >
+                      <button
+                        type="button"
+                        className={styles.rowMain}
+                        onClick={() => activate(profile)}
+                      >
+                        <span className={styles.rowName}>{profile.label}</span>
+                        {live && <Check size={10} className={styles.rowCheck} />}
+                      </button>
+                      <Tooltip label="删除这组配置">
+                        <Button
+                          variant="quiet"
+                          size="xs"
+                          icon
+                          aria-label={`删除配置 ${profile.label}`}
+                          onClick={() => setDropProfile(profile)}
+                        >
+                          <Trash size={10} />
+                        </Button>
+                      </Tooltip>
+                    </div>
+                  );
+                })}
+                {profiles.length === 0 && <ListEmpty>还没有配置，点右上「添加配置」</ListEmpty>}
+              </div>
+            </section>
 
-        {confirming && (
+            {current && (
+              <section className={styles.group}>
+                <span className={styles.groupTitle}>
+                  配置内容{isLive(current) ? " · 正在使用" : ""}
+                </span>
+                <div className={styles.fields}>
+                  <Field label="配置名称">
+                    <Input
+                      value={current.label}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        patchProfile(current, { label: event.target.value })
+                      }
+                    />
+                  </Field>
+                  <Field label="上下文长度">
+                    <Select
+                      ariaLabel="上下文长度"
+                      value={String(current.contextWindow ?? editing.contextWindow)}
+                      options={contextOptions(current.contextWindow ?? editing.contextWindow)}
+                      onChange={(value) =>
+                        patchProfile(current, { contextWindow: Number(value) })
+                      }
+                    />
+                  </Field>
+                  <Field label="接口地址" wide>
+                    <Input
+                      value={current.baseUrl}
+                      spellCheck={false}
+                      placeholder="https://your-gateway/v1"
+                      onChange={(event) => patchProfile(current, { baseUrl: event.target.value })}
+                    />
+                  </Field>
+                  <Field label="API Key" wide>
+                    <PasswordInput
+                      value={current.apiKey}
+                      spellCheck={false}
+                      placeholder={tab === "chat" ? "sk-…" : "留空沿用对话模型"}
+                      onChange={(event) => patchProfile(current, { apiKey: event.target.value })}
+                    />
+                  </Field>
+                  {kindOf(editing) === "chat" && (
+                    <>
+                      <Field label="温度">
+                        <Input
+                          value={String(current.temperature ?? editing.defaultTemperature)}
+                          inputMode="decimal"
+                          onChange={(event) => {
+                            const next = Number(event.target.value.replace(/[^\d.]/g, ""));
+                            // 空输入时先不写：写 0 会把用户正在输入的「0.7」变成 0
+                            if (event.target.value.trim() === "") return;
+                            patchProfile(current, {
+                              temperature: Number.isFinite(next)
+                                ? Math.min(2, Math.max(0, next))
+                                : undefined,
+                            });
+                          }}
+                        />
+                      </Field>
+                      {editing.reasoning.length > 0 && (
+                        <Field label="思维强度">
+                          <Select
+                            ariaLabel="思维强度"
+                            value={current.reasoning ?? editing.reasoning[0] ?? ""}
+                            options={editing.reasoning.map((level) => ({
+                              value: level,
+                              label: level,
+                            }))}
+                            onChange={(value) => patchProfile(current, { reasoning: value })}
+                          />
+                        </Field>
+                      )}
+                    </>
+                  )}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+
+        {dropModel && (
           <Confirm
             open
-            title={`删除「${confirming.label}」？`}
-            description="只从这台机器的模型清单里移除，网关与密钥不受影响。"
-            onCancel={() => setConfirming(null)}
-            onConfirm={() => drop(confirming)}
+            title={`删除模型「${dropModel.label}」？`}
+            description="模型和它下面的所有配置都会从这台机器上移除。"
+            onCancel={() => setDropModel(null)}
+            onConfirm={() => drop(dropModel)}
+          />
+        )}
+
+        {dropProfile && editing && (
+          <Confirm
+            open
+            title={`删除配置「${dropProfile.label}」？`}
+            description="只删这一组网关与密钥，模型本身保留。"
+            onCancel={() => setDropProfile(null)}
+            onConfirm={() => {
+              removeProfile(editing.id, dropProfile.id);
+              setDropProfile(null);
+              setTick((value) => value + 1);
+            }}
           />
         )}
       </div>
@@ -291,7 +479,7 @@ export function ModelSettings() {
         {tab !== "chat" && (
           <button
             type="button"
-            className={cxRow(!activeId)}
+            className={cx(styles.row, !activeId && styles.rowOn)}
             onClick={() => {
               writeAux(tab, null);
               setOpenId(null);
@@ -301,17 +489,35 @@ export function ModelSettings() {
           </button>
         )}
 
-        {models.map((model) => (
-          <button
-            key={model.id}
-            type="button"
-            className={cxRow(model.id === activeId)}
-            onClick={() => choose(model)}
-          >
-            <span className={styles.rowName}>{model.label}</span>
-            <span className={styles.rowMeta}>{model.provider}</span>
-          </button>
-        ))}
+        {models.map((model) => {
+          const on = model.id === activeId;
+          const count = listProfiles(model).length;
+          return (
+            <div key={model.id} className={cx(styles.row, styles.rowStatic, on && styles.rowOn)}>
+              {/* 点主体 = 选中；右侧齿轮 = 进设置。两件事不能挤在同一个点击上 */}
+              <button type="button" className={styles.rowMain} onClick={() => choose(model)}>
+                <span className={styles.rowName}>{model.label}</span>
+                <span className={styles.rowMeta}>{model.provider}</span>
+                {count > 1 && <span className={styles.rowMeta}>{count} 组配置</span>}
+                {on && <Check size={10} className={styles.rowCheck} />}
+              </button>
+              <Tooltip label="设置">
+                <Button
+                  variant="quiet"
+                  size="xs"
+                  icon
+                  aria-label={`打开 ${model.label} 的设置`}
+                  onClick={() => {
+                    setDraft(null);
+                    setOpenId(model.id);
+                  }}
+                >
+                  <Gear size={11} />
+                </Button>
+              </Tooltip>
+            </div>
+          );
+        })}
 
         {/* 添加是列表的最后一项：这一页就是「模型清单」，加东西当然在清单末尾 */}
         <button
@@ -319,7 +525,7 @@ export function ModelSettings() {
           className={`${styles.row} ${styles.rowAdd}`}
           onClick={() => {
             setOpenId(null);
-            setDraft(blank(tab, endpoint.baseUrl || ai.baseUrl));
+            setDraft(blank(tab, tab === "chat" ? ai.baseUrl : (aux[tab]?.baseUrl ?? ai.baseUrl)));
           }}
         >
           <span className={styles.rowName}>添加模型</span>
@@ -329,6 +535,73 @@ export function ModelSettings() {
   );
 }
 
-function cxRow(on: boolean) {
-  return on ? `${styles.row} ${styles.rowOn}` : styles.row;
+/* ==========================================================================
+   新建模型时的第一组配置
+   ========================================================================== */
+
+function DraftProfile({ draft, onCommit }: { draft: ModelConfig; onCommit: () => void }) {
+  const [profile, setProfile] = useState<ModelProfile>(() => ({
+    ...defaultProfile(draft),
+    label: "默认",
+  }));
+
+  return (
+    <>
+      <section className={styles.group}>
+        <span className={styles.groupTitle}>第一组配置</span>
+        <div className={styles.fields}>
+          <Field label="配置名称">
+            <Input
+              value={profile.label}
+              onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                setProfile({ ...profile, label: event.target.value })
+              }
+            />
+          </Field>
+          <Field label="上下文长度">
+            <Select
+              ariaLabel="上下文长度"
+              value={String(profile.contextWindow ?? draft.contextWindow)}
+              options={contextOptions(profile.contextWindow ?? draft.contextWindow)}
+              onChange={(value) => setProfile({ ...profile, contextWindow: Number(value) })}
+            />
+          </Field>
+          <Field label="接口地址" wide>
+            <Input
+              value={profile.baseUrl}
+              spellCheck={false}
+              placeholder="https://your-gateway/v1"
+              onChange={(event) => setProfile({ ...profile, baseUrl: event.target.value })}
+            />
+          </Field>
+          <Field label="API Key" wide>
+            <PasswordInput
+              value={profile.apiKey}
+              spellCheck={false}
+              placeholder="sk-…"
+              onChange={(event) => setProfile({ ...profile, apiKey: event.target.value })}
+            />
+          </Field>
+        </div>
+      </section>
+
+      <div className={styles.actions}>
+        <Button variant="primary" disabled={!draft.id.trim()} onClick={onCommit}>
+          添加
+        </Button>
+      </div>
+    </>
+  );
+}
+
+/** 下拉档位：模型自带的值如果不在预设里，补一条进去，免得显示成空 */
+function contextOptions(value: number) {
+  const options: { value: string; label: string }[] = CONTEXT_PRESETS.map((item) => ({
+    value: String(item.value),
+    label: String(item.label),
+  }));
+  if (!options.some((item) => item.value === String(value))) {
+    options.push({ value: String(value), label: `${Math.round(value / 1000)}K` });
+  }
+  return options;
 }

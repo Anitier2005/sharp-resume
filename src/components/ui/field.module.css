@@ -81,3 +81,32 @@
   font-size: 0.71875rem;
   color: var(--fg-2);
 }
+
+/* ---------- 密钥输入 ---------- */
+.pwd {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
+/* 右侧给眼睛留位：文字不会压在按钮下面 */
+.pwdInput {
+  padding-right: 26px;
+}
+
+.eye {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 24px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 0 4px 4px 0;
+  color: var(--fg-4);
+  transition: color 0.12s ease;
+}
+
+.eye:hover {
+  color: var(--fg-1);
+}

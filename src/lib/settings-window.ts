@@ -9,10 +9,10 @@ import { isTauri } from "@/lib/storage";
  * 的变化（换强调色、换字号、换当前模型）。浮层必须盖住主窗口才成立，改完还得
  * 手动关掉再看效果；独立窗口可以拖到旁边，改一下、看一眼。
  *
- * 一个设置区一个窗口，label 固定（`settings-model` / `settings-look`）：
+ * 一个设置区一个窗口，label 固定（`settings-model` / `settings-look` / `settings-knowledge`）：
  * 重复点同一个入口只会把它聚焦到前面，不会开出一排一模一样的窗。
  */
-export type SettingsView = "model" | "look";
+export type SettingsView = "model" | "look" | "knowledge";
 
 /**
  * 打开（或前置）设置窗口。

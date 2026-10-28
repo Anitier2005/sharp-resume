@@ -90,11 +90,15 @@ export function Sidebar() {
           }
         : {};
     const opened = await openSettingsWindow(view, params);
-    if (!opened) setFallback(view);
+    // 知识库有现成的抽屉，浏览器调试就退回它；模型/外观退回浮层
+    if (!opened) {
+      if (view === "knowledge") setKbOpen(true);
+      else setFallback(view);
+    }
   };
 
   const openKnowledge = () => {
-    setKbOpen(true);
+    void openSettings("knowledge");
   };
 
   const selectResume = (owner: Person, target: Resume) => {
@@ -326,7 +330,7 @@ export function Sidebar() {
             <button
               type="button"
               className={cx(styles.subItem, kbOpen && styles.subItemOn)}
-              onClick={openKnowledge}
+              onClick={() => void openKnowledge()}
             >
               <BookOpen size={12} />
               知识库

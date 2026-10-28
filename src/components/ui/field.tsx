@@ -1,9 +1,6 @@
-import type {
-  InputHTMLAttributes,
-  ReactNode,
-  TextareaHTMLAttributes,
-} from "react";
+import { useState, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
 import { cx } from "@/lib/cx";
+import { Eye, EyeOff } from "./icons";
 import styles from "./field.module.css";
 
 /**
@@ -49,6 +46,37 @@ export function Textarea({
   ...rest
 }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea rows={rows} className={cx(styles.ctrl, styles.area, className)} {...rest} />;
+}
+
+/**
+ * 密钥输入：默认遮住，右侧一个眼睛切换。
+ *
+ * 为什么必须有这个开关：密钥是一长串看不出对错的字符，粘贴错了只能靠「数一数」
+ * 判断；而把它一直明文显示，旁边的人一眼就能记下来。
+ */
+export function PasswordInput({
+  className,
+  ...rest
+}: InputHTMLAttributes<HTMLInputElement>) {
+  const [shown, setShown] = useState(false);
+  return (
+    <span className={styles.pwd}>
+      <input
+        {...rest}
+        type={shown ? "text" : "password"}
+        className={cx(styles.ctrl, styles.input, styles.pwdInput, className)}
+      />
+      <button
+        type="button"
+        className={styles.eye}
+        aria-label={shown ? "隐藏密钥" : "显示密钥"}
+        title={shown ? "隐藏密钥" : "显示密钥"}
+        onClick={() => setShown((value) => !value)}
+      >
+        {shown ? <EyeOff size={12} /> : <Eye size={12} />}
+      </button>
+    </span>
+  );
 }
 
 /** 只读展示用的值（上下文窗口这类不可改的字段） */

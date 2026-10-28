@@ -174,10 +174,10 @@ async fn open_settings(
     view: String,
     params: std::collections::HashMap<String, String>,
 ) -> Result<(), String> {
-    let (label, title, width, height, key) = if view == "look" {
-        ("settings-look", "外观", 500.0, 420.0, "look")
-    } else {
-        ("settings-model", "模型", 720.0, 560.0, "model")
+    let (label, title, width, height, key) = match view.as_str() {
+        "look" => ("settings-look", "外观", 500.0, 470.0, "look"),
+        "knowledge" => ("settings-knowledge", "知识库", 840.0, 640.0, "knowledge"),
+        _ => ("settings-model", "模型", 720.0, 620.0, "model"),
     };
 
     if let Some(win) = app.get_webview_window(label) {
@@ -218,6 +218,9 @@ async fn open_settings(
     .resizable(false)
     .maximizable(false)
     .minimizable(false)
+    // 不要系统边框：主窗口是自绘标题栏，设置窗露出白底系统边框就不是同一套设计语言了
+    .decorations(false)
+    .shadow(true)
     .center()
     .build()
     .map_err(|e| {

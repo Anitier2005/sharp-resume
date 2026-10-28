@@ -177,6 +177,143 @@ export function removeCustomModel(id: string): void {
   writeCustom(current.filter((item) => item.id !== id));
 }
 
+/* ==========================================================================
+   模型配置（profile）
+
+   同一个模型（例如 deepseek-chat）经常要存好几套接入方式：官方直连、公司代理、
+   临时借来的 key。以前这些字段直接挂在模型上，换一次就得重填一遍；拆成
+   「模型 → 若干配置」之后，切换只换指针，字段各归各的。
+
+   存在 localStorage 的 `sharp-resume:profiles:v1`，形如 `{ [modelId]: Profile[] }`。
+   内置模型也要能加配置，所以这张表按 modelId 索引、与自定义模型清单分开存。
+   ========================================================================== */
+
+export interface ModelProfile {
+  id: string;
+  label: string;
+  baseUrl: string;
+  apiKey: string;
+  /** 对话模型：温度 */
+  temperature?: number;
+  /** 对话模型：思维强度档位的取值 */
+  reasoning?: string;
+  /** 上下文窗口（token） */
+  contextWindow?: number;
+}
+
+const PROFILE_KEY = "sharp-resume:profiles:v1";
+
+/** 与模型清单同理：渲染期会被反复读，缓存在内存里，写入口同步刷新 */
+let profileCache: Record<string, ModelProfile[]> | null = null;
+
+function readProfiles(): Record<string, ModelProfile[]> {
+  if (profileCache) return profileCache;
+  const map: Record<string, ModelProfile[]> = {};
+  try {
+    const text = localStorage.getItem(PROFILE_KEY);
+    if (text) {
+      const parsed: unknown = JSON.parse(text);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        for (const [modelId, list] of Object.entries(parsed as Record<string, unknown>)) {
+          if (!Array.isArray(list)) continue;
+          const clean = list
+            .map((item) => normalizeProfile(item))
+            .filter((item): item is ModelProfile => item !== null);
+          map[modelId] = clean;
+        }
+      }
+    }
+  } catch {
+    // 坏数据按「没存过」处理：宁可回到模型缺省，也不让设置页打不开
+  }
+  profileCache = map;
+  return map;
+}
+
+function writeProfiles(map: Record<string, ModelProfile[]>): void {
+  profileCache = map;
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(map));
+  } catch {
+    // 配额满/隐私模式：本次会话里仍按内存生效
+  }
+}
+
+function normalizeProfile(input: unknown): ModelProfile | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = input as Partial<ModelProfile>;
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  if (!id) return null;
+  return {
+    id,
+    label: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : id,
+    baseUrl: typeof raw.baseUrl === "string" ? raw.baseUrl.trim() : "",
+    apiKey: typeof raw.apiKey === "string" ? raw.apiKey : "",
+    temperature:
+      typeof raw.temperature === "number" ? clampTemperature(raw.temperature, 0.4) : undefined,
+    reasoning: typeof raw.reasoning === "string" ? raw.reasoning : undefined,
+    contextWindow:
+      typeof raw.contextWindow === "number" && raw.contextWindow > 0
+        ? Math.round(raw.contextWindow)
+        : undefined,
+  };
+}
+
+/** 模型自带的那套配置：字段全部从模型定义派生 */
+export function defaultProfile(model: ModelConfig): ModelProfile {
+  return {
+    id: "default",
+    label: "默认",
+    baseUrl: model.baseUrl,
+    apiKey: "",
+    temperature: model.defaultTemperature,
+    reasoning: model.reasoning[0],
+    contextWindow: model.contextWindow,
+  };
+}
+
+/**
+ * 某个模型下的所有配置。
+ *
+ * 没存过 → 派生一条「默认」；存过但是空数组 → 真的没有（用户删光了），
+ * 界面据此显示「添加配置」。这两种情况必须分清，否则删光了还会冒出一条幽灵。
+ */
+export function listProfiles(model: ModelConfig): ModelProfile[] {
+  const stored = readProfiles()[model.id];
+  return stored ?? [defaultProfile(model)];
+}
+
+export function saveProfile(modelId: string, profile: ModelProfile): void {
+  const clean = normalizeProfile(profile);
+  if (!clean) return;
+  const map = { ...readProfiles() };
+  const list = map[modelId] ?? [];
+  const next = list.some((item) => item.id === clean.id)
+    ? list.map((item) => (item.id === clean.id ? clean : item))
+    : [...list, clean];
+  map[modelId] = next;
+  writeProfiles(map);
+}
+
+export function removeProfile(modelId: string, profileId: string): void {
+  const map = { ...readProfiles() };
+  const list = map[modelId];
+  if (!list) return;
+  map[modelId] = list.filter((item) => item.id !== profileId);
+  writeProfiles(map);
+}
+
+/** 上下文窗口的候选档位：够用的一小组，不逼用户心算 65536 这种数 */
+export const CONTEXT_PRESETS = [
+  { value: 8_192, label: "8K" },
+  { value: 16_000, label: "16K" },
+  { value: 32_000, label: "32K" },
+  { value: 64_000, label: "64K" },
+  { value: 128_000, label: "128K" },
+  { value: 200_000, label: "200K" },
+  { value: 1_000_000, label: "1M" },
+] as const;
+
 /**
  * 开发期默认配置，两层合并：
  *   `testdata/ai.json`           测试环境（baseUrl / model / 参数），**可进仓库**

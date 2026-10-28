@@ -220,3 +220,20 @@ export const ChevronLeft = (p: IconProps) => (
     <path d="M14.5 5.5 8 12l6.5 6.5" />
   </svg>
 );
+
+/** 眼睛：切换密钥可见性 */
+export const Eye = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.7, ...p })}>
+    <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+    <circle cx="12" cy="12" r="2.6" />
+  </svg>
+);
+
+/** 划掉的眼睛：隐藏状态 */
+export const EyeOff = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.7, ...p })}>
+    <path d="M4 4l16 16" />
+    <path d="M9.6 5.9A9.6 9.6 0 0 1 12 5.6c6 0 9.5 6 9.5 6a17 17 0 0 1-2.8 3.5" />
+    <path d="M6.4 7.8A16.6 16.6 0 0 0 2.5 11.6s3.5 6 9.5 6a9.4 9.4 0 0 0 3.3-.6" />
+  </svg>
+);

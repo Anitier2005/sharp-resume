@@ -16,6 +16,8 @@ export interface AiSettings {
   reasoning?: string;
   /** 上下文窗口（token），缺省取模型配置 */
   contextWindow?: number;
+  /** 用的是这个模型的哪一套配置（见 model-config 的 ModelProfile） */
+  profileId?: string;
 }
 
 const STORE_KEY = "sharp-resume:ai:v1";
@@ -83,6 +85,8 @@ export interface AuxModelChoice {
   baseUrl: string;
   /** 空 = 沿用对话模型那把密钥 */
   apiKey: string;
+  /** 用的是这个模型的哪一套配置 */
+  profileId?: string;
 }
 
 export interface AuxSettings {
