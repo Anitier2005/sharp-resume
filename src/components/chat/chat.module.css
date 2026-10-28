@@ -106,22 +106,8 @@
   border-radius: 4px;
   background: var(--bg-hover);
 }
-.think summary {
-  font-size: 0.625rem;
-  color: var(--fg-4);
-  cursor: pointer;
-}
-.think pre {
-  margin: 6px 0 0;
-  max-height: 180px;
-  overflow: auto;
-  font-family: var(--mono);
-  font-size: 0.625rem;
-  line-height: 1.7;
-  color: var(--fg-3);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
+/* 折叠头与正文由 ui/disclosure 负责（原生 summary 的三角不可控），
+   这里只留外层：虚线框 + 灰底，把它降一档 —— 思考过程是旁注，不该比回答更重 */
 
 /* 生成中的停止条 */
 .stopRow {

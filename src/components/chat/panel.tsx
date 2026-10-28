@@ -5,6 +5,7 @@ import { uid } from "@/lib/uid";
 import { useToast } from "@/components/ui/toast-context";
 import { ChevronDown, ChevronRight } from "@/components/ui/icons";
 import { Composer } from "./composer";
+import { Disclosure } from "@/components/ui";
 import { toAttachment, stripPreview, attachmentText, attachmentImage, ensureOcrText, isImage } from "@/lib/attach";
 import { attachAtEnd } from "@/lib/inline-tokens";
 import { modelById } from "@/lib/model-config";
@@ -691,10 +692,9 @@ export function ChatPanel() {
           {/* 内部轮（排版 ↔ 会话）不渲染任何「正在发生」：用户看到的对话里
               根本没有这一轮，冒出一个打字体反而像是卡住了 */}
           {busy && !silentBusy && reasoning && (
-            <details className={styles.think}>
-              <summary>思考过程 · {reasoning.length} 字</summary>
-              <pre>{reasoning}</pre>
-            </details>
+            <Disclosure summary={`思考过程 · ${reasoning.length} 字`} className={styles.think}>
+              {reasoning}
+            </Disclosure>
           )}
           {busy && !silentBusy && <TypingTurn />}
         </div>

@@ -1,0 +1,80 @@
+/* ==========================================================================
+   列表 / 列表行
+   ========================================================================== */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-elev);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+/* 行与行之间只留发丝线，第一条不要 —— 否则和外框叠成双线 */
+.row:first-child {
+  border-top: 0;
+}
+
+.row:hover {
+  background: var(--acc-softer);
+}
+
+.rowOn {
+  background: var(--acc-soft);
+}
+
+.off {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  text-align: left;
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.6875rem;
+  color: var(--fg-1);
+}
+
+.meta {
+  flex: none;
+  font-size: 0.59375rem;
+  color: var(--fg-4);
+}
+
+.check {
+  flex: none;
+  color: var(--acc-text);
+}
+
+.acts {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+
+.empty {
+  padding: 8px;
+  font-size: 0.59375rem;
+  line-height: 1.6;
+  color: var(--fg-4);
+}

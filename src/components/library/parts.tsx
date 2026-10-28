@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { ArrowDown, ArrowUp, Check, Trash } from "@/components/ui/icons";
+import { Button, Field as KitField, Input, Tooltip } from "@/components/ui";
 import { cx } from "@/lib/cx";
-import shared from "@/components/ui/shared.module.css";
 import styles from "./library.module.css";
 
 /** 单行文本字段 */
@@ -18,22 +18,22 @@ export function Field({
   onChange: (value: string) => void;
   wide?: boolean;
 }) {
+  // 走组件库的 Field / Input：字段高度、聚焦底色、占位符颜色都只在一处定义
   return (
-    <label className={cx(shared.fld, wide && shared.wide)}>
-      <span className={shared.fldK}>{label}</span>
-      <input
+    <KitField label={label} wide={wide}>
+      <Input
         value={value}
         placeholder={placeholder}
         spellCheck={false}
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
+    </KitField>
   );
 }
 
 /** 三列字段容器 */
 export function Grid({ children }: { children: ReactNode }) {
-  return <div className={shared.fldGrid}>{children}</div>;
+  return <div className={styles.grid}>{children}</div>;
 }
 
 /** 面板头：标题 + 说明 + 右侧新增按钮 */
@@ -87,15 +87,42 @@ export function ItemHead({
       <span className={styles.end}>
         {pick}
         <span className={styles.acts}>
-          <button type="button" aria-label="上移" disabled={actions.first} onClick={actions.onUp}>
-            <ArrowUp size={10} />
-          </button>
-          <button type="button" aria-label="下移" disabled={actions.last} onClick={actions.onDown}>
-            <ArrowDown size={10} />
-          </button>
-          <button type="button" aria-label="删除" className={styles.rm} onClick={actions.onRemove}>
-            <Trash size={10} />
-          </button>
+          <Tooltip label="上移">
+            <Button
+              variant="quiet"
+              size="xs"
+              icon
+              aria-label="上移"
+              disabled={actions.first}
+              onClick={actions.onUp}
+            >
+              <ArrowUp size={10} />
+            </Button>
+          </Tooltip>
+          <Tooltip label="下移">
+            <Button
+              variant="quiet"
+              size="xs"
+              icon
+              aria-label="下移"
+              disabled={actions.last}
+              onClick={actions.onDown}
+            >
+              <ArrowDown size={10} />
+            </Button>
+          </Tooltip>
+          <Tooltip label="删除这一条">
+            <Button
+              variant="quiet"
+              size="xs"
+              icon
+              aria-label="删除"
+              className={styles.rm}
+              onClick={actions.onRemove}
+            >
+              <Trash size={10} />
+            </Button>
+          </Tooltip>
         </span>
       </span>
     </div>

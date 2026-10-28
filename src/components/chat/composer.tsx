@@ -4,6 +4,7 @@ import type { Attachment } from "@/types";
 import { ArrowUp, FileIcon, Plus } from "@/components/ui/icons";
 import { ImagePeek } from "@/components/ui/image-view";
 import { Dropdown, MenuItem } from "@/components/ui/menu";
+import { Tooltip } from "@/components/ui";
 import { cx } from "@/lib/cx";
 import { listModels } from "@/lib/model-config";
 import { segmentText, tokenRanges, uniqueToken } from "@/lib/inline-tokens";
@@ -315,9 +316,11 @@ export function Composer({
             <Dropdown
               width={236}
               trigger={
-                <button type="button" className={styles.pick} title="切换模型">
-                  {model}
-                </button>
+                <Tooltip label="切换模型">
+                  <button type="button" className={styles.pick}>
+                    {model}
+                  </button>
+                </Tooltip>
               }
             >
               {options.map((item) => (
@@ -329,9 +332,11 @@ export function Composer({
             <span className={styles.grow} />
 
             {files.length > 0 && (
-              <span className={styles.count} title="正文里带了几枚附件标记">
-                <FileIcon size={9} /> {files.length}
-              </span>
+              <Tooltip label="正文里带了几枚附件标记">
+                <span className={styles.count}>
+                  <FileIcon size={9} /> {files.length}
+                </span>
+              </Tooltip>
             )}
 
             <button

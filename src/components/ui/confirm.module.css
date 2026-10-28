@@ -1,5 +1,6 @@
-/* 确认窗只剩「列表」和「红色主按钮」两处自有样式：
-   遮罩、卡片、头部、底栏都由 ui/modal.module.css 统一提供。 */
+/* 确认窗只剩「待删列表」这一处自有样式：
+   遮罩、卡片、头部、底栏由 ui/modal 提供，主 / 危险按钮由 ui/button 的
+   primary / danger 变体提供 —— 这里不再重复定义按钮。 */
 
 /* 将被删除的东西逐条列出来：说「2 项」等于没说，用户要认的是具体的页和条目 */
 .items {
@@ -16,33 +17,4 @@
   line-height: 1.6;
   color: var(--fg-2);
   word-break: break-word;
-}
-
-/* 红底主按钮：全部按钮里唯一表示「不可撤销」的那个。
-   尺寸与 shared.btnGhost 对齐，免得两个按钮高低不齐 */
-.danger {
-  height: 26px;
-  padding: 0 12px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: var(--danger);
-  color: var(--bg-elev);
-  font-size: 0.6875rem;
-}
-.danger:hover {
-  filter: brightness(0.94);
-}
-
-.primary {
-  height: 26px;
-  padding: 0 12px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: var(--acc);
-  color: var(--acc-fg);
-  font-size: 0.6875rem;
-}
-.primary:hover {
-  background: var(--acc-hover);
-  color: var(--acc-fg);
 }

@@ -17,6 +17,7 @@ import {
 } from "@/lib/knowledge";
 import { cx } from "@/lib/cx";
 import shared from "@/components/ui/shared.module.css";
+import { Button, Field, Input, Textarea } from "@/components/ui";
 import styles from "./panel.module.css";
 
 /**
@@ -170,10 +171,9 @@ export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () =
             <b>知识库</b>
             <span>{entries.length} 条 · 预置 {preset.length} 条</span>
           </div>
-          <button type="button" className={shared.btnGhost} onClick={startNew}>
-            <Plus size={11} />
+          <Button leading={<Plus size={11} />} onClick={startNew}>
             新建
-          </button>
+          </Button>
           <button type="button" className={shared.overlayClose} aria-label="关闭" onClick={onClose}>
             <Close size={11} />
           </button>
@@ -249,50 +249,42 @@ export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () =
           <div className={styles.detail}>
             {editing ? (
               <>
-                <label className={shared.fld}>
-                  <span className={shared.fldK}>标题</span>
-                  <input
+                <Field label="标题">
+                  <Input
                     data-autofocus
                     value={draft.title}
                     placeholder="一个主题一句话"
                     onChange={(event) => setDraft({ ...draft, title: event.target.value })}
                   />
-                </label>
-                <label className={shared.fld}>
-                  <span className={shared.fldK}>标签 · 顿号或逗号分隔</span>
-                  <input
+                </Field>
+                <Field label="标签 · 顿号或逗号分隔">
+                  <Input
                     value={draft.tags}
                     placeholder="项目、电商"
                     onChange={(event) => setDraft({ ...draft, tags: event.target.value })}
                   />
-                </label>
-                <label className={cx(shared.fld, styles.bodyFld)}>
-                  <span className={shared.fldK}>正文 · 超过 400 字会按段落切块</span>
-                  <textarea
+                </Field>
+                {/* 正文是这一页的主体：给它剩下的全部高度（bodyFld 只负责 flex 撑开） */}
+                <Field label="正文 · 超过 400 字会按段落切块" className={styles.bodyFld}>
+                  <Textarea
+                    rows={10}
                     value={draft.body}
                     placeholder="写可核对的事实：数字、时间、角色、结果。"
                     onChange={(event) => setDraft({ ...draft, body: event.target.value })}
                   />
-                </label>
+                </Field>
                 <div className={styles.actions}>
-                  <button
-                    type="button"
-                    className={shared.btnGhost}
+                  <Button
                     onClick={() => {
                       setEditing(false);
                       if (!doc) setDraft({ title: "", tags: "", body: "" });
                     }}
                   >
                     取消
-                  </button>
-                  <button
-                    type="button"
-                    className={shared.btnPrimary}
-                    disabled={busy}
-                    onClick={() => void save()}
-                  >
+                  </Button>
+                  <Button variant="primary" disabled={busy} onClick={() => void save()}>
                     保存
-                  </button>
+                  </Button>
                 </div>
               </>
             ) : doc ? (
@@ -307,25 +299,13 @@ export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () =
                 </pre>
                 <div className={styles.actions}>
                   {doc.preset ? (
-                    <button type="button" className={shared.btnGhost} onClick={copyAsMine}>
-                      复制为我的条目
-                    </button>
+                    <Button onClick={copyAsMine}>复制为我的条目</Button>
                   ) : (
                     <>
-                      <button
-                        type="button"
-                        className={shared.btnGhost}
-                        onClick={() => setEditing(true)}
-                      >
-                        编辑
-                      </button>
-                      <button
-                        type="button"
-                        className={cx(shared.btnGhost, styles.danger)}
-                        onClick={() => setConfirming(true)}
-                      >
+                      <Button onClick={() => setEditing(true)}>编辑</Button>
+                      <Button variant="quiet" className={styles.danger} onClick={() => setConfirming(true)}>
                         删除
-                      </button>
+                      </Button>
                     </>
                   )}
                 </div>

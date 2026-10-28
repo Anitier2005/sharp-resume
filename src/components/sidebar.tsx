@@ -2,7 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem, MenuSep } from "@/components/ui/menu";
-import { ChevronRight, Gear, Layers, Plus, Search, User } from "@/components/ui/icons";
+import {
+  BookOpen,
+  ChevronDown,
+  ChevronRight,
+  Gear,
+  Layers,
+  Palette,
+  Plus,
+  Search,
+  Sparkles,
+  User,
+} from "@/components/ui/icons";
 import { LibraryDrawer } from "@/components/library/drawer";
 import { KnowledgePanel } from "@/components/knowledge/panel";
 import { SettingsSheet } from "@/components/settings/sheet";
@@ -24,9 +35,12 @@ export function Sidebar() {
   const [renaming, setRenaming] = useState<string | null>(null);
   /** 经历库属于「人」，抽屉也开在这里；面板自己从 store 取当前人 */
   const [libOpen, setLibOpen] = useState(false);
-  /** 知识库是全局的（跨候选人）；设置同理，两者都收在底部菜单里 */
+  /** 知识库是全局的（跨候选人）；设置同理，两者都收在左下角的「设置」项下面 */
   const [kbOpen, setKbOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 设置面板打开在哪一页；null = 关闭 */
+  const [sheetTab, setSheetTab] = useState<"model" | "look" | null>(null);
+  /** 「设置」下挂三个二级项，默认展开：默认收起的话这三个入口等于藏起来了 */
+  const [navOpen, setNavOpen] = useState(true);
   /** 右键菜单：记下坐标与目标，null 表示关闭 */
   const [ctx, setCtx] = useState<
     | { x: number; y: number; kind: "person"; personId: string }
@@ -54,6 +68,16 @@ export function Sidebar() {
     if (displayName(item.fields).toLowerCase().includes(q)) return true;
     return item.resumes.some((r) => r.title.toLowerCase().includes(q));
   });
+
+  const openSheet = (tab: "model" | "look") => {
+    setKbOpen(false);
+    setSheetTab(tab);
+  };
+
+  const openKnowledge = () => {
+    setSheetTab(null);
+    setKbOpen(true);
+  };
 
   const selectResume = (owner: Person, target: Resume) => {
     dispatch({ type: "selectResume", personId: owner.id, resumeId: target.id });
@@ -261,24 +285,57 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* 底部：一句状态 + 一个菜单。知识库与设置都是「全局功能」，
-          塞进候选人树或顶栏会让它们看起来属于某个人/某个窗口状态 */}
+      {/* 底部：设置是一级项，下挂三个二级项。
+          这三件都是「全局功能」（跟哪个候选人无关），放进候选人树会让人
+          以为它属于某个人；塞进顶栏又会被当成窗口动作。 */}
+      <nav className={styles.nav}>
+        <button
+          type="button"
+          className={cx(styles.row, styles.navTop)}
+          aria-expanded={navOpen}
+          onClick={() => setNavOpen((value) => !value)}
+        >
+          <Gear size={12} />
+          设置
+          <ChevronDown
+            size={10}
+            className={cx(styles.navChevron, navOpen && styles.navChevronOn)}
+          />
+        </button>
+
+        {navOpen && (
+          <div className={styles.navSub}>
+            <button
+              type="button"
+              className={cx(styles.subItem, kbOpen && styles.subItemOn)}
+              onClick={openKnowledge}
+            >
+              <BookOpen size={12} />
+              知识库
+            </button>
+            <button
+              type="button"
+              className={cx(styles.subItem, sheetTab === "model" && styles.subItemOn)}
+              onClick={() => openSheet("model")}
+            >
+              <Sparkles size={12} />
+              模型
+            </button>
+            <button
+              type="button"
+              className={cx(styles.subItem, sheetTab === "look" && styles.subItemOn)}
+              onClick={() => openSheet("look")}
+            >
+              <Palette size={12} />
+              外观
+            </button>
+          </div>
+        )}
+      </nav>
+
       <div className={styles.foot}>
         <span className={styles.live} />
         <span className={styles.footText}>本地工作区 · 自动保存</span>
-        <span className={styles.footGrow} />
-        <Dropdown
-          width={176}
-          trigger={
-            <button type="button" className={styles.menuBtn} aria-label="菜单">
-              <Gear size={12} />
-              菜单
-            </button>
-          }
-        >
-          <MenuItem label="知识库" onSelect={() => setKbOpen(true)} />
-          <MenuItem label="设置" onSelect={() => setSettingsOpen(true)} />
-        </Dropdown>
       </div>
 
       {ctx && (
@@ -355,7 +412,11 @@ export function Sidebar() {
 
       <LibraryDrawer open={libOpen} onClose={() => setLibOpen(false)} />
       <KnowledgePanel open={kbOpen} onClose={() => setKbOpen(false)} />
-      <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsSheet
+        open={sheetTab !== null}
+        initialTab={sheetTab ?? "model"}
+        onClose={() => setSheetTab(null)}
+      />
     </aside>
   );
 }

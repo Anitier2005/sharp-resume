@@ -1,5 +1,5 @@
 import { Modal } from "./modal";
-import shared from "./shared.module.css";
+import { Button } from "./button";
 import styles from "./confirm.module.css";
 
 /**
@@ -49,16 +49,12 @@ export function Confirm({
       footer={
         <>
           {/* 危险操作默认停在「取消」上：回车不该替用户做决定 */}
-          <button type="button" className={shared.btnGhost} onClick={onCancel} data-autofocus>
+          <Button onClick={onCancel} data-autofocus>
             {cancelLabel}
-          </button>
-          <button
-            type="button"
-            className={danger ? styles.danger : styles.primary}
-            onClick={onConfirm}
-          >
+          </Button>
+          <Button variant={danger ? "danger" : "primary"} onClick={onConfirm}>
             {confirmLabel}
-          </button>
+          </Button>
         </>
       }
     >

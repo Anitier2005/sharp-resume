@@ -347,7 +347,6 @@
 
 /* ---------- 底部状态 ---------- */
 .foot {
-  margin-top: auto;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -364,23 +363,66 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.footGrow {
-  flex: 1;
+/* ---------- 左下角导航：设置 + 三个二级项 ---------- */
+/* margin-top:auto 把它顶到栏底：这三个入口是常驻的，不跟着列表滚动 */
+.nav {
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid var(--line-soft);
 }
-.menuBtn {
-  flex: none;
+.navTop {
+  font-weight: 500;
+}
+.navChevron {
+  margin-left: auto;
+  color: var(--fg-4);
+  transition: transform 0.14s ease;
+}
+.navChevronOn {
+  transform: rotate(180deg);
+}
+
+.navSub {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 1px 0 2px;
+}
+/* 二级项缩进对齐一级项图标的右缘（7 padding + 12 图标 + 7 gap）：
+   缩进用 padding 而不是 margin，是为了 hover 底色仍然从栏边起、不和一级项错开 */
+.subItem {
   display: flex;
   align-items: center;
-  gap: 3px;
-  height: 18px;
-  padding: 0 4px;
-  border-radius: 3px;
-  font-size: 0.59375rem;
+  gap: 7px;
+  width: 100%;
+  height: 26px;
+  padding: 0 7px 0 26px;
+  border-radius: 5px;
+  font-size: 0.6875rem;
   color: var(--fg-3);
+  text-align: left;
   transition: background 0.14s ease, color 0.14s ease;
 }
-.menuBtn:hover {
-  background: var(--acc-softer);
+.subItem:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+.subItem svg {
+  flex: none;
+  color: var(--fg-4);
+  transition: color 0.14s ease;
+}
+.subItem:hover svg {
+  color: var(--fg-2);
+}
+/* 选中态要压过 :hover（两个都是 (0,2,0)，所以必须写在后面并带上 :hover） */
+.subItemOn,
+.subItemOn:hover {
+  background: var(--acc-soft);
+  color: var(--acc-text);
+}
+.subItemOn svg,
+.subItemOn:hover svg {
   color: var(--acc-text);
 }
 .live {

@@ -9,6 +9,7 @@ import {
 import { useWorkspace } from "@/store/workspace";
 import { useToast } from "@/components/ui/toast-context";
 import { Dropdown, MenuItem, MenuLabel, MenuSep } from "@/components/ui/menu";
+import { Tooltip } from "@/components/ui";
 import { ContextMenu } from "@/components/ui/context-menu";
 import { Confirm } from "@/components/ui/confirm";
 import { ChevronDown, Close, More, Plus } from "@/components/ui/icons";
@@ -735,16 +736,20 @@ export function ResumePanel() {
         </span>
         <span>{chars.toLocaleString("zh-CN")} 字</span>
         {preview && (
-          <span className={sheets > 1.02 ? styles.over : undefined} title="按 A4 比例估算">
-            {sheets > 1.02 ? `≈ ${sheets.toFixed(1)} 页 A4` : "1 页 A4"}
-          </span>
+          <Tooltip label="按 A4 比例估算">
+            <span className={sheets > 1.02 ? styles.over : undefined}>
+              {sheets > 1.02 ? `≈ ${sheets.toFixed(1)} 页 A4` : "1 页 A4"}
+            </span>
+          </Tooltip>
         )}
         {/* 排版 agent 在干活：只看「这一页」的，别页在忙不该在这显示 */}
         {layoutStatus?.pageId === page?.id && (
-          <span className={styles.layout} title="页排版 agent 正在处理这一页">
-            <i />
-            {layoutStatus.text}
-          </span>
+          <Tooltip label="页排版 agent 正在处理这一页">
+            <span className={styles.layout}>
+              <i />
+              {layoutStatus.text}
+            </span>
+          </Tooltip>
         )}
         <span className={styles.save}>
           <i />
@@ -763,9 +768,11 @@ export function ResumePanel() {
             <Dropdown
               width={132}
               trigger={
-                <button type="button" className={styles.zoomVal} title="缩放">
-                  {zoom}%
-                </button>
+                <Tooltip label="缩放">
+                  <button type="button" className={styles.zoomVal}>
+                    {zoom}%
+                  </button>
+                </Tooltip>
               }
             >
               <MenuItem label="适应宽度" onSelect={zoomWidth} />

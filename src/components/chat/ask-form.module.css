@@ -31,53 +31,11 @@
   line-height: 1.5;
 }
 
-.input {
-  width: 100%;
-  padding: 5px 7px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--bg-title);
-  font-family: inherit;
-  font-size: 0.6875rem;
-  line-height: 1.6;
-  color: var(--fg-1);
-  resize: vertical;
-}
-
-/* 全局兜底聚焦环是 `:where(.win) :focus-visible`（0,1,0），
-   这里要自绘就必须显式压过它，否则输入框上会出现「圆角环 + 方角描边」双层框 */
-.input:focus,
-.input:focus-visible {
-  outline: none;
-  border-color: var(--acc-line-2);
-}
-
+/* 筹码组：换行排列。筹码本身（边框、选中态）来自 ui/choice，这里只管排布 */
 .multi {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-}
-
-.chip {
-  height: 24px;
-  padding: 0 9px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  font-size: 0.6875rem;
-  color: var(--fg-2);
-}
-
-.chip:hover {
-  border-color: var(--line-strong);
-  background: var(--bg-hover);
-  color: var(--fg-1);
-}
-
-.chipOn,
-.chipOn:hover {
-  border-color: transparent;
-  background: var(--acc-soft);
-  color: var(--acc-text);
 }
 
 /* 报错占满左侧，两个按钮被推到右端 —— 加第三个按钮不用重排 */

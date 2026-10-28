@@ -3,7 +3,7 @@ import { AI_PRESETS, aiReady, testConnection, type AiSettings } from "@/lib/ai";
 import { Modal } from "@/components/ui/modal";
 import { cx } from "@/lib/cx";
 import styles from "./ai-settings.module.css";
-import shared from "@/components/ui/shared.module.css";
+import { Button, Field, Input } from "@/components/ui";
 
 interface Props {
   settings: AiSettings;
@@ -43,26 +43,17 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
       bodyClassName={styles.body}
       footer={
         <>
-          <button type="button" className={shared.btnGhost} onClick={onClose}>
-            取消
-          </button>
+          <Button onClick={onClose}>取消</Button>
           <span className={styles.sp} />
-          <button
-            type="button"
-            className={shared.btnGhost}
+          <Button
             disabled={testing || !draft.baseUrl.trim() || !draft.model.trim()}
             onClick={() => void runTest()}
           >
             {testing ? "测试中…" : "测试连接"}
-          </button>
-          <button
-            type="button"
-            className={shared.btnPrimary}
-            disabled={!aiReady(draft)}
-            onClick={() => onSave(draft)}
-          >
+          </Button>
+          <Button variant="primary" disabled={!aiReady(draft)} onClick={() => onSave(draft)}>
             保存
-          </button>
+          </Button>
         </>
       }
     >
@@ -79,9 +70,8 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
         ))}
       </div>
 
-      <label className={shared.fld}>
-        <span className={shared.fldK}>接口地址</span>
-        <input
+      <Field label="接口地址">
+        <Input
           // 打开就停在第一个可改的字段上，用户不用先 Tab 一次
           data-autofocus
           value={draft.baseUrl}
@@ -89,28 +79,26 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
           spellCheck={false}
           onChange={(event) => patch({ baseUrl: event.target.value })}
         />
-      </label>
+      </Field>
 
-      <label className={shared.fld}>
-        <span className={shared.fldK}>模型</span>
-        <input
+      <Field label="模型">
+        <Input
           value={draft.model}
           placeholder="deepseek-chat"
           spellCheck={false}
           onChange={(event) => patch({ model: event.target.value })}
         />
-      </label>
+      </Field>
 
-      <label className={shared.fld}>
-        <span className={shared.fldK}>API Key</span>
-        <input
+      <Field label="API Key">
+        <Input
           type="password"
           value={draft.apiKey}
           placeholder="sk-…"
           spellCheck={false}
           onChange={(event) => patch({ apiKey: event.target.value })}
         />
-      </label>
+      </Field>
 
       <p className={styles.note}>
         密钥只存在这台机器的 localStorage，不写进工作区、不随简历导出。留空则按本地改写规则回答。

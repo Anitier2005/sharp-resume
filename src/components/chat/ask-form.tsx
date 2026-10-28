@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { AskQuestion } from "@/lib/agent-actions";
 import { Modal } from "@/components/ui/modal";
-import shared from "@/components/ui/shared.module.css";
+import { Button, Chip, Input, Select, Textarea } from "@/components/ui";
 import styles from "./ask-form.module.css";
 
 /**
@@ -58,12 +58,10 @@ export function AskForm({
         <>
           {/* 报错贴左，按钮贴右：中间靠 auto 撑开，加元素不用重排 */}
           <span className={styles.error}>{error}</span>
-          <button type="button" className={shared.btnGhost} onClick={onCancel}>
-            稍后再说
-          </button>
-          <button type="button" className={shared.btnPrimary} onClick={submit}>
+          <Button onClick={onCancel}>稍后再说</Button>
+          <Button variant="primary" onClick={submit}>
             提交
-          </button>
+          </Button>
         </>
       }
     >
@@ -78,36 +76,31 @@ export function AskForm({
             {question.hint && <span className={styles.hint}>{question.hint}</span>}
 
             {question.kind === "textarea" ? (
-              <textarea
-                className={styles.input}
+              <Textarea
                 rows={3}
                 value={value}
                 onChange={(event) => set(question.id, event.target.value)}
               />
             ) : question.kind === "select" ? (
-              <select
-                className={styles.input}
+              <Select
                 value={value}
-                onChange={(event) => set(question.id, event.target.value)}
-              >
-                <option value="">请选择</option>
-                {(question.options ?? []).map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
+                ariaLabel={question.label}
+                placeholder="请选择"
+                options={(question.options ?? []).map((option) => ({
+                  value: option,
+                  label: option,
+                }))}
+                onChange={(next) => set(question.id, next)}
+              />
             ) : question.kind === "multi" ? (
               <div className={styles.multi}>
                 {(question.options ?? []).map((option) => {
                   const picked = value.split("、").filter(Boolean);
                   const on = picked.includes(option);
                   return (
-                    <button
+                    <Chip
                       key={option}
-                      type="button"
-                      className={on ? `${styles.chip} ${styles.chipOn}` : styles.chip}
-                      aria-pressed={on}
+                      pressed={on}
                       onClick={() => {
                         const next = on
                           ? picked.filter((item) => item !== option)
@@ -116,28 +109,31 @@ export function AskForm({
                       }}
                     >
                       {option}
-                    </button>
+                    </Chip>
                   );
                 })}
               </div>
             ) : question.kind === "confirm" ? (
               <div className={styles.multi}>
                 {["是", "否"].map((option) => (
-                  <button
+                  <Chip
                     key={option}
-                    type="button"
-                    className={value === option ? `${styles.chip} ${styles.chipOn}` : styles.chip}
-                    aria-pressed={value === option}
+                    pressed={value === option}
                     onClick={() => set(question.id, option)}
                   >
                     {option}
-                  </button>
+                  </Chip>
                 ))}
               </div>
             ) : (
-              <input
-                className={styles.input}
-                type={question.kind === "number" ? "number" : question.kind === "date" ? "date" : "text"}
+              <Input
+                type={
+                  question.kind === "number"
+                    ? "number"
+                    : question.kind === "date"
+                      ? "date"
+                      : "text"
+                }
                 value={value}
                 onChange={(event) => set(question.id, event.target.value)}
               />

@@ -1,0 +1,64 @@
+/* ==========================================================================
+   分段控件 / 筹码
+   ========================================================================== */
+
+/* ---------- 分段 ---------- */
+/* 外框是「槽」，选中项浮起来一档（白底 + 阴影）。
+   对比靠明度差而不是描边，所以槽的底色必须比选中项暗一点 */
+.seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-hover);
+}
+
+.seg button {
+  flex: 1;
+  height: 22px;
+  border-radius: 4px;
+  font-size: 0.65625rem;
+  color: var(--fg-3);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.seg button:hover {
+  color: var(--fg-1);
+}
+
+.seg button[aria-pressed="true"] {
+  background: var(--bg-elev);
+  color: var(--acc-text);
+  box-shadow: var(--shadow-control);
+}
+
+/* ---------- 筹码 ---------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 0.65625rem;
+  color: var(--fg-2);
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  color: var(--fg-1);
+}
+
+.chip[aria-pressed="true"] {
+  border-color: var(--acc-line);
+  background: var(--acc-soft);
+  color: var(--acc-text);
+}
+
+.chip:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}

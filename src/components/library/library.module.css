@@ -225,24 +225,11 @@
 .acts:focus-within {
   opacity: 1;
 }
-.acts button {
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border-radius: 3px;
-  color: var(--fg-3);
-}
-.acts button:hover {
-  background: var(--bg-press);
-  color: var(--fg-1);
-}
-.acts button:disabled {
-  opacity: 0.28;
-  pointer-events: none;
-}
-.acts button.rm:hover {
-  background: color-mix(in srgb, var(--danger) 9%, #ffffff);
+/* 按钮本体（尺寸、圆角、hover）由 ui/button 提供，这里只留「整组默认隐身、
+   鼠标进到条目才出现」这条行为，以及删除键的红色反馈。
+   选择器写成 .acts .rm 是为了压过 button.module 里的 .quiet:hover（同特异度） */
+.acts .rm:hover {
+  background: color-mix(in srgb, var(--danger) 9%, var(--bg-elev));
   color: var(--danger);
 }
 :global(html[data-mode="dark"]) .acts button.rm:hover {
@@ -445,4 +432,11 @@
   font-size: 0.5625rem;
   letter-spacing: 0.06em;
   color: var(--fg-4);
+}
+
+/* 三列字段栅格：资料库「人物 / 字段」两页共用 */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 10px;
 }

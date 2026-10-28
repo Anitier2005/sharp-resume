@@ -163,7 +163,6 @@ function FieldRow({
         role="button"
         tabIndex={-1}
         aria-label="拖动调整顺序"
-        title="拖动调整顺序"
         onPointerDown={onDragStart}
       >
         <Grip size={11} />

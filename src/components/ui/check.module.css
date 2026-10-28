@@ -1,0 +1,103 @@
+/* ==========================================================================
+   勾选框 / 开关
+   ========================================================================== */
+
+.row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--fg-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 用 button 实现的开关：清掉按钮默认外观，但保留键盘可达 */
+.rowBtn {
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+.off {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.text {
+  min-width: 0;
+}
+
+/* ---------- 勾选框 ---------- */
+/* 原生 input 只保留语义与点击：铺满整行但完全透明，视觉交给 .box */
+.native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.box {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--bg-elev);
+  color: transparent;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.row:hover .box {
+  border-color: var(--acc-line-2);
+}
+
+.boxOn {
+  border-color: var(--acc);
+  background: var(--acc);
+  color: var(--acc-fg);
+}
+
+/* 键盘聚焦时环画在方块上（原生 input 是 1px 且透明，看不见） */
+.row:has(.native:focus-visible) .box {
+  outline: 2px solid var(--acc-line-2);
+  outline-offset: 2px;
+}
+
+/* ---------- 开关 ---------- */
+.sw {
+  flex: none;
+  position: relative;
+  width: 26px;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--bg-press);
+  transition: background 0.14s ease;
+}
+
+.swOn {
+  background: var(--acc);
+}
+
+.knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-control);
+  transition: transform 0.14s ease;
+}
+
+.swOn .knob {
+  transform: translateX(12px);
+  /* 选中时轨道是强调色，滑块必须始终是「亮面」，深浅两套都要跳出来 */
+  background: var(--acc-fg);
+}

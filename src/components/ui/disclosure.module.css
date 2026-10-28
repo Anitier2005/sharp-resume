@@ -1,0 +1,48 @@
+/* ==========================================================================
+   折叠区
+   ========================================================================== */
+
+.box {
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 0;
+  font-size: 0.625rem;
+  color: var(--fg-3);
+  transition: color 0.12s ease;
+}
+
+.head:hover {
+  color: var(--fg-1);
+}
+
+.caret {
+  flex: none;
+  transition: transform 0.14s ease;
+}
+
+.head[aria-expanded="true"] .caret {
+  transform: rotate(90deg);
+}
+
+.label {
+  min-width: 0;
+}
+
+.body {
+  margin-top: 4px;
+  /* 折叠内容普遍是长文本：给个高度上限，不让它把整段对话挤出去 */
+  max-height: 320px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-left: 2px solid var(--line);
+  font-size: 0.625rem;
+  line-height: 1.65;
+  color: var(--fg-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

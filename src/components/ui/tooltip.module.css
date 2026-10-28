@@ -1,0 +1,35 @@
+/* ==========================================================================
+   悬停提示
+   ========================================================================== */
+
+.wrap {
+  display: inline-flex;
+  min-width: 0;
+}
+
+/* 反色气泡：浅色主题下是深底浅字，深色主题下是浅底深字。
+   用 --fg-1 当底、--bg-elev 当字，两套主题自动反过来，不需要再写一组覆盖 */
+.tip {
+  position: fixed;
+  z-index: 210;
+  max-width: 240px;
+  padding: 4px 7px;
+  border-radius: 4px;
+  background: var(--fg-1);
+  color: var(--bg-elev);
+  font-size: 0.59375rem;
+  line-height: 1.5;
+  white-space: pre-line;
+  pointer-events: none;
+  box-shadow: var(--shadow-paper);
+  animation: tipIn 0.1s ease both;
+}
+
+@keyframes tipIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

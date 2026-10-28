@@ -1,8 +1,8 @@
 /* ==========================================================================
    共享 UI 原语
 
-   抽屉（经历库）与设置面板是两个独立组件，但共用同一套「遮罩 + 面板头 +
-   表单字段 + 按钮」的视觉语言。抽到这里，避免两边各写一份而逐渐漂移。
+   抽屉（经历库）与设置面板是两个独立组件，但共用同一套「遮罩 + 面板头」的
+   视觉语言。表单字段与按钮已收进组件库（ui/field、ui/button），别在这里再加回来。
 
    注意：`.box` 在两个组件里含义不同（输入框容器 vs 复选框方块），
    已分别改名为 Composer 的 `box` 与 Drawer 的 `tick`，不放在这里共用。
@@ -65,96 +65,5 @@
   color: var(--fg-1);
 }
 
-/* ---------- 表单字段 ---------- */
-.fldGrid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px 10px;
-}
-
-.fld {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-.fld.wide {
-  grid-column: 1 / -1;
-}
-
-.fldK {
-  font-size: 0.5625rem;
-  letter-spacing: 0.08em;
-  color: var(--fg-3);
-}
-
-.fld input,
-.fld textarea {
-  width: 100%;
-  min-width: 0;
-  padding: 0 7px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--bg-elev);
-  font: inherit;
-  font-size: 0.71875rem;
-  line-height: 1.5;
-  color: var(--fg-1);
-  outline: none;
-  resize: none;
-  transition: border-color 0.12s ease, background 0.12s ease;
-}
-.fld input {
-  height: 26px;
-}
-.fld textarea {
-  padding: 5px 7px;
-}
-.fld input::placeholder,
-.fld textarea::placeholder {
-  color: var(--fg-4);
-}
-.fld input:hover,
-.fld textarea:hover {
-  border-color: var(--line-strong);
-}
-.fld input:focus,
-.fld textarea:focus {
-  border-color: var(--acc-line-2);
-  background: var(--acc-softer);
-}
-
-/* ---------- 按钮 ---------- */
-.btnGhost {
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  font-size: 0.6875rem;
-  color: var(--fg-2);
-}
-.btnGhost:hover {
-  border-color: var(--line-strong);
-  background: var(--bg-hover);
-  color: var(--fg-1);
-}
-.btnGhost:disabled {
-  opacity: 0.45;
-  pointer-events: none;
-}
-
-.btnPrimary {
-  height: 26px;
-  padding: 0 12px;
-  border-radius: 4px;
-  background: var(--acc);
-  color: var(--acc-fg);
-  font-size: 0.6875rem;
-}
-.btnPrimary:hover {
-  background: var(--acc-hover);
-}
-.btnPrimary:disabled {
-  opacity: 0.4;
-  pointer-events: none;
-}
+/* 表单字段与按钮已经搬进组件库（ui/field、ui/button）。
+   这里只剩「遮罩 + 面板头」两件事 —— 它们属于外壳，每个面板都用同一份。 */

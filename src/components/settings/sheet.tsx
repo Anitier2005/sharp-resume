@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
-import { Check, Close, Pencil, Plus, Trash } from "@/components/ui/icons";
+import { Close, Pencil, Plus, Trash } from "@/components/ui/icons";
 import { useVeilWheelLock } from "@/components/ui/veil";
 import { Modal } from "@/components/ui/modal";
 import { Confirm } from "@/components/ui/confirm";
@@ -32,6 +32,19 @@ import { configureKnowledge } from "@/lib/knowledge";
 import { ColorPicker } from "@/components/ui/color-picker";
 import { cx } from "@/lib/cx";
 import shared from "@/components/ui/shared.module.css";
+import {
+  Button,
+  Checkbox,
+  Field,
+  Input,
+  List,
+  ListEmpty,
+  ListRow,
+  ReadonlyValue,
+  Segmented,
+  Slider,
+  Tooltip,
+} from "@/components/ui";
 import styles from "./sheet.module.css";
 
 type Tab = "model" | "look";
@@ -82,6 +95,14 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
   const { state, dispatch, textScale, systemTextScale, setTextScale } = useWorkspace();
   const toast = useToast();
   const [tab, setTab] = useState<Tab>(initialTab);
+  /**
+   * 侧栏的三个二级项都指向这个面板，只是页不同。
+   * 面板开着时点另一个页，组件不会重挂（open 一直是 true），
+   * 所以必须跟着 initialTab 走一趟，否则点了「外观」还停在「模型」。
+   */
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
   const [ai, setAi] = useState<AiSettings>(loadAi);
   const [hex, setHex] = useState(state.ui.accentHex ?? "");
   const [probe, setProbe] = useState<{ tone: "idle" | "ok" | "fail"; text: string }>({
@@ -239,14 +260,13 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
                   <span className={styles.groupTitle}>对话模型</span>
                   <span className={styles.groupNote}>改写、读页、调工具都用它</span>
                 </div>
-                <button
-                  type="button"
-                  className={cx(shared.btnGhost, styles.addModel)}
+                <Button
+                  size="sm"
+                  leading={<Plus size={11} />}
                   onClick={() => setEditing({ kind: "chat" })}
                 >
-                  <Plus size={11} />
                   添加模型
-                </button>
+                </Button>
               </div>
 
               <ModelList
@@ -259,65 +279,52 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
               />
 
               <div className={styles.formRow}>
-                <label className={shared.fld}>
-                  <span className={shared.fldK}>接口地址</span>
-                  <input
+                <Field label="接口地址">
+                  <Input
                     value={ai.baseUrl}
                     spellCheck={false}
                     onChange={(event) => write({ baseUrl: event.target.value })}
                   />
-                </label>
-                <label className={shared.fld}>
-                  <span className={shared.fldK}>API Key · 只存在本机</span>
-                  <input
+                </Field>
+                <Field label="API Key · 只存在本机">
+                  <Input
                     type="password"
                     value={ai.apiKey}
                     spellCheck={false}
                     placeholder="sk-…"
                     onChange={(event) => write({ apiKey: event.target.value })}
                   />
-                </label>
+                </Field>
               </div>
 
-              <div className={styles.row}>
-                <label className={shared.fld}>
-                  <span className={shared.fldK}>温度 · {ai.temperature.toFixed(2)}</span>
-                  <input
-                    className={styles.range}
-                    type="range"
+              <div className={styles.formRow}>
+                <Field label={`温度 · ${ai.temperature.toFixed(2)}`}>
+                  <Slider
+                    ariaLabel="温度"
                     min={0}
                     max={1}
                     step={0.05}
                     value={ai.temperature}
-                    onChange={(event) => write({ temperature: Number(event.target.value) })}
+                    onChange={(value) => write({ temperature: value })}
                   />
-                </label>
-                <label className={shared.fld}>
-                  <span className={shared.fldK}>上下文窗口</span>
-                  <input
-                    value={`${(spec?.contextWindow ?? 0).toLocaleString("zh-CN")} tokens`}
-                    readOnly
-                    className={styles.readonly}
-                  />
-                </label>
+                </Field>
+                <Field label="上下文窗口">
+                  {/* 只读值用文字展示而不是禁用输入框：禁用输入框看起来像「可以改但坏了」 */}
+                  <ReadonlyValue>
+                    {(spec?.contextWindow ?? 0).toLocaleString("zh-CN")} tokens
+                  </ReadonlyValue>
+                </Field>
               </div>
 
               {spec && spec.reasoning.length > 0 && (
-                <div className={styles.group}>
-                  <span className={shared.fldK}>思维强度</span>
-                  <div className={styles.seg}>
-                    {spec.reasoning.map((level) => (
-                      <button
-                        key={level}
-                        type="button"
-                        aria-pressed={(ai.reasoning ?? spec.reasoning[0]) === level}
-                        onClick={() => write({ reasoning: level })}
-                      >
-                        {level}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                <Field label="思维强度">
+                  <Segmented
+                    ariaLabel="思维强度"
+                    value={ai.reasoning ?? spec.reasoning[0] ?? ""}
+                    options={spec.reasoning.map((level) => ({ value: level, label: level }))}
+                    onChange={(level) => write({ reasoning: level })}
+                  />
+                </Field>
               )}
             </div>
 
@@ -328,14 +335,13 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
                   <span className={styles.groupTitle}>嵌入模型</span>
                   <span className={styles.groupNote}>知识库的语义召回；不选就只用关键词检索</span>
                 </div>
-                <button
-                  type="button"
-                  className={cx(shared.btnGhost, styles.addModel)}
+                <Button
+                  size="sm"
+                  leading={<Plus size={11} />}
                   onClick={() => setEditing({ kind: "embedding" })}
                 >
-                  <Plus size={11} />
                   添加模型
-                </button>
+                </Button>
               </div>
 
               <ModelList
@@ -355,23 +361,21 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
 
               {aux.embedding && (
                 <div className={styles.formRow}>
-                  <label className={shared.fld}>
-                    <span className={shared.fldK}>接口地址 · 留空沿用对话模型</span>
-                    <input
+                  <Field label="接口地址 · 留空沿用对话模型">
+                    <Input
                       value={aux.embedding.baseUrl}
                       spellCheck={false}
                       onChange={(event) => patchAux("embedding", { baseUrl: event.target.value })}
                     />
-                  </label>
-                  <label className={shared.fld}>
-                    <span className={shared.fldK}>API Key · 留空沿用对话模型</span>
-                    <input
+                  </Field>
+                  <Field label="API Key · 留空沿用对话模型">
+                    <Input
                       type="password"
                       value={aux.embedding.apiKey}
                       spellCheck={false}
                       onChange={(event) => patchAux("embedding", { apiKey: event.target.value })}
                     />
-                  </label>
+                  </Field>
                 </div>
               )}
             </div>
@@ -383,14 +387,13 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
                   <span className={styles.groupTitle}>OCR 模型</span>
                   <span className={styles.groupNote}>模型看不了图时，图片先交给它转成文字</span>
                 </div>
-                <button
-                  type="button"
-                  className={cx(shared.btnGhost, styles.addModel)}
+                <Button
+                  size="sm"
+                  leading={<Plus size={11} />}
                   onClick={() => setEditing({ kind: "ocr" })}
                 >
-                  <Plus size={11} />
                   添加模型
-                </button>
+                </Button>
               </div>
 
               <ModelList
@@ -409,23 +412,21 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
 
               {aux.ocr && (
                 <div className={styles.formRow}>
-                  <label className={shared.fld}>
-                    <span className={shared.fldK}>接口地址 · 留空沿用对话模型</span>
-                    <input
+                  <Field label="接口地址 · 留空沿用对话模型">
+                    <Input
                       value={aux.ocr.baseUrl}
                       spellCheck={false}
                       onChange={(event) => patchAux("ocr", { baseUrl: event.target.value })}
                     />
-                  </label>
-                  <label className={shared.fld}>
-                    <span className={shared.fldK}>API Key · 留空沿用对话模型</span>
-                    <input
+                  </Field>
+                  <Field label="API Key · 留空沿用对话模型">
+                    <Input
                       type="password"
                       value={aux.ocr.apiKey}
                       spellCheck={false}
                       onChange={(event) => patchAux("ocr", { apiKey: event.target.value })}
                     />
-                  </label>
+                  </Field>
                 </div>
               )}
             </div>
@@ -434,41 +435,34 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
           <>
             <div className={styles.group}>
               <span className={styles.groupTitle}>明暗</span>
-              <div className={styles.seg}>
-                <button
-                  type="button"
-                  aria-pressed={state.ui.mode === "light"}
-                  onClick={() => dispatch({ type: "setMode", mode: "light" })}
-                >
-                  浅色
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={state.ui.mode === "dark"}
-                  onClick={() => dispatch({ type: "setMode", mode: "dark" })}
-                >
-                  深色
-                </button>
-              </div>
+              <Segmented
+                ariaLabel="明暗"
+                value={state.ui.mode}
+                options={[
+                  { value: "light", label: "浅色" },
+                  { value: "dark", label: "深色" },
+                ]}
+                onChange={(mode) => dispatch({ type: "setMode", mode })}
+              />
             </div>
 
             <div className={styles.group}>
               <span className={styles.groupTitle}>强调色</span>
               <div className={styles.swatches}>
                 {ACCENTS.map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    className={styles.sw}
-                    aria-pressed={!state.ui.accentHex && state.ui.accent === item.key}
-                    title={item.label}
-                    onClick={() => {
-                      setHex("");
-                      dispatch({ type: "setAccent", accent: item.key });
-                    }}
-                  >
-                    <i style={{ background: item.color }} />
-                  </button>
+                  <Tooltip key={item.key} label={item.label}>
+                    <button
+                      type="button"
+                      className={styles.sw}
+                      aria-pressed={!state.ui.accentHex && state.ui.accent === item.key}
+                      onClick={() => {
+                        setHex("");
+                        dispatch({ type: "setAccent", accent: item.key });
+                      }}
+                    >
+                      <i style={{ background: item.color }} />
+                    </button>
+                  </Tooltip>
                 ))}
                 {/* 自定义色：点色块弹出取色器（色相/明度/饱和 + HEX）。
                     HEX 输入在取色器里，这里不再放第二个 —— 两个框显示同一个值
@@ -488,26 +482,24 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
               <span className={styles.groupTitle}>
                 界面字号 · {Math.round(textScale * 100)}%
               </span>
-              <div className={styles.seg}>
-                <button
-                  type="button"
-                  aria-pressed={state.ui.textScale == null}
-                  title={`跟随系统（${Math.round(systemTextScale * 100)}%）`}
-                  onClick={() => setTextScale(null)}
-                >
-                  自动
-                </button>
-                {TEXT_SCALES.map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    aria-pressed={state.ui.textScale === item.value}
-                    onClick={() => setTextScale(item.value)}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
+              <Segmented
+                ariaLabel="界面字号"
+                value={state.ui.textScale == null ? "auto" : String(state.ui.textScale)}
+                options={[
+                  {
+                    value: "auto",
+                    label: "自动",
+                    title: `跟随系统（${Math.round(systemTextScale * 100)}%）`,
+                  },
+                  ...TEXT_SCALES.map((item) => ({
+                    value: String(item.value),
+                    label: item.label,
+                  })),
+                ]}
+                onChange={(next) =>
+                  setTextScale(next === "auto" ? null : Number(next))
+                }
+              />
               <span className={styles.hint}>只影响界面，不影响纸面与导出。</span>
             </div>
           </>
@@ -519,40 +511,39 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
       <footer className={styles.foot}>
         {tab === "model" ? (
           <>
-            <span
-              className={styles.route}
-              title="桌面端请求走 Rust，浏览器调试走 fetch（会被跨域拦）"
-            >
-              通讯层：{isTauri() ? "Rust · 不经跨域" : "浏览器 fetch · 会被跨域拦"}
-            </span>
-            <span
-              className={cx(
-                styles.probe,
-                probe.tone === "ok" && styles.probeOk,
-                probe.tone === "fail" && styles.probeFail,
-              )}
-              title={probe.text}
-              data-selectable
-            >
-              {probe.text || "配置即时保存"}
-            </span>
-            <button
-              type="button"
-              className={shared.btnGhost}
+            <Tooltip label="桌面端请求走 Rust，浏览器调试走 fetch（会被跨域拦）">
+              <span className={styles.route}>
+                通讯层：{isTauri() ? "Rust · 不经跨域" : "浏览器 fetch · 会被跨域拦"}
+              </span>
+            </Tooltip>
+            {/* 探针结果可能很长（网关报错原文），一句话放不下时靠提示给全文 */}
+            <Tooltip label={probe.text || "配置即时保存"}>
+              <span
+                className={cx(
+                  styles.probe,
+                  probe.tone === "ok" && styles.probeOk,
+                  probe.tone === "fail" && styles.probeFail,
+                )}
+                data-selectable
+              >
+                {probe.text || "配置即时保存"}
+              </span>
+            </Tooltip>
+            <Button
               onClick={() => {
                 void runProbe();
               }}
             >
               测试连接
-            </button>
+            </Button>
           </>
         ) : (
           // 外观页只有一句说明，用 flex:1 把「完成」顶到右端
           <span className={styles.probe}>主题与字号只影响界面，不改纸面与导出</span>
         )}
-        <button type="button" className={shared.btnPrimary} onClick={onClose}>
+        <Button variant="primary" onClick={onClose}>
           完成
-        </button>
+        </Button>
       </footer>
 
       {/* 两个弹层挂在面板根节点里：设置面板本身就是个浮层，
@@ -614,56 +605,56 @@ function ModelList({
   onDelete: (model: ModelConfig) => void;
 }) {
   return (
-    <div className={styles.modelList}>
+    <List>
       {allowNone && (
-        <div className={cx(styles.modelItem, !active && styles.modelOn)}>
-          <button type="button" className={styles.modelMain} onClick={onNone}>
-            <span className={styles.modelName}>不使用</span>
-            <span className={styles.modelMeta}>关掉这项能力</span>
-          </button>
-          {!active && <Check size={11} className={styles.modelCheck} />}
-        </div>
+        <ListRow title="不使用" meta="关掉这项能力" active={!active} onSelect={onNone} />
       )}
 
       {items.map((item) => {
         const on = item.id === active;
         const custom = isCustomModel(item.id);
         return (
-          <div key={item.id} className={cx(styles.modelItem, on && styles.modelOn)}>
-            <button type="button" className={styles.modelMain} onClick={() => onPick(item)}>
-              <span className={styles.modelName}>{item.label}</span>
-              <span className={styles.modelMeta}>
-                {item.provider}
-                {custom ? " · 自定义" : ""}
-              </span>
-            </button>
-            {on && <Check size={11} className={styles.modelCheck} />}
-            {custom && (
-              <div className={styles.modelActs}>
-                <button
-                  type="button"
-                  title="编辑"
-                  aria-label={`编辑 ${item.label}`}
-                  onClick={() => onEdit(item)}
-                >
-                  <Pencil size={11} />
-                </button>
-                <button
-                  type="button"
-                  title="删除"
-                  aria-label={`删除 ${item.label}`}
-                  onClick={() => onDelete(item)}
-                >
-                  <Trash size={11} />
-                </button>
-              </div>
-            )}
-          </div>
+          <ListRow
+            key={item.id}
+            title={item.label}
+            meta={`${item.provider}${custom ? " · 自定义" : ""}`}
+            active={on}
+            onSelect={() => onPick(item)}
+            // 内置项来自 config/models.json，改不了也删不掉 —— 只有自定义项带动作
+            actions={
+              custom ? (
+                <>
+                  <Tooltip label="编辑">
+                    <Button
+                      variant="quiet"
+                      size="sm"
+                      icon
+                      aria-label={`编辑 ${item.label}`}
+                      onClick={() => onEdit(item)}
+                    >
+                      <Pencil size={11} />
+                    </Button>
+                  </Tooltip>
+                  <Tooltip label="删除">
+                    <Button
+                      variant="quiet"
+                      size="sm"
+                      icon
+                      aria-label={`删除 ${item.label}`}
+                      onClick={() => onDelete(item)}
+                    >
+                      <Trash size={11} />
+                    </Button>
+                  </Tooltip>
+                </>
+              ) : undefined
+            }
+          />
         );
       })}
 
-      {items.length === 0 && <span className={styles.modelEmpty}>{empty}</span>}
-    </div>
+      {items.length === 0 && <ListEmpty>{empty}</ListEmpty>}
+    </List>
   );
 }
 
@@ -741,111 +732,96 @@ function CreateModel({
       bodyClassName={styles.form}
       footer={
         <>
-          <button type="button" className={shared.btnGhost} onClick={onCancel}>
-            取消
-          </button>
-          <button type="button" className={shared.btnPrimary} disabled={!modelId} onClick={submit}>
+          <Button onClick={onCancel}>取消</Button>
+          <Button variant="primary" disabled={!modelId} onClick={submit}>
             保存并使用
-          </button>
+          </Button>
         </>
       }
     >
-      <label className={shared.fld}>
-        <span className={shared.fldK}>显示名称</span>
-        <input
+      <Field label="显示名称">
+        <Input
           data-autofocus
           value={label}
           placeholder="例如：内网 Qwen3-32B"
           spellCheck={false}
           onChange={(event) => setLabel(event.target.value)}
         />
-      </label>
-      <label className={shared.fld}>
-        <span className={shared.fldK}>模型名 · 接口里的 model 字段</span>
-        <input
+      </Field>
+      <Field label="模型名 · 接口里的 model 字段">
+        <Input
           value={id}
           placeholder="qwen3-32b"
           spellCheck={false}
           disabled={Boolean(initial)}
           onChange={(event) => setId(event.target.value)}
         />
-      </label>
-      <label className={shared.fld}>
-        <span className={shared.fldK}>Base URL</span>
-        <input
+      </Field>
+      <Field label="Base URL">
+        <Input
           value={url}
           placeholder="https://your-gateway/v1"
           spellCheck={false}
           onChange={(event) => setUrl(event.target.value)}
         />
-      </label>
-      <label className={shared.fld}>
-        <span className={shared.fldK}>API Key · 留空沿用当前密钥</span>
-        <input
+      </Field>
+      <Field label="API Key · 留空沿用当前密钥">
+        <Input
           type="password"
           value={key}
           placeholder="sk-…"
           spellCheck={false}
           onChange={(event) => setKey(event.target.value)}
         />
-      </label>
+      </Field>
 
       <div className={styles.formRow}>
-        <label className={shared.fld}>
-          <span className={shared.fldK}>上下文窗口</span>
-          <input
+        <Field label="上下文窗口">
+          <Input
             value={window_}
             inputMode="numeric"
             spellCheck={false}
             onChange={(event) => setWindow(event.target.value.replace(/[^\d]/g, ""))}
           />
-        </label>
+        </Field>
         {kind !== "ocr" && (
-          <label className={shared.fld}>
-            <span className={shared.fldK}>温度</span>
-            <input
+          <Field label="温度">
+            <Input
               value={temp}
               inputMode="decimal"
               spellCheck={false}
               onChange={(event) => setTemp(event.target.value.replace(/[^\d.]/g, ""))}
             />
-          </label>
+          </Field>
         )}
         {kind === "embedding" && (
-          <label className={shared.fld}>
-            <span className={shared.fldK}>向量维度 · 选填</span>
-            <input
+          <Field label="向量维度 · 选填">
+            <Input
               value={dim}
               inputMode="numeric"
               placeholder="1024"
               spellCheck={false}
               onChange={(event) => setDim(event.target.value.replace(/[^\d]/g, ""))}
             />
-          </label>
+          </Field>
         )}
       </div>
 
       {kind === "chat" && (
-        <label className={shared.fld}>
-          <span className={shared.fldK}>思维强度档位 · 逗号分隔，留空表示没有</span>
-          <input
+        <Field label="思维强度档位 · 逗号分隔，留空表示没有">
+          <Input
             value={levels}
             placeholder="low, medium, high"
             spellCheck={false}
             onChange={(event) => setLevels(event.target.value)}
           />
-        </label>
+        </Field>
       )}
 
       {kind === "chat" && (
-        <label className={styles.formCheck}>
-          <input
-            type="checkbox"
-            checked={vision}
-            onChange={(event) => setVision(event.target.checked)}
-          />
+        <Checkbox checked={vision} onChange={setVision}>
           这个模型能看图（图片直接给模型，不走 OCR）
-        </label>
+        </Checkbox>
       )}
 
       <p className={styles.formHint}>

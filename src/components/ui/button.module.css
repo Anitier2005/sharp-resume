@@ -1,0 +1,92 @@
+/* ==========================================================================
+   按钮（唯一实现）
+   ========================================================================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* ---------- 尺寸：三档 ---------- */
+/* 26px = 输入框高度（并排时底边对齐）
+   22px = 面板内的常规行
+   18px = 密集列表的行内动作（资料库条目头那种，再高就把行撑开了） */
+.md {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 0.6875rem;
+}
+.sm {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 0.625rem;
+}
+.xs {
+  height: 18px;
+  padding: 0 5px;
+  font-size: 0.59375rem;
+}
+
+/* 纯图标：宽度必须等于高度，padding 归零 */
+.iconOnly.md {
+  width: 26px;
+  padding: 0;
+}
+.iconOnly.sm {
+  width: 22px;
+  padding: 0;
+}
+.iconOnly.xs {
+  width: 18px;
+  padding: 0;
+}
+
+/* ---------- 变体 ---------- */
+.primary {
+  background: var(--acc);
+  color: var(--acc-fg);
+}
+.primary:hover {
+  background: var(--acc-hover);
+}
+
+.ghost {
+  border-color: var(--line);
+  color: var(--fg-2);
+}
+.ghost:hover {
+  border-color: var(--line-strong);
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+/* 无边框动作：鼠标移上去才出现底色。默认透明，避免一行里挂满方块 */
+.quiet {
+  color: var(--fg-3);
+}
+.quiet:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+/* 破坏性主动作：整块染红。
+   全应用只有「确认删除」这一处该用它 —— 红色一多，就没人把它当警告了 */
+.danger {
+  background: var(--danger);
+  color: var(--bg-elev);
+}
+.danger:hover {
+  filter: brightness(0.94);
+}

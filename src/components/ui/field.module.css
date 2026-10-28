@@ -1,0 +1,83 @@
+/* ==========================================================================
+   表单字段与输入控件
+   ========================================================================== */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* 在栅格里占满整行 */
+.wide {
+  grid-column: 1 / -1;
+}
+
+.key {
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+
+.hint {
+  font-size: 0.5625rem;
+  line-height: 1.55;
+  color: var(--fg-4);
+}
+
+/* ---------- 控件 ---------- */
+.ctrl {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  font: inherit;
+  font-size: 0.71875rem;
+  line-height: 1.5;
+  color: var(--fg-1);
+  outline: none;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.ctrl::placeholder {
+  color: var(--fg-4);
+}
+
+.ctrl:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+
+.ctrl:focus {
+  border-color: var(--acc-line-2);
+  background: var(--acc-softer);
+}
+
+.ctrl:disabled {
+  color: var(--fg-3);
+  background: var(--bg-hover);
+}
+
+.input {
+  height: 26px;
+  padding: 0 7px;
+}
+
+.area {
+  padding: 5px 7px;
+  resize: none;
+}
+
+/* 只读值：看起来像输入框，但不给光标与边框变化，避免「为什么打不了字」 */
+.readonly {
+  height: 26px;
+  padding: 0 7px;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-hover);
+  font-size: 0.71875rem;
+  color: var(--fg-2);
+}

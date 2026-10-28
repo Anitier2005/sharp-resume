@@ -180,18 +180,36 @@ export const Grip = (p: IconProps) => (
   </svg>
 );
 
-/** 打开的书：知识库入口。与「资料」（Layers）区分开 —— 一个是个人的材料，一个是全局的事实库 */
+/** 知识库：带书脊的书。
+ *  之前是「打开的书」（左右两页），12px 下只剩一个圆角方框，看不出是书。 */
 export const BookOpen = (p: IconProps) => (
-  <svg {...base({ strokeWidth: 1.8, ...p })}>
-    <path d="M12 6.5C10.5 5.2 8.6 4.5 6 4.5H4v14h2c2.6 0 4.5.7 6 2 1.5-1.3 3.4-2 6-2h2v-14h-2c-2.6 0-4.5.7-6 2Z" />
-    <path d="M12 6.5v14" />
+  <svg {...base({ strokeWidth: 1.9, ...p })}>
+    <path d="M6.5 3.5H17a2.5 2.5 0 0 1 2.5 2.5v14.5H6.5A2.5 2.5 0 0 1 4 18V6a2.5 2.5 0 0 1 2.5-2.5Z" />
+    <path d="M8.5 3.5v17" />
   </svg>
 );
 
-/** 齿轮：底部「菜单」入口 */
+/** 设置入口：两根带滑块的横线（调节杆）。
+ *  原本画的是齿轮，但 12px 下八个齿会被糊成一个「太阳」，反而看不出是设置。 */
 export const Gear = (p: IconProps) => (
-  <svg {...base({ strokeWidth: 1.8, ...p })}>
-    <circle cx="12" cy="12" r="3.2" />
-    <path d="M12 4.2v2M12 17.8v2M4.2 12h2M17.8 12h2M6.5 6.5l1.4 1.4M16.1 16.1l1.4 1.4M17.5 6.5l-1.4 1.4M7.9 16.1l-1.4 1.4" />
+  <svg {...base({ strokeWidth: 1.9, ...p })}>
+    <path d="M3.5 8.5h8M17.5 8.5h3M3.5 15.5h3M12.5 15.5h8" />
+    <circle cx="14" cy="8.5" r="2.4" />
+    <circle cx="9" cy="15.5" r="2.4" />
+  </svg>
+);
+
+/** 模型（AI）入口：单颗四角星。多颗星在 12px 下会糊成一片噪点 */
+export const Sparkles = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.9, ...p })}>
+    <path d="M12 3.5l2 5.6 5.6 2-5.6 2-2 5.6-2-5.6-5.6-2 5.6-2z" />
+  </svg>
+);
+
+/** 外观：半填充的圆（明暗对比）。调色盘上的几个孔在 12px 下会变成脏点 */
+export const Palette = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.9, ...p })}>
+    <circle cx="12" cy="12" r="8" />
+    <path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none" />
   </svg>
 );
