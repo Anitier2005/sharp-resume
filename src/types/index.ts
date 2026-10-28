@@ -217,6 +217,13 @@ export interface Attachment {
   preview?: string;
   /** 正文里的行内标记（如 `@截图.png`）。有它才知道「这句话指的是哪个附件」 */
   token?: string;
+  /**
+   * 同一份文件在材料池里的 id（`Asset.id`）。
+   *
+   * 附件发出去之后就只剩这个名字了，想再看到图（悬停缩略图、点开大图）
+   * 必须能从材料池取回字节 —— 只靠 `preview` 那个 object URL，刷新就没了。
+   */
+  assetId?: string;
 }
 
 /** AI 给出的一处改写 */
@@ -252,6 +259,13 @@ export interface ChatMessage {
    * 仍是一条普通的 user/assistant 发言。
    */
   system?: boolean;
+  /**
+   * 内部消息：agent 之间的往返（比如排版 agent 向会话 agent 提问、它给出的答复）。
+   *
+   * 它仍然进模型上下文（下一轮它还看得见，否则会前后矛盾），
+   * 但**不进对话流** —— 用户看到的只有自己和会话 agent 的对话。
+   */
+  internal?: boolean;
 }
 
 export interface Workspace {

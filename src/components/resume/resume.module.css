@@ -151,6 +151,11 @@
   background: var(--acc-softer);
   color: var(--acc-text);
 }
+/* 菜单是「+」展开的：按住/展开期间保持高亮，否则看不出这个按钮还有下半截 */
+.tabAdd[aria-expanded="true"] {
+  background: var(--acc-soft);
+  color: var(--acc-text);
+}
 
 /* 「⋯」折叠入口：和「+」同形，但常亮——它出现就说明页签已经装不下了 */
 .more {

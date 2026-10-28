@@ -22,6 +22,8 @@ import {
   saveText,
 } from "@/lib/export";
 import { pageToDocx } from "@/lib/docx";
+import { saveAsset } from "@/lib/assets";
+import { nextPageLabel } from "@/lib/pages";
 import { displayName, type ResumePage } from "@/types";
 import { Paper } from "./paper";
 import { ResumeForm } from "./form";
@@ -33,6 +35,29 @@ type ViewMode = "edit" | "preview";
 
 /** 右键菜单是在哪一块点出来的：标签本身就是打开的，折叠项才需要「打开」 */
 type MenuFrom = "tab" | "fold";
+
+/** 纸面缩放边界：再小看不清字，再大只是在滚一张糊掉的位图 */
+const MIN_ZOOM = 25;
+const MAX_ZOOM = 400;
+/** 状态栏菜单里的固定档位 */
+const ZOOM_PRESETS = [50, 75, 100, 150, 200, 300, 400];
+/** `.canvas` 的左右内边距之和：算「可用宽度」时要先扣掉 */
+const CANVAS_PAD = 40;
+/** A4 缩略纸的固定宽度（paper.module.css 的 .wrap）；缩放只走 CSS zoom，不改它 */
+const PAPER_W = 374;
+
+const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(value)));
+
+/** 图片判定与 `saveAsset` 保持同一口径（MIME 或扩展名任一命中） */
+const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif", "svg"]);
+function isImageFile(file: File): boolean {
+  if (file.type.startsWith("image/")) return true;
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return IMAGE_EXT.has(ext);
+}
+
+/** 文件名去扩展名当页名：「扫描件.png」→「扫描件」 */
+const filenameBase = (name: string) => name.replace(/\.[^.]+$/, "").trim();
 
 export function ResumePanel() {
   const {
@@ -60,6 +85,86 @@ export function ResumePanel() {
   const [sheets, setSheets] = useState(1);
   const [a4Height, setA4Height] = useState(529);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  /**
+   * 当前倍率的一份即时副本。
+   *
+   * 滚轮回调是原生监听器、按钮回调也常常连点，闭包里的 `zoom` 可能已经过期；
+   * 算「下一档」和「要不要动」都以它为基准，避免连点两次只放大一次。
+   */
+  const zoomRef = useRef(zoom);
+  /**
+   * 用户手动调过倍率（按钮、Ctrl+滚轮、菜单里的固定档）。
+   *
+   * 「放大到 130% 又跳回 100%」的根因就在这里：纸面变大 → 画布出滚动条、
+   * 尺寸变化 → ResizeObserver 又按「铺满」算了一遍，把刚调好的倍率冲掉。
+   * 手动档一旦成立，观察器只负责通报，不再写 zoom。
+   */
+  const manual = useRef(false);
+  /**
+   * 自动档的两副面孔，和 manual 是两个概念，别揉成一个：
+   * page = 整页装进面板（照旧不超过 100%，保持原来的观感）；
+   * width = 铺满宽度（宽面板就该铺满，允许超过 100%，上限 400%）。
+   */
+  const fitMode = useRef<"page" | "width">("page");
+
+  /** 只改倍率本身：所有写入都经过它，zoomRef 才不会和 state 走散 */
+  const applyZoom = useCallback((next: number) => {
+    zoomRef.current = next;
+    setZoom(next);
+  }, []);
+
+  /** 按画布可用宽度算一档倍率；量不到画布（不在预览）返回 null */
+  const fitZoom = useCallback((kind: "page" | "width") => {
+    const el = canvasRef.current;
+    if (!el) return null;
+    const ratio = (el.clientWidth - CANVAS_PAD) / PAPER_W;
+    // 自动适配保持原来的观感：只缩小不放大，否则窄纸在宽面板里会被拉成一片糊
+    if (kind === "page") return clampZoom(Math.min(1, Math.max(0.68, ratio)) * 100);
+    return clampZoom(ratio * 100);
+  }, []);
+
+  /**
+   * 改倍率并把画布滚动位置按比例校正。
+   *
+   * 倍率一变内容尺寸立刻不同，不动 scrollLeft/scrollTop 的话可视区会跳到左上角那块，
+   * 用户正看着的地方凭空消失。锚点取「可视中心在内容里的比例」而不是像素值：
+   * 内容尺寸本身就在变，比例才是缩放前后都成立的那个量。
+   */
+  const zoomTo = useCallback(
+    (next: number) => {
+      const value = clampZoom(next);
+      const el = canvasRef.current;
+      if (!el || value === zoomRef.current) return;
+      const ratioX = el.scrollWidth ? (el.scrollLeft + el.clientWidth / 2) / el.scrollWidth : 0.5;
+      const ratioY = el.scrollHeight ? (el.scrollTop + el.clientHeight / 2) / el.scrollHeight : 0.5;
+      applyZoom(value);
+      // 等这一帧把新 zoom 画上去再改滚动量，否则读到的还是旧尺寸
+      requestAnimationFrame(() => {
+        el.scrollLeft = ratioX * el.scrollWidth - el.clientWidth / 2;
+        el.scrollTop = ratioY * el.scrollHeight - el.clientHeight / 2;
+      });
+    },
+    [applyZoom],
+  );
+
+  /** 手动缩放：按钮、滚轮、菜单里的固定档都走这里，从此不再自动适配 */
+  const zoomManual = useCallback(
+    (next: number) => {
+      manual.current = true;
+      zoomTo(next);
+    },
+    [zoomTo],
+  );
+
+  /** 适应宽度：宽面板就该把纸铺满，允许超过 100%；容器再变也跟着重算 */
+  const zoomWidth = useCallback(() => {
+    manual.current = false;
+    fitMode.current = "width";
+    const next = fitZoom("width");
+    if (next !== null) zoomTo(next);
+  }, [fitZoom, zoomTo]);
+
   /** 页签栏外层：量可用宽度用 */
   const tabsRef = useRef<HTMLDivElement | null>(null);
   /** 页签实体层：页签与「+」都在里面，装不下的收进折叠菜单 */
@@ -93,23 +198,45 @@ export function ResumePanel() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const preview = mode === "preview";
 
-  // 只在预览态有纸面，所以跟着 mode 重跑；page.kind 变了也要重判（见 fit 里的分支）
+  // 只在预览态有纸面，所以跟着 mode 重跑；切页也要重判（见 fit 里的分支）
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
     const fit = () => {
-      // 整页原件（扫描的 PDF / Word 转图）是位图：自动缩放只会把它压糊，
-      // 而且「原件」的意义就是按原样看 —— 面板再窄也保持原倍率，
-      // 看不全就横向滚动，或用状态栏的 ± 自己调。HTML 页仍然自动适配宽度。
-      if (page?.kind === "file") return;
-      const width = el.clientWidth - 40;
-      setZoom(Math.round(Math.min(1, Math.max(0.68, width / 374)) * 100));
+      // 手动档：容器这点变化是「纸面放大后出滚动条」造成的，不是窗口变了
+      if (manual.current) return;
+      // 整页原件（扫描的 PDF 转图）是位图：自动缩放只会把它压糊，
+      // 而且「原件」的意义就是按原样看 —— 自动档不动它，
+      // 看不全就横向滚动，或者自己点「适应宽度」把面板吃满。
+      if (page?.kind === "file" && fitMode.current === "page") return;
+      const next = fitZoom(fitMode.current);
+      if (next !== null) zoomTo(next);
     };
+    // 切页 / 进预览：回到自动档 —— 上一页手动调的倍率不该跟过来
+    manual.current = false;
+    fitMode.current = "page";
     fit();
     const observer = new ResizeObserver(fit);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [mode, page?.kind]);
+  }, [mode, page?.id, page?.kind, fitZoom, zoomTo]);
+
+  // Ctrl+滚轮缩放。必须用原生监听器：React 把 onWheel 挂在根节点上是 passive 的，
+  // 里面调 preventDefault 只会得到一条控制台警告，画布照旧滚。
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return; // 普通滚轮还是滚画布，别拦
+      event.preventDefault();
+      // 触控板捏合也带 ctrlKey，deltaY 只是很小；统一按 ×1.1 / ÷1.1 走一档，
+      // 连续滚就是连续缩放，不去猜设备
+      manual.current = true;
+      zoomTo(zoomRef.current * (event.deltaY < 0 ? 1.1 : 1 / 1.1));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [preview, zoomTo]);
 
   // 刚新增的那一页：直接选中。折叠逻辑会把当前页顶进可见区，不用再滚
   useEffect(() => {
@@ -236,7 +363,15 @@ export function ResumePanel() {
           <button
             type="button"
             className={styles.emptyAction}
-            onClick={() => dispatch({ type: "addPage", personId: person.id, resumeId: resume.id })}
+            onClick={() => {
+              wantNewPage.current = true;
+              dispatch({
+                type: "addPage",
+                personId: person.id,
+                resumeId: resume.id,
+                label: nextPageLabel(resume.pages),
+              });
+            }}
           >
             新建一页
           </button>
@@ -327,6 +462,56 @@ export function ResumePanel() {
     toast(`已删除「${item.label || "未命名页"}」`);
   };
 
+  /**
+   * 用户点「+」新建空白页：页名当场去重。
+   *
+   * 连点两次都叫「未命名页」时，页签栏上两页长得一模一样，改名前只能靠位置猜；
+   * agent 建页仍然留空 —— 起名是用户的活，不该由程序替他决定这一页叫什么。
+   */
+  const addBlankPage = () => {
+    wantNewPage.current = true;
+    dispatch({
+      type: "addPage",
+      personId: person.id,
+      resumeId: resume.id,
+      label: nextPageLabel(resume.pages),
+    });
+    toast("已新增一页（空白，什么也没预置）");
+  };
+
+  /**
+   * 上传一整页原件。
+   *
+   * 渲染层对 file 页只会画一张 <img>（Rust 的 render_file_page），所以这里只收图片：
+   * 把 PDF 塞进去只会得到一张裂图，比当场说「不行」更让人摸不着头脑。
+   */
+  const addFilePage = async (file: File) => {
+    if (!isImageFile(file)) {
+      toast(
+        "PDF / Word 不能直接作为页 —— 先导出成图片，或者把它当附件发给会话，让 agent 读文字",
+      );
+      return;
+    }
+    try {
+      const asset = await saveAsset(file);
+      const label = nextPageLabel(resume.pages, filenameBase(file.name));
+      // 先入材料池再建页：页上的 assetId 得指得到东西，顺序反了会有一帧裂图
+      dispatch({ type: "addAssets", personId: person.id, assets: [asset] });
+      wantNewPage.current = true;
+      dispatch({
+        type: "addPage",
+        personId: person.id,
+        resumeId: resume.id,
+        kind: "file",
+        assetId: asset.id,
+        label,
+      });
+      toast(`已把「${file.name}」作为第 ${resume.pages.length + 1} 页`);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const menuPage = menu ? pageMap.get(menu.pageId) ?? null : null;
   const pendingPage = pendingDelete ? pageMap.get(pendingDelete) ?? null : null;
   const cutBlock = pendingCut ? (page.blocks ?? []).find((item) => item.id === pendingCut.blockId) ?? null : null;
@@ -395,19 +580,36 @@ export function ResumePanel() {
         {/* 「+」和「⋯」是一组工具，钉在页签区右边。
             以前「+」在 .tabStrip 里，页签一多就和「⋯」分居两处，看着是散的。 */}
         <div className={styles.tabTools}>
-          <button
-            type="button"
-            ref={addRef}
-            className={styles.tabAdd}
-            aria-label="新增页面"
-            onClick={() => {
-              wantNewPage.current = true;
-              dispatch({ type: "addPage", personId: person.id, resumeId: resume.id });
-              toast("已新增一页（空白，什么也没预置）");
-            }}
+          {/* 建页有两种：自己写一页，或者把扫好的整页原件放进来当一页。
+              以前点「+」只给空白页，想放原件得先去材料区绕一圈 */}
+          <Dropdown
+            width={188}
+            trigger={
+              <button type="button" ref={addRef} className={styles.tabAdd} aria-label="新增页面">
+                <Plus size={12} />
+              </button>
+            }
           >
-            <Plus size={12} />
-          </button>
+            <MenuItem label="空白页" hint="自己写" onSelect={addBlankPage} />
+            <MenuItem
+              label="上传图片作为页…"
+              hint="整页原件"
+              onSelect={() => fileRef.current?.click()}
+            />
+          </Dropdown>
+          {/* 文件选择框放在 Dropdown 外面：菜单一点就收起，input 在里面会跟着卸载 */}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              // 清空 value：同一个文件再选一次也要能触发 change
+              event.target.value = "";
+              if (file) void addFilePage(file);
+            }}
+          />
 
           {/* 折叠菜单挂在 .tabStrip 外面，否则会被它的 overflow:hidden 裁掉 */}
           {showMore && (
@@ -550,13 +752,38 @@ export function ResumePanel() {
         </span>
         {preview && (
           <div className={styles.zoomCtl}>
-            <button type="button" aria-label="缩小" onClick={() => setZoom((v) => Math.max(60, v - 10))}>
+            <button
+              type="button"
+              aria-label="缩小"
+              onClick={() => zoomManual(zoomRef.current - 10)}
+            >
               −
             </button>
-            <button type="button" className={styles.zoomVal} onClick={() => setZoom(100)} title="回到 100%">
-              {zoom}%
-            </button>
-            <button type="button" aria-label="放大" onClick={() => setZoom((v) => Math.min(150, v + 10))}>
+            {/* 百分比本身就是菜单入口：点它既能看到「现在多少」，也能直接跳到固定档 */}
+            <Dropdown
+              width={132}
+              trigger={
+                <button type="button" className={styles.zoomVal} title="缩放">
+                  {zoom}%
+                </button>
+              }
+            >
+              <MenuItem label="适应宽度" onSelect={zoomWidth} />
+              <MenuSep />
+              {ZOOM_PRESETS.map((preset) => (
+                <MenuItem
+                  key={preset}
+                  label={`${preset}%`}
+                  hint={preset === zoom ? "当前" : undefined}
+                  onSelect={() => zoomManual(preset)}
+                />
+              ))}
+            </Dropdown>
+            <button
+              type="button"
+              aria-label="放大"
+              onClick={() => zoomManual(zoomRef.current + 10)}
+            >
               +
             </button>
           </div>

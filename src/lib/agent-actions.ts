@@ -1,4 +1,4 @@
-import type { BlockRole, PageLayout, PageNote, PageStyle, Workspace } from "@/types";
+import type { BlockRole, PageLayout, PageNote, PageStyle, ResumePage, Workspace } from "@/types";
 import type { Action } from "@/store/workspace/types";
 
 /**
@@ -51,8 +51,10 @@ export interface AgentActionHooks {
   /** 排版 agent 在纸面上留的一条批注 */
   pageNote: (pageId: string, note: PageNote) => void;
   /**
-   * 排版 agent 向会话 agent 提问（前端负责追加消息并自动跑一轮）。
-   * `blockId` 有值时说明问的是某一块，要写进那条消息里，
+   * 排版 agent 向会话 agent 提问。
+   *
+   * 这是 agent 之间的往返，不进对话流：问题是内部的，答复也回投给排版信箱。
+   * `blockId` 有值时说明问的是某一块，要写进提问与答复里，
    * 否则会话 agent 得自己再去读一遍页面才能对上号。
    */
   askSession: (pageId: string, question: string, blockId?: string) => void;
@@ -321,8 +323,13 @@ export function needsConfirm(ops: Action[]): boolean {
    ========================================================================== */
 
 export interface ChatBridge {
-  /** 把一条消息追加进当前会话并跑一轮（提问来自排版） */
-  turn: (pageId: string, content: string) => void;
+  /**
+   * 把一条消息追加进当前会话并跑一轮。
+   *
+   * `silent` 表示这轮是 agent 之间的往返：消息进模型上下文但不进对话流，
+   * 界面上看不到提问、答复、打字动画，答复由面板回投给排版信箱。
+   */
+  turn: (pageId: string, content: string, silent?: boolean, blockId?: string) => void;
   /** 只追加一条系统提示，不触发模型 */
   notice: (content: string) => void;
 }
@@ -341,15 +348,54 @@ export function chatBridge(): ChatBridge | null {
 }
 
 /**
- * 排版提问在会话里的写法：「排版 · 关于第 2 页 · 块 b7：…」。
- *
- * 带上 blockId 是为了让会话 agent 不必为了对上号再读一遍整页；
- * 它拿这个 id 直接调只读工具就能看到那一块。
+ * 内部提问用的提示词，不进对话流 —— 它只喂给会话 agent，
+ * 让会话 agent 知道问的是哪一页、哪一块，不必自己再读一遍页面。
  */
 export function layoutQuestion(pageNo: number, question: string, blockId?: string): string {
   const head = pageNo > 0 ? `排版 · 关于第 ${pageNo} 页` : "排版";
   const where = blockId ? `${head} · 块 ${blockId}` : head;
   return `${where}：${question.trim()}`;
+}
+
+/**
+ * 同一页 5 秒内只让会话 agent 跑一轮。
+ *
+ * 两个 agent 互相呼叫很容易打成跨轮循环，后端的单轮限次挡不住它，
+ * 这里的节流是最后一道闸。表放模块级而不是各组件一份：排版事件（provider）
+ * 与会话指令（面板）是两条入口，各持一份就等于两个闸门，谁也挡不住对方。
+ */
+const ASK_COOLDOWN_MS = 5000;
+const askedAt = new Map<string, number>();
+
+/**
+ * 排版 agent 向会话 agent 提问的唯一入口。
+ *
+ * 只把提问交给 ChatBridge：格式化、防重、落消息都在这一条路上，
+ * provider 与面板都不该再各写一份，否则两边漂移时最难查的就是「为什么问了两遍」。
+ */
+export function askSessionFromLayout(input: {
+  /** 提问文案要带「第几页」，页序以调用方手里那份简历为准 */
+  pages: ResumePage[];
+  pageId: string;
+  question: string;
+  blockId?: string;
+}): void {
+  const next = chatBridge();
+  if (!next) {
+    console.warn("[layout] 会话面板还没准备好，这次提问被跳过", input.question);
+    return;
+  }
+  const now = Date.now();
+  if (now - (askedAt.get(input.pageId) ?? 0) < ASK_COOLDOWN_MS) return;
+  askedAt.set(input.pageId, now);
+
+  const index = input.pages.findIndex((item) => item.id === input.pageId);
+  next.turn(
+    input.pageId,
+    layoutQuestion(index + 1, input.question, input.blockId),
+    true,
+    input.blockId,
+  );
 }
 
 /** 返回实际应用的条数，调用方据此决定要不要提示用户 */

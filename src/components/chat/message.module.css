@@ -254,6 +254,15 @@
   flex: none;
 }
 
+/* 图片附件：悬停看缩略图、点击看大图。手型只给真的能点开的那些，
+   历史消息里找不到字节的图片保持普通文字的样子（见 message.tsx 的 hasImage） */
+.inlineImage {
+  cursor: pointer;
+}
+.inlineImage:hover {
+  box-shadow: 0 0 0 1px var(--acc-line-2);
+}
+
 /* 系统提示：居中一行灰字。它出现的场合都是「补充说明用户没看见的事」
    （比如某批改动被取消），用气泡表现会被误读成对话内容 */
 .turnSys {

@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { Attachment } from "@/types";
 import { ArrowUp, FileIcon, Plus } from "@/components/ui/icons";
+import { ImagePeek } from "@/components/ui/image-view";
 import { Dropdown, MenuItem } from "@/components/ui/menu";
-import { MODELS } from "@/lib/model-config";
+import { cx } from "@/lib/cx";
+import { listModels } from "@/lib/model-config";
 import { segmentText, tokenRanges, uniqueToken } from "@/lib/inline-tokens";
 import styles from "./composer.module.css";
-import { toAttachment } from "@/lib/attach";
+import { attachmentImage, isImage, toAttachment } from "@/lib/attach";
 
 /** 输入框高度偏好在本地记住：不同人写东西的姿势不一样 */
 const HEIGHT_KEY = "sharp-resume:composer:h";
@@ -238,7 +240,8 @@ export function Composer({
     deleteTokenRange(from, to);
   };
 
-  const options = useMemo(() => MODELS.map((item) => ({ id: item.id, label: item.label })), []);
+  // 自定义模型存在 localStorage 里，数量很少；每次渲染重建比维护一份"什么时候失效"的缓存更省心
+  const options = listModels().map((item) => ({ id: item.id, label: item.label }));
   const areaHeight = manual == null ? undefined : Math.max(MIN_H, manual);
   const segments = useMemo(() => segmentText(text, files), [text, files]);
 
@@ -249,15 +252,29 @@ export function Composer({
           <div className={styles.editor}>
             {/* 高亮层：只画标记底色，正文仍然由 textarea 显示（字形位置完全一致） */}
             <div className={styles.mirror} aria-hidden ref={mirrorRef}>
-              {segments.map((part, index) =>
-                part.file ? (
-                  <span className={styles.token} key={index}>
+              {segments.map((part, index) => {
+                const file = part.file;
+                if (!file) return <span key={index}>{part.text}</span>;
+                // 只有图片才有「看一眼 / 点开」的意义；其余附件保持纯标记
+                const image = isImage(file.ext) ? (file.preview ?? attachmentImage(file.id)) : undefined;
+                if (!image) {
+                  return (
+                    <span className={styles.token} key={index}>
+                      {part.text}
+                    </span>
+                  );
+                }
+                return (
+                  <ImagePeek
+                    key={`${file.id}:${index}`}
+                    className={cx(styles.token, styles.tokenImage)}
+                    title={file.name}
+                    resolve={() => file.preview ?? attachmentImage(file.id) ?? null}
+                  >
                     {part.text}
-                  </span>
-                ) : (
-                  <span key={index}>{part.text}</span>
-                ),
-              )}
+                  </ImagePeek>
+                );
+              })}
               {"\n"}
             </div>
 

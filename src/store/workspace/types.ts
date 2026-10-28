@@ -42,6 +42,13 @@ export type Action =
       /** 新页页名；空则沿用「未命名页」 */
       label?: string;
       /**
+       * 页的类型：native = 我们自己排版；file = 用户上传的整页原件。
+       * 缺省 native（老调用点不用改）。
+       */
+      kind?: "native" | "file";
+      /** file 页引用的材料 id（页面上就印这一份） */
+      assetId?: string;
+      /**
        * 建完是否把用户带到新页。
        * 注意：真正的「当前页」游标在 provider 里（视图态，不落盘），
        * reducer 只能把新页顶到 `ui.openPages[0]`，由 provider 对齐。

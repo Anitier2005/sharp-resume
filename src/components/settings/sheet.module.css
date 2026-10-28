@@ -217,3 +217,55 @@
   color: var(--fg-4);
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- 自定义模型 ---------- */
+/* 下拉 + 两个图标按钮同一行：删除键只在「当前是自定义模型」时出现，
+   放进行内而不是底部，是因为它作用于「你正在看的这一条」，不是整页动作 */
+.modelRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.modelRow .select {
+  flex: 1;
+  min-width: 0;
+}
+.modelBtn {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+.modelBtn:hover {
+  color: var(--acc-text);
+}
+
+/* 新建模型表单：字段多，纵向排；两列的小字段（窗口/温度）并一行 */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.formRow {
+  display: flex;
+  gap: 8px;
+}
+.formRow > * {
+  flex: 1;
+  min-width: 0;
+}
+.formCheck {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.6875rem;
+  color: var(--fg-2);
+}
+.formHint {
+  margin: 0;
+  font-size: 0.625rem;
+  line-height: 1.6;
+  color: var(--fg-4);
+}

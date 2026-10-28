@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { LOCAL_AI, MODELS } from "@/lib/model-config";
+import { LOCAL_AI, MODELS, type ModelConfig } from "@/lib/model-config";
 
 /**
  * 模型接入：任何 OpenAI 兼容接口（DeepSeek / OpenAI / 本地 ollama / 自建网关）都能用。
@@ -48,6 +48,25 @@ export function loadAi(): AiSettings {
 
 export function saveAi(settings: AiSettings): void {
   localStorage.setItem(STORE_KEY, JSON.stringify(settings));
+}
+
+/**
+ * 由模型清单里的一条（内置或用户自建）产出完整设置。
+ *
+ * apiKey 沿用上一份而不是清空：换模型通常只是换同一网关上的型号，凭据往往还是
+ * 那一条；真换网关时用户在设置页再贴一次即可。少了这一步，每次换模型都要重新
+ * 输入密钥 —— 而密钥是打码显示的，重输一遍成本很高。
+ */
+export function aiFromModel(model: ModelConfig, prev: AiSettings = loadAi()): AiSettings {
+  return {
+    // 自定义模型允许留空 baseUrl（沿用当前网关），内置项一定有值
+    baseUrl: model.baseUrl || prev.baseUrl,
+    model: model.id,
+    apiKey: prev.apiKey,
+    temperature: model.defaultTemperature,
+    reasoning: model.reasoning[0],
+    contextWindow: model.contextWindow,
+  };
 }
 
 export const aiReady = (settings: AiSettings): boolean =>

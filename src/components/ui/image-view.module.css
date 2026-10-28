@@ -1,0 +1,58 @@
+/* 大图窗。
+   Modal 的卡片是 420（小窗档）—— 那是给确认框/表单用的，图片塞进去只有 380 宽，
+   等于「点开大图看到一张小图」。这里只对**装了本组件的那个** dialog 放宽宽度，
+   用 [data-image-view] 定位，其它小窗一律不受影响。 */
+:global([role="dialog"]:has([data-image-view])) {
+  width: min(86vw, 1100px);
+  max-width: calc(100vw - 48px);
+}
+
+/* 图片本体：留 10px 呼吸位，深色衬底把截图边缘和弹窗白底分开。
+   衬底用纸面墨色而不是硬编码：它是在明暗两套令牌里都恒为近黑的唯一一个。 */
+.stage {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--paper-fg);
+  cursor: zoom-out;
+}
+
+.image {
+  display: block;
+  max-width: min(86vw, 1100px);
+  max-height: 78vh;
+  object-fit: contain;
+  /* 透明 PNG 在深色衬底上会糊成一片，给图片自己一层浅底，边界才清楚 */
+  background: var(--bg-elev);
+  border-radius: 8px;
+  box-shadow: var(--shadow-paper);
+}
+
+/* 悬停缩略图：fixed 是为了脱离 mirror / 会话流的 overflow，
+   位置由 JS 按标签的 getBoundingClientRect 算，见 image-view.tsx。
+   pointer-events:none —— 它只是「看一眼」，不能抢走标签的点击。 */
+.peek {
+  position: fixed;
+  z-index: 130;
+  max-width: 220px;
+  max-height: 160px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-paper);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* 尺寸全部卡在 .peek 的内框里：全局是 border-box，
+   内层再超 1px 就会被 overflow 裁掉一条边 */
+.peek img {
+  display: block;
+  max-width: 100%;
+  max-height: 158px;
+  object-fit: contain;
+  border-radius: 5px;
+  background: var(--bg-elev);
+}

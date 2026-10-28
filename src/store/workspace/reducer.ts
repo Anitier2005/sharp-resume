@@ -192,9 +192,13 @@ export function reducer(state: Workspace, action: Action): Workspace {
       // id 在这里定下来：`open` 要把它写进 ui.openPages，而那是 state 级的事，
       // 拿不到「刚生成的那一页」就没法指过去
       const id = action.id ?? uid("pg");
+      // assetId 只在真有原件时写：native 页不带这个字段，
+      // 存档里少一条 `"assetId": null` 的噪声（同 withRole 的处理）
+      const fresh = { ...newPage(id, action.label), kind: action.kind ?? "native" };
+      const page = action.assetId ? { ...fresh, assetId: action.assetId } : fresh;
       const next = mapResume(state, action.personId, action.resumeId, (resume) => ({
         ...resume,
-        pages: [...resume.pages, newPage(id, action.label)],
+        pages: [...resume.pages, page],
       }));
       if (!action.open) return next;
       // openPages[0] 就是「上次看的那一页」这个持久化游标（见 provider 的注释）；

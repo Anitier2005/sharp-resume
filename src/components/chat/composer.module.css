@@ -93,6 +93,31 @@
   box-shadow: 0 0 0 1px var(--acc-line);
   padding: 2px;
   margin: -2px;
+  /* mirror 整体 pointer-events:none（不能挡住 textarea 落光标），
+     但标记要拿到 hover/click，只能单独放行 */
+  pointer-events: auto;
+}
+
+/* 图片标记：悬停看缩略图、点击看大图。
+   点了就开图，别再指望光标落到这半句里 —— 这是用户要的行为。
+
+   光给 .token 加 pointer-events 还不够：textarea 在 DOM 里排在 mirror 后面，
+   两个都是定位元素、z-index 都是 auto，所以 textarea 永远画在上面，
+   鼠标先命中它，mirror 里的标记拿不到 hover/click。
+   这里用一层透明的 ::after 把命中区提到 textarea 上层 ——
+   底色和文字仍留在下面，字形、光标、选区都不受影响。 */
+.tokenImage {
+  position: relative;
+  cursor: pointer;
+}
+.tokenImage::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: 1;
+}
+.tokenImage:hover {
+  box-shadow: 0 0 0 1px var(--acc-line-2);
 }
 
 

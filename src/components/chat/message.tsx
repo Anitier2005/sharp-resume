@@ -1,10 +1,80 @@
 import type { ReactNode } from "react";
-import type { ChatAction, ChatMessage } from "@/types";
+import type { Asset, Attachment, ChatAction, ChatMessage, Person } from "@/types";
 import { Check, FileIcon, Plus } from "@/components/ui/icons";
+import { ImagePeek } from "@/components/ui/image-view";
+import { resolveUrl } from "@/lib/assets";
+import { attachmentImage, isImage } from "@/lib/attach";
 import { segmentText } from "@/lib/inline-tokens";
 import { Markdown } from "@/lib/markdown";
 import { cx } from "@/lib/cx";
+import { useWorkspace } from "@/store/workspace";
 import styles from "./message.module.css";
+
+/**
+ * 行内附件的图片地址。
+ *
+ * 消息里存的是「文件名 + 可能的 material id」：字节要么在材料池（assetId），
+ * 要么在本会话的内存缓存里（发出去那一刻读的 data URL）。前者要异步读盘，
+ * 所以结果必须缓存 —— 否则每次悬停都重新读一遍，图片一多就卡。
+ */
+const srcCache = new Map<string, string>();
+const srcPending = new Map<string, Promise<string | null>>();
+
+const cacheKeyOf = (file: Attachment) => `${file.id}:${file.assetId ?? ""}`;
+
+/** 材料可能挂在人身上，也可能挂在某条经历里（上传入口不同） */
+function assetOf(person: Person | null, assetId?: string): Asset | undefined {
+  if (!person || !assetId) return undefined;
+  const own = person.assets?.find((item) => item.id === assetId);
+  if (own) return own;
+  for (const item of person.items) {
+    const hit = item.assets?.find((asset) => asset.id === assetId);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/** 同步判断「这张图有没有可能看到」：决定要不要挂 hover/click，避免给死标签上手型 */
+function hasImage(file: Attachment, person: Person | null): boolean {
+  if (!isImage(file.ext)) return false;
+  if (file.preview) return true;
+  if (assetOf(person, file.assetId)?.kind === "image") return true;
+  return Boolean(attachmentImage(file.id));
+}
+
+function resolveAttachmentSrc(file: Attachment, person: Person | null): Promise<string | null> {
+  const key = cacheKeyOf(file);
+  const cached = srcCache.get(key);
+  if (cached) return Promise.resolve(cached);
+  if (file.preview) {
+    srcCache.set(key, file.preview);
+    return Promise.resolve(file.preview);
+  }
+  const running = srcPending.get(key);
+  if (running) return running;
+
+  const task = (async () => {
+    const asset = assetOf(person, file.assetId);
+    if (asset?.kind === "image") {
+      const url = await resolveUrl(asset);
+      if (url) return url;
+    }
+    return attachmentImage(file.id) ?? null;
+  })().then(
+    (value) => {
+      srcPending.delete(key);
+      // 只缓存成功结果：图片的 data URL 是选文件时异步读的，早一步悬停会读到空
+      if (value) srcCache.set(key, value);
+      return value;
+    },
+    () => {
+      srcPending.delete(key);
+      return null;
+    },
+  );
+  srcPending.set(key, task);
+  return task;
+}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -20,7 +90,32 @@ function highlight(text: string): ReactNode[] {
   );
 }
 
+/** 正文里的一枚附件标记；只有图片才可悬停预览 / 点开大图 */
+function InlineAsset({ file, person }: { file: Attachment; person: Person | null }) {
+  if (!hasImage(file, person)) {
+    return (
+      <span className={styles.inlineAsset} title={file.name}>
+        <FileIcon size={9} />
+        {file.name}
+      </span>
+    );
+  }
+  return (
+    <ImagePeek
+      key={cacheKeyOf(file)}
+      className={cx(styles.inlineAsset, styles.inlineImage)}
+      title={file.name}
+      resolve={() => resolveAttachmentSrc(file, person)}
+    >
+      <FileIcon size={9} />
+      {file.name}
+    </ImagePeek>
+  );
+}
+
 export function UserTurn({ message }: { message: ChatMessage }) {
+  // person 不去改 panel.tsx 的调用签名：消息本来就属于这个人，直接从工作区取
+  const { person } = useWorkspace();
   const attachments = message.attachments ?? [];
   // 有 token 的附件就长在正文里；没 token 的是旧消息，退回下面那排
   const inline = attachments.filter((file) => file.token);
@@ -33,10 +128,7 @@ export function UserTurn({ message }: { message: ChatMessage }) {
         <div className={styles.prompt} data-selectable>
           {segments.map((part, index) =>
             part.file ? (
-              <span className={styles.inlineAsset} key={index} title={part.file.name}>
-                <FileIcon size={9} />
-                {part.file.name}
-              </span>
+              <InlineAsset key={index} file={part.file} person={person} />
             ) : (
               <span key={index}>{part.text}</span>
             ),
