@@ -1,0 +1,70 @@
+/* 遮罩本体沿用 shared.veil（fixed + 居中 + 全屏），这里只补两点：
+   触摸滑动关掉、滚动链掐断 —— 否则弹窗开着时手指一划，底下的纸面跟着走 */
+.veil {
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+/* 小窗唯一的尺寸。
+   420 在 1120 宽的最小窗口里占 37%，两侧各留 350，
+   不会让用户觉得「窗把界面盖死了」；高度不写死，由内容决定 ——
+   三行确认框拉到 480 高只是把空白当设计。 */
+.card {
+  width: 420px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(20, 20, 15, 0.06),
+    0 24px 60px -24px rgba(20, 20, 15, 0.45);
+  /* 内容再长也只滚中间那段：标题与按钮永远留在窗里。
+     agent 一次删十几页时，按钮被顶出下沿等于这个窗关不掉 */
+  overflow: hidden;
+}
+
+.head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 10px 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+/* 标题列吃掉剩余宽度，右上角的 X 才不会被长标题挤出去 */
+.head > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 只负责留白与滚动，内部怎么排（表单行 / 列表 / 字段组）由调用方决定 ——
+   这里若自带 flex 布局，调用方就得再套一层容器去覆盖它。
+
+   `flex: 1` 写成 `1 1 auto` 而不是缩写：缩写等价于 basis 0%，卡片又是自动高度，
+   结果中间段被压成几乎 0 高、内容全挤进一个滚动条里（实测卡片塌到 224px）。
+   用 auto 才会先按内容撑开，撑不下才压缩。
+   顺序：先撑开 → 到 max-height 再压缩 → 压缩后内部滚动。 */
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px 18px 16px;
+  overflow: auto;
+  font-size: 0.6875rem;
+  line-height: 1.7;
+  color: var(--fg-2);
+}
+
+/* 按钮区比卡片本体略深一档：让「可点的东西」和「读的东西」在视觉上分层，
+   同时给「取消」一个明确的落脚处，而不是和正文抢注意力 */
+.foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-canvas);
+}

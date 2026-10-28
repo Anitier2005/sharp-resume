@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { AI_PRESETS, aiReady, testConnection, type AiSettings } from "@/lib/ai";
-import { Close } from "@/components/ui/icons";
+import { Modal } from "@/components/ui/modal";
 import { cx } from "@/lib/cx";
 import styles from "./ai-settings.module.css";
 import shared from "@/components/ui/shared.module.css";
@@ -15,19 +15,6 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
   const [draft, setDraft] = useState<AiSettings>(settings);
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-  const firstRef = useRef<HTMLInputElement | null>(null);
-  // onClose 每次父组件渲染都是新函数，用 ref 兜住，避免重新挂载监听、抢焦点
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-
-  useEffect(() => {
-    firstRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeRef.current();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   const patch = (next: Partial<AiSettings>) => {
     setDraft((value) => ({ ...value, ...next }));
@@ -48,77 +35,14 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
   };
 
   return (
-    <div
-      className={shared.veil}
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
-      <div className={styles.sheet} role="dialog" aria-modal="true" aria-label="模型设置">
-        <header className={styles.head}>
-          <div className={shared.overlayTitle}>
-            <b>模型设置</b>
-            <span>任何 OpenAI 兼容接口：DeepSeek / OpenAI / Ollama / 自建网关</span>
-          </div>
-          <button type="button" className={shared.overlayClose} aria-label="关闭" onClick={onClose}>
-            <Close size={11} />
-          </button>
-        </header>
-
-        <div className={styles.body}>
-          <div className={styles.presets}>
-            {AI_PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                aria-pressed={draft.baseUrl === preset.baseUrl && draft.model === preset.model}
-                onClick={() => patch({ baseUrl: preset.baseUrl, model: preset.model })}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-
-          <label className={shared.fld}>
-            <span className={shared.fldK}>接口地址</span>
-            <input
-              ref={firstRef}
-              value={draft.baseUrl}
-              placeholder="https://api.deepseek.com/v1"
-              spellCheck={false}
-              onChange={(event) => patch({ baseUrl: event.target.value })}
-            />
-          </label>
-
-          <label className={shared.fld}>
-            <span className={shared.fldK}>模型</span>
-            <input
-              value={draft.model}
-              placeholder="deepseek-chat"
-              spellCheck={false}
-              onChange={(event) => patch({ model: event.target.value })}
-            />
-          </label>
-
-          <label className={shared.fld}>
-            <span className={shared.fldK}>API Key</span>
-            <input
-              type="password"
-              value={draft.apiKey}
-              placeholder="sk-…"
-              spellCheck={false}
-              onChange={(event) => patch({ apiKey: event.target.value })}
-            />
-          </label>
-
-          <p className={styles.note}>
-            密钥只存在这台机器的 localStorage，不写进工作区、不随简历导出。留空则按本地改写规则回答。
-          </p>
-
-          {result && (
-            <p className={cx(styles.result, result.ok ? styles.resultOk : styles.resultBad)}>{result.text}</p>
-          )}
-        </div>
-
-        <footer className={styles.foot}>
+    <Modal
+      title="模型设置"
+      subtitle="任何 OpenAI 兼容接口：DeepSeek / OpenAI / Ollama / 自建网关"
+      // 底部已有「取消」，所以不给右上角 X —— 两个否定出口会让人犹豫点哪个
+      onCancel={onClose}
+      bodyClassName={styles.body}
+      footer={
+        <>
           <button type="button" className={shared.btnGhost} onClick={onClose}>
             取消
           </button>
@@ -139,8 +63,62 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
           >
             保存
           </button>
-        </footer>
+        </>
+      }
+    >
+      <div className={styles.presets}>
+        {AI_PRESETS.map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            aria-pressed={draft.baseUrl === preset.baseUrl && draft.model === preset.model}
+            onClick={() => patch({ baseUrl: preset.baseUrl, model: preset.model })}
+          >
+            {preset.label}
+          </button>
+        ))}
       </div>
-    </div>
+
+      <label className={shared.fld}>
+        <span className={shared.fldK}>接口地址</span>
+        <input
+          // 打开就停在第一个可改的字段上，用户不用先 Tab 一次
+          data-autofocus
+          value={draft.baseUrl}
+          placeholder="https://api.deepseek.com/v1"
+          spellCheck={false}
+          onChange={(event) => patch({ baseUrl: event.target.value })}
+        />
+      </label>
+
+      <label className={shared.fld}>
+        <span className={shared.fldK}>模型</span>
+        <input
+          value={draft.model}
+          placeholder="deepseek-chat"
+          spellCheck={false}
+          onChange={(event) => patch({ model: event.target.value })}
+        />
+      </label>
+
+      <label className={shared.fld}>
+        <span className={shared.fldK}>API Key</span>
+        <input
+          type="password"
+          value={draft.apiKey}
+          placeholder="sk-…"
+          spellCheck={false}
+          onChange={(event) => patch({ apiKey: event.target.value })}
+        />
+      </label>
+
+      <p className={styles.note}>
+        密钥只存在这台机器的 localStorage，不写进工作区、不随简历导出。留空则按本地改写规则回答。
+      </p>
+
+      {result && (
+        <p className={cx(styles.result, result.ok ? styles.resultOk : styles.resultBad)}>{result.text}</p>
+      )}
+    </Modal>
   );
 }

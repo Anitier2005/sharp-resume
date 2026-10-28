@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { Close } from "@/components/ui/icons";
+import { useVeilWheelLock } from "@/components/ui/veil";
 import { displayName } from "@/types";
 import shared from "@/components/ui/shared.module.css";
 import styles from "./library.module.css";
@@ -23,6 +24,7 @@ const TABS: { key: Tab; label: string }[] = [
 export function LibraryDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { person, resume, page } = useWorkspace();
   const [tab, setTab] = useState<Tab>("person");
+  const veilRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -33,16 +35,16 @@ export function LibraryDrawer({ open, onClose }: { open: boolean; onClose: () =>
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // 大面板不走 Modal（宽度由内容决定），但「滚轮不许带动底下的纸面」这条要一致
+  useVeilWheelLock(veilRef, open);
+
   if (!open || !person) return null;
 
   const pageName = page ? `${resume?.title ?? ""} · ${page.label}` : "还没有打开简历";
 
   return (
-    <div
-      className={shared.veil}
-      data-print="hide"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
+    // 遮罩只挡点击，不关窗 —— 关闭只有两条路：右上角 X 与 ESC
+    <div ref={veilRef} className={shared.veil} data-print="hide">
       <div className={styles.drawer} role="dialog" aria-modal="true" aria-label="资料">
         <header className={styles.head}>
           <div className={shared.overlayTitle}>

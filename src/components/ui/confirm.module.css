@@ -1,59 +1,15 @@
-/* 遮罩本体沿用 shared.veil（fixed + 居中 + 全屏），这里只补「别让下面跟着滚」：
-   touch-action 关掉触摸滑动，overscroll-behavior 阻止滚动链传到底下的纸面 */
-.veil {
-  touch-action: none;
-  overscroll-behavior: contain;
-}
-
-/* 确认窗：只用于不可撤销的操作（删候选人、删页、agent 的批量删除）。
-   刻意做得窄而克制 —— 它出现的时候，用户正要做一件不能反悔的事。 */
-
-.box {
-  width: 320px;
-  max-width: calc(100vw - 48px);
-  max-height: calc(100vh - 96px);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 16px 18px 14px;
-  background: var(--bg-elev);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(20, 20, 15, 0.06),
-    0 24px 60px -24px rgba(20, 20, 15, 0.45);
-  /* 列表超长时收缩列表，不能把按钮挤出卡片下沿 ——
-     agent 一次删十页时，按钮跑到屏幕外等于这个窗关不掉 */
-  overflow: hidden;
-}
-
-.title {
-  font-size: 0.78125rem;
-  font-weight: 600;
-  color: var(--fg-1);
-}
-
-.desc {
-  margin: 0;
-  font-size: 0.6875rem;
-  line-height: 1.7;
-  color: var(--fg-3);
-}
+/* 确认窗只剩「列表」和「红色主按钮」两处自有样式：
+   遮罩、卡片、头部、底栏都由 ui/modal.module.css 统一提供。 */
 
 /* 将被删除的东西逐条列出来：说「2 项」等于没说，用户要认的是具体的页和条目 */
 .items {
   margin: 0;
-  padding: 0;
+  padding: 0 0 0 8px;
   list-style: none;
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-height: 168px;
-  overflow: auto;
   border-left: 2px solid var(--danger);
-  padding-left: 8px;
-  /* 允许被压缩：卡片到 max-height 时先缩这里，`min-height:0` 是 flex 下的开关 */
-  flex: 0 1 auto;
-  min-height: 0;
 }
 .items li {
   font-size: 0.6875rem;
@@ -62,45 +18,31 @@
   word-break: break-word;
 }
 
-.acts {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 8px;
-  flex: none;
-}
-
-.acts button {
+/* 红底主按钮：全部按钮里唯一表示「不可撤销」的那个。
+   尺寸与 shared.btnGhost 对齐，免得两个按钮高低不齐 */
+.danger {
   height: 26px;
-  padding: 0 11px;
-  border: 1px solid var(--line);
+  padding: 0 12px;
+  border: 1px solid transparent;
   border-radius: 4px;
+  background: var(--danger);
+  color: var(--bg-elev);
   font-size: 0.6875rem;
-  color: var(--fg-2);
 }
-.acts button:hover {
-  border-color: var(--line-strong);
-  background: var(--bg-hover);
-  color: var(--fg-1);
-}
-
-.acts .danger {
-  border-color: transparent;
-  background: var(--danger);
-  color: var(--bg-elev);
-}
-.acts .danger:hover {
-  background: var(--danger);
+.danger:hover {
   filter: brightness(0.94);
-  color: var(--bg-elev);
 }
 
-.acts .primary {
-  border-color: transparent;
+.primary {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
   background: var(--acc);
   color: var(--acc-fg);
+  font-size: 0.6875rem;
 }
-.acts .primary:hover {
+.primary:hover {
   background: var(--acc-hover);
   color: var(--acc-fg);
 }

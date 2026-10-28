@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { Close } from "@/components/ui/icons";
+import { useVeilWheelLock } from "@/components/ui/veil";
 import { ACCENTS, TEXT_SCALES } from "@/types";
 import { isHexColor } from "@/lib/color";
 import { loadAi, saveAi, testAi, type AiSettings } from "@/lib/ai";
@@ -29,6 +30,8 @@ export function SettingsSheet({
   onClose: () => void;
   initialTab?: Tab;
 }) {
+  const veilRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -38,14 +41,14 @@ export function SettingsSheet({
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // 大面板不走 Modal（宽度由内容决定），但「滚轮不许带动底下的纸面」这条要一致
+  useVeilWheelLock(veilRef, open);
+
   if (!open) return null;
 
   return (
-    <div
-      className={shared.veil}
-      data-print="hide"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
+    // 遮罩只挡点击，不关窗 —— 关闭只有两条路：右上角 X 与 ESC
+    <div ref={veilRef} className={shared.veil} data-print="hide">
       <SheetBody onClose={onClose} initialTab={initialTab} />
     </div>
   );

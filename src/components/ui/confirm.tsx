@@ -1,6 +1,4 @@
-import { useEffect, useRef } from "react";
-import { createPortal } from "react-dom";
-import { cx } from "@/lib/cx";
+import { Modal } from "./modal";
 import shared from "./shared.module.css";
 import styles from "./confirm.module.css";
 
@@ -40,100 +38,18 @@ export function Confirm({
   onConfirm,
   onCancel,
 }: ConfirmProps) {
-  // Escape 只在开着的时候接管：关着的确认窗不该吃掉别处的按键
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onCancel();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onCancel]);
-
-  const veilRef = useRef<HTMLDivElement | null>(null);
-
-  /**
-   * 滚轮也要拦住。
-   *
-   * 遮罩能挡点击，但挡不住滚轮——弹窗开着时滚一下，底下的纸面/会话照滚，
-   * 用户会以为「确认窗跟着内容动了」。列表本身要能滚，所以只拦列表之外。
-   * 用原生 addEventListener 而不是 onWheel：React 给 wheel 挂的是 passive，
-   * preventDefault 在里面无效。
-   */
-  useEffect(() => {
-    if (!open) return;
-    const veil = veilRef.current;
-    if (!veil) return;
-    const onWheel = (event: WheelEvent) => {
-      const scrollable = veil.querySelector<HTMLElement>("[data-scroll]");
-      if (scrollable?.contains(event.target as Node)) return;
-      event.preventDefault();
-    };
-    veil.addEventListener("wheel", onWheel, { passive: false });
-    return () => veil.removeEventListener("wheel", onWheel);
-  }, [open]);
-
+  // 关着就不挂载：不注册 ESC、不抢焦点、不拦截滚轮
   if (!open) return null;
 
-  /**
-   * 挂到 `.win` 里面，不是 body。
-   *
-   * 设计令牌（`--bg-elev` / `--danger` / `--fg-*`）定义在 `.win` 上，
-   * 而 provider 在 `.win` 的外层 —— 确认窗直接渲染在那儿时所有 `var()` 都解析不出来：
-   * 卡片透明、按钮没有底色也没有描边，底下的会话文字直接透上来，
-   * 用户看到的就是「弹了个透明框、找不到按钮」。令牌必须跟着 DOM 走。
-   *
-   * 只在 `open` 为真时取节点：那时窗口一定已经挂载，不需要 state/effect 去等。
-   */
-  const host = document.querySelector<HTMLElement>(".win");
-
-  /**
-   * Tab 也要关在窗里。
-   *
-   * 遮罩挡得住鼠标，挡不住键盘 —— 不拦的话 Tab 会把焦点带到下面那张纸上，
-   * 用户回车就改到了自己没看见的东西。
-   */
-  const keepFocus = (event: React.KeyboardEvent) => {
-    if (event.key !== "Tab") return;
-    const nodes = veilRef.current?.querySelectorAll<HTMLElement>("button");
-    if (!nodes?.length) return;
-    const first = nodes[0];
-    const last = nodes[nodes.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  };
-
-  const dialog = (
-    <div
-      ref={veilRef}
-      className={cx(shared.veil, styles.veil)}
-      data-print="hide"
-      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
-      onKeyDown={keepFocus}
-    >
-      <div
-        className={styles.box}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        data-selectable
-      >
-        <div className={styles.title}>{title}</div>
-        {description && <p className={styles.desc}>{description}</p>}
-        {items && items.length > 0 && (
-          <ul className={styles.items} data-scroll>
-            {items.map((item, index) => (
-              <li key={`${index}-${item}`}>{item}</li>
-            ))}
-          </ul>
-        )}
-        <div className={styles.acts}>
-          <button type="button" onClick={onCancel} autoFocus>
+  return (
+    <Modal
+      title={title}
+      subtitle={description}
+      onCancel={onCancel}
+      footer={
+        <>
+          {/* 危险操作默认停在「取消」上：回车不该替用户做决定 */}
+          <button type="button" className={shared.btnGhost} onClick={onCancel} data-autofocus>
             {cancelLabel}
           </button>
           <button
@@ -143,12 +59,16 @@ export function Confirm({
           >
             {confirmLabel}
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {items && items.length > 0 ? (
+        <ul className={styles.items}>
+          {items.map((item, index) => (
+            <li key={`${index}-${item}`}>{item}</li>
+          ))}
+        </ul>
+      ) : null}
+    </Modal>
   );
-
-  // host 还没解析出来时（首帧）直接就地渲染：这个窗口里 .win 一定已经挂载，
-  // 但宁可第一帧样式不对，也不要把这层拦截整个丢掉
-  return host ? createPortal(dialog, host) : dialog;
 }

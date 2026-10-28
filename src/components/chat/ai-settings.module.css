@@ -1,54 +1,24 @@
-/* 设置面板：尺寸与骨架。遮罩、面板头、表单字段、按钮来自 ui/shared.module.css */
-.sheet {
-  width: min(468px, calc(100vw - 48px));
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-elev);
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  box-shadow: 0 2px 6px rgba(20, 20, 15, 0.05),
-    0 34px 64px -34px rgba(20, 20, 15, 0.45);
-  overflow: hidden;
-  animation: sheetIn 0.16s ease both;
-}
-@keyframes sheetIn {
-  from {
-    opacity: 0;
-    transform: translateY(7px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-.head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 10px 0 16px;
-  height: 52px;
-  border-bottom: 1px solid var(--line);
-}
-.head > :first-child {
-  flex: 1;
-  min-width: 0;
-}
+/* 只保留「字段怎么排」。卡片、头部、底栏、遮罩来自 ui/modal ——
+   尺寸统一在那一处，这里再写宽度就会把 420 又拆成两个数。 */
 
 .body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 16px 16px;
 }
 
-/* 服务商预设 */
+/* 服务商预设：420 宽比原来的 468 窄，四个名字（「MiniMax M3.1 Flash」这种）
+   一行塞不下。允许整颗按钮换行到第二排，但按钮内部不许折字 ——
+   折了会把 22px 高的按钮撑成两行、压到下面的字段上 */
 .presets {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 2px;
 }
 .presets button {
+  flex: none;
+  white-space: nowrap;
   height: 22px;
   padding: 0 9px;
   border: 1px solid var(--line);
@@ -97,14 +67,7 @@
   background: color-mix(in srgb, var(--danger) 16%, #17171a);
 }
 
-.foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 16px;
-  border-top: 1px solid var(--line);
-  background: var(--bg-canvas);
-}
+/* 把「测试连接 / 保存」推到右端，取消单独留在左边 */
 .sp {
   flex: 1;
 }
