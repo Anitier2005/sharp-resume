@@ -1,6 +1,7 @@
 @echo off
 rem ============================================================================
-rem Sharp Resume · Windows release 构建
+rem Sharp Resume · Windows release 构建（lite：不含内置 OCR）
+rem 需要内置 OCR 的版本请用 build-ocr.bat（多 17MB，且需要 libclang 那套构建依赖）
 rem
 rem 为什么需要这个脚本（两条都会让 cargo build 直接失败）：
 rem
@@ -85,6 +86,7 @@ for %%C in ("%MSVC_ROOT%\..\..\..\..\Common7\IDE\CommonExtensions\Microsoft\CMak
 
 pushd "%~dp0..\src-tauri"
 rem custom-protocol 必须带上：否则 release 版不内嵌 dist/，启动后去连 devUrl，窗口全黑。
+rem 默认 lite：不带 ocr feature，tesseract 不参与编译，产物旁也不会有 DLL/tessdata。
 cargo build --release --features custom-protocol
 set "RC=%ERRORLEVEL%"
 popd
@@ -92,5 +94,5 @@ popd
 if not "%RC%"=="0" exit /b %RC%
 
 echo.
-echo [ok] src-tauri\target\release\sharp-resume.exe
+echo [ok] src-tauri\target\release\sharp-resume.exe  (lite, no OCR)
 exit /b 0

@@ -7,7 +7,17 @@ import { Confirm } from "@/components/ui/confirm";
 import { useToast } from "@/components/ui/toast-context";
 import { ACCENTS, TEXT_SCALES } from "@/types";
 import { isHexColor } from "@/lib/color";
-import { aiFromModel, loadAi, saveAi, testAi, type AiSettings } from "@/lib/ai";
+import {
+  aiFromModel,
+  loadAi,
+  loadAux,
+  saveAi,
+  saveAux,
+  testAi,
+  type AiSettings,
+  type AuxModelChoice,
+  type AuxSettings,
+} from "@/lib/ai";
 import {
   findModel,
   isCustomModel,
@@ -15,8 +25,10 @@ import {
   removeCustomModel,
   saveCustomModel,
   type ModelConfig,
+  type ModelKind,
 } from "@/lib/model-config";
 import { isTauri } from "@/lib/storage";
+import { configureKnowledge } from "@/lib/knowledge";
 import { ColorPicker } from "@/components/ui/color-picker";
 import { cx } from "@/lib/cx";
 import shared from "@/components/ui/shared.module.css";
@@ -80,9 +92,15 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
    * 清单存一份在 state 里：`listModels()` 是普通函数，增删之后 React 不会自己重渲染，
    * 下拉就会停在旧选项上。
    */
-  const [models, setModels] = useState<ModelConfig[]>(listModels);
-  const [creating, setCreating] = useState(false);
-  const [removing, setRemoving] = useState(false);
+  const [models, setModels] = useState<ModelConfig[]>(() => listModels("chat"));
+  /**
+   * 嵌入 / OCR 是「功能用哪个模型」，不是「当前对话用哪个」——
+   * 所以单独一份设置，换对话模型不会顺手把它们换掉。
+   */
+  const [aux, setAux] = useState<AuxSettings>(loadAux);
+  /** 正在新建 / 删除的类别；null = 没有弹层 */
+  const [creating, setCreating] = useState<ModelKind | null>(null);
+  const [removing, setRemoving] = useState<ModelKind | null>(null);
 
   const spec = findModel(ai.model);
 
@@ -99,27 +117,59 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
     write(aiFromModel(model, ai));
   };
 
-  const createModel = (model: ModelConfig, apiKey: string) => {
+  /** 改嵌入/OCR 的选择：只动 aux，不碰当前对话模型 */
+  const pickAux = (kind: "embedding" | "ocr", id: string) => {
+    const model = findModel(id);
+    if (!model) return;
+    const choice: AuxModelChoice = { model: id, baseUrl: model.baseUrl, apiKey: "" };
+    const next = { ...aux, [kind]: choice };
+    setAux(next);
+    saveAux({ [kind]: choice });
+    configureKnowledge(next.embedding);
+  };
+
+  const patchAux = (kind: "embedding" | "ocr", patch: Partial<AuxModelChoice>) => {
+    const current = aux[kind];
+    if (!current) return;
+    const next = { ...current, ...patch };
+    setAux({ ...aux, [kind]: next });
+    saveAux({ [kind]: next });
+    configureKnowledge(kind === "embedding" ? next : aux.embedding);
+  };
+
+  const createModel = (kind: ModelKind, model: ModelConfig, apiKey: string) => {
     saveCustomModel(model);
-    setModels(listModels());
-    const next = aiFromModel(model, ai);
-    // 表单里没填 key 就沿用当前那把 —— 同一个网关换型号通常不需要重输
-    if (apiKey.trim()) next.apiKey = apiKey.trim();
-    setAi(next);
-    saveAi(next);
-    setCreating(false);
+    setModels(listModels("chat"));
+    if (kind === "chat") {
+      const next = aiFromModel(model, ai);
+      // 表单里没填 key 就沿用当前那把 —— 同一个网关换型号通常不需要重输
+      if (apiKey.trim()) next.apiKey = apiKey.trim();
+      setAi(next);
+      saveAi(next);
+    } else {
+      const choice: AuxModelChoice = { model: model.id, baseUrl: model.baseUrl, apiKey: apiKey.trim() };
+      setAux({ ...aux, [kind]: choice });
+      saveAux({ [kind]: choice });
+    }
+    setCreating(null);
     toast(`已新建模型 ${model.label}`);
   };
 
-  const dropModel = () => {
-    const label = spec?.label ?? ai.model;
-    setRemoving(false);
-    removeCustomModel(ai.model);
-    const next = listModels();
-    setModels(next);
-    // 删掉的正是当前在用的那条：回退到第一条内置，否则设置里会留一个查不到的 id
-    const fallback = next.find((item) => !isCustomModel(item.id));
-    if (fallback) write(aiFromModel(fallback, ai));
+  const dropModel = (kind: ModelKind) => {
+    const id = kind === "chat" ? ai.model : aux[kind]?.model ?? "";
+    const label = findModel(id)?.label ?? id;
+    setRemoving(null);
+    removeCustomModel(id);
+    const chatModels = listModels("chat");
+    setModels(chatModels);
+    if (kind === "chat") {
+      // 删掉的正是当前在用的那条：回退到第一条内置，否则设置里会留一个查不到的 id
+      const fallback = chatModels.find((item) => !isCustomModel(item.id));
+      if (fallback) write(aiFromModel(fallback, ai));
+    } else {
+      setAux({ ...aux, [kind]: null });
+      saveAux({ [kind]: null });
+    }
     toast(`已删除自定义模型 ${label}`);
   };
 
@@ -179,49 +229,43 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
         {tab === "model" ? (
           <>
             <div className={styles.group}>
-              <span className={styles.groupTitle}>模型</span>
-              <div className={styles.group}>
-                <span className={shared.fldK}>选择已配置的模型</span>
-                <div className={styles.modelRow}>
-                  <select
-                    className={styles.select}
-                    value={ai.model}
-                    onChange={(event) => pickModel(event.target.value)}
-                  >
-                    {models.map((item) => (
-                      <option value={item.id} key={item.id}>
-                        {item.label} · {item.provider}
-                        {isCustomModel(item.id) ? "（自定义）" : ""}
-                      </option>
-                    ))}
-                  </select>
+              <span className={styles.groupTitle}>对话模型</span>
+              <div className={styles.modelRow}>
+                <select
+                  className={styles.select}
+                  value={ai.model}
+                  onChange={(event) => pickModel(event.target.value)}
+                >
+                  {models.map((item) => (
+                    <option value={item.id} key={item.id}>
+                      {item.label} · {item.provider}
+                      {isCustomModel(item.id) ? "（自定义）" : ""}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={cx(shared.btnGhost, styles.modelBtn)}
+                  title="新建自定义模型"
+                  aria-label="新建自定义模型"
+                  onClick={() => setCreating("chat")}
+                >
+                  <Plus size={11} />
+                </button>
+                {isCustomModel(ai.model) && (
                   <button
                     type="button"
                     className={cx(shared.btnGhost, styles.modelBtn)}
-                    title="新建自定义模型"
-                    aria-label="新建自定义模型"
-                    onClick={() => setCreating(true)}
+                    title={`删除自定义模型 ${ai.model}`}
+                    aria-label="删除自定义模型"
+                    onClick={() => setRemoving("chat")}
                   >
-                    <Plus size={11} />
+                    <Trash size={11} />
                   </button>
-                  {isCustomModel(ai.model) && (
-                    <button
-                      type="button"
-                      className={cx(shared.btnGhost, styles.modelBtn)}
-                      title={`删除自定义模型 ${ai.model}`}
-                      aria-label="删除自定义模型"
-                      onClick={() => setRemoving(true)}
-                    >
-                      <Trash size={11} />
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
               {spec?.note && <span className={styles.hint}>{spec.note}</span>}
-            </div>
 
-            <div className={styles.group}>
-              <span className={styles.groupTitle}>连接</span>
               <label className={shared.fld}>
                 <span className={shared.fldK}>Base URL</span>
                 <input
@@ -288,6 +332,151 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
               <span className={styles.hint}>
                 上下文窗口与思维强度档位来自模型清单：内置项写在{" "}
                 <code>config/models.json</code>，自定义项只存在本机（换机器不同步）。
+              </span>
+            </div>
+
+            <div className={styles.group}>
+              <span className={styles.groupTitle}>嵌入模型 · 知识库</span>
+              <div className={styles.modelRow}>
+                <select
+                  className={styles.select}
+                  value={aux.embedding?.model ?? ""}
+                  onChange={(event) => {
+                    const id = event.target.value;
+                    if (id) pickAux("embedding", id);
+                    else {
+                      setAux({ ...aux, embedding: null });
+                      saveAux({ embedding: null });
+                      configureKnowledge(null);
+                    }
+                  }}
+                >
+                  <option value="">未启用 · 只用关键词检索</option>
+                  {listModels("embedding").map((item) => (
+                    <option value={item.id} key={item.id}>
+                      {item.label} · {item.provider}
+                      {isCustomModel(item.id) ? "（自定义）" : ""}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={cx(shared.btnGhost, styles.modelBtn)}
+                  title="新建嵌入模型"
+                  aria-label="新建嵌入模型"
+                  onClick={() => setCreating("embedding")}
+                >
+                  <Plus size={11} />
+                </button>
+                {aux.embedding && isCustomModel(aux.embedding.model) && (
+                  <button
+                    type="button"
+                    className={cx(shared.btnGhost, styles.modelBtn)}
+                    title="删除这个自定义嵌入模型"
+                    aria-label="删除自定义嵌入模型"
+                    onClick={() => setRemoving("embedding")}
+                  >
+                    <Trash size={11} />
+                  </button>
+                )}
+              </div>
+              <div className={styles.formRow}>
+                <label className={shared.fld}>
+                  <span className={shared.fldK}>Base URL · 留空沿用对话模型</span>
+                  <input
+                    value={aux.embedding?.baseUrl ?? ""}
+                    disabled={!aux.embedding}
+                    spellCheck={false}
+                    onChange={(event) => patchAux("embedding", { baseUrl: event.target.value })}
+                  />
+                </label>
+                <label className={shared.fld}>
+                  <span className={shared.fldK}>API Key · 留空沿用对话模型</span>
+                  <input
+                    type="password"
+                    value={aux.embedding?.apiKey ?? ""}
+                    disabled={!aux.embedding}
+                    spellCheck={false}
+                    onChange={(event) => patchAux("embedding", { apiKey: event.target.value })}
+                  />
+                </label>
+              </div>
+              <span className={styles.hint}>
+                只用于知识库的语义召回（查询时算一次向量）
+                {aux.embedding && findModel(aux.embedding.model)?.dim
+                  ? ` · ${findModel(aux.embedding.model)?.dim} 维`
+                  : ""}
+                ；不配也不影响使用，检索会退化成关键词匹配。
+              </span>
+            </div>
+
+            <div className={styles.group}>
+              <span className={styles.groupTitle}>OCR 模型 · 图片转文字</span>
+              <div className={styles.modelRow}>
+                <select
+                  className={styles.select}
+                  value={aux.ocr?.model ?? ""}
+                  onChange={(event) => {
+                    const id = event.target.value;
+                    if (id) pickAux("ocr", id);
+                    else {
+                      setAux({ ...aux, ocr: null });
+                      saveAux({ ocr: null });
+                    }
+                  }}
+                >
+                  <option value="">未启用</option>
+                  {listModels("ocr").map((item) => (
+                    <option value={item.id} key={item.id}>
+                      {item.label} · {item.provider}
+                      {isCustomModel(item.id) ? "（自定义）" : ""}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={cx(shared.btnGhost, styles.modelBtn)}
+                  title="新建 OCR 模型"
+                  aria-label="新建 OCR 模型"
+                  onClick={() => setCreating("ocr")}
+                >
+                  <Plus size={11} />
+                </button>
+                {aux.ocr && isCustomModel(aux.ocr.model) && (
+                  <button
+                    type="button"
+                    className={cx(shared.btnGhost, styles.modelBtn)}
+                    title="删除这个自定义 OCR 模型"
+                    aria-label="删除自定义 OCR 模型"
+                    onClick={() => setRemoving("ocr")}
+                  >
+                    <Trash size={11} />
+                  </button>
+                )}
+              </div>
+              <div className={styles.formRow}>
+                <label className={shared.fld}>
+                  <span className={shared.fldK}>Base URL · 留空沿用对话模型</span>
+                  <input
+                    value={aux.ocr?.baseUrl ?? ""}
+                    disabled={!aux.ocr}
+                    spellCheck={false}
+                    onChange={(event) => patchAux("ocr", { baseUrl: event.target.value })}
+                  />
+                </label>
+                <label className={shared.fld}>
+                  <span className={shared.fldK}>API Key · 留空沿用对话模型</span>
+                  <input
+                    type="password"
+                    value={aux.ocr?.apiKey ?? ""}
+                    disabled={!aux.ocr}
+                    spellCheck={false}
+                    onChange={(event) => patchAux("ocr", { apiKey: event.target.value })}
+                  />
+                </label>
+              </div>
+              <span className={styles.hint}>
+                默认构建没有内置 OCR：模型看不了图时，图片会先交给这个接口转成文字。
               </span>
             </div>
           </>
@@ -420,20 +609,29 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
           再 portal 出去反而会丢掉「哪一层在上面」的顺序 */}
       {creating && (
         <CreateModel
-          baseUrl={ai.baseUrl}
-          taken={models.map((item) => item.id)}
-          onCancel={() => setCreating(false)}
-          onSubmit={createModel}
+          kind={creating}
+          baseUrl={creating === "chat" ? ai.baseUrl : aux[creating]?.baseUrl || ai.baseUrl}
+          taken={listModels(creating).map((item) => item.id)}
+          onCancel={() => setCreating(null)}
+          onSubmit={(model, apiKey) => createModel(creating, model, apiKey)}
         />
       )}
 
       {removing && (
         <Confirm
           open
-          title={`删除自定义模型「${spec?.label ?? ai.model}」？`}
-          description="只从这台机器的模型清单里移除，服务端配置和密钥都不受影响。删完会退到第一条内置模型。"
-          onCancel={() => setRemoving(false)}
-          onConfirm={dropModel}
+          title={`删除自定义模型「${
+            removing === "chat"
+              ? spec?.label ?? ai.model
+              : findModel(aux[removing]?.model ?? "")?.label ?? "这条"
+          }」？`}
+          description={
+            removing === "chat"
+              ? "只从这台机器的模型清单里移除，服务端配置和密钥都不受影响。删完会退到第一条内置模型。"
+              : "只从这台机器的模型清单里移除。这个位置会变成「未启用」，该功能回落到关键词检索/纯文字。"
+          }
+          onCancel={() => setRemoving(null)}
+          onConfirm={() => dropModel(removing)}
         />
       )}
     </div>
@@ -450,11 +648,13 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
  * 视觉能力单独给一个勾选 —— 它决定图片走视觉直传还是 OCR（见 lib/attach）。
  */
 function CreateModel({
+  kind,
   baseUrl,
   taken,
   onCancel,
   onSubmit,
 }: {
+  kind: ModelKind;
   baseUrl: string;
   taken: string[];
   onCancel: () => void;
@@ -464,10 +664,11 @@ function CreateModel({
   const [id, setId] = useState("");
   const [url, setUrl] = useState(baseUrl);
   const [key, setKey] = useState("");
-  const [window_, setWindow] = useState("64000");
-  const [temp, setTemp] = useState("0.4");
+  const [window_, setWindow] = useState(kind === "embedding" ? "8192" : "64000");
+  const [temp, setTemp] = useState(kind === "chat" ? "0.4" : "0");
   const [levels, setLevels] = useState("");
-  const [vision, setVision] = useState(false);
+  const [vision, setVision] = useState(kind === "ocr");
+  const [dim, setDim] = useState("");
 
   const modelId = id.trim() || label.trim();
   /** 同名会覆盖：说清楚而不是拦下来 —— 改错重填一次比「先删再建」顺手 */
@@ -479,6 +680,7 @@ function CreateModel({
       {
         id: modelId,
         label: label.trim() || modelId,
+        kind,
         provider: "自定义",
         baseUrl: url.trim(),
         contextWindow: Number(window_) > 0 ? Math.round(Number(window_)) : 64_000,
@@ -488,7 +690,8 @@ function CreateModel({
           .map((item) => item.trim())
           .filter(Boolean),
         vision,
-        defaultTemperature: Math.min(2, Math.max(0, Number(temp) || 0.4)),
+        defaultTemperature: Math.min(2, Math.max(0, Number(temp) || 0)),
+        ...(kind === "embedding" && Number(dim) > 0 ? { dim: Math.round(Number(dim)) } : {}),
       },
       key,
     );
@@ -496,7 +699,9 @@ function CreateModel({
 
   return (
     <Modal
-      title="新建模型"
+      title={
+        kind === "chat" ? "新建对话模型" : kind === "embedding" ? "新建嵌入模型" : "新建 OCR 模型"
+      }
       subtitle="任何 OpenAI 兼容接口都可以"
       onCancel={onCancel}
       bodyClassName={styles.form}
@@ -560,31 +765,53 @@ function CreateModel({
             onChange={(event) => setWindow(event.target.value.replace(/[^\d]/g, ""))}
           />
         </label>
-        <label className={shared.fld}>
-          <span className={shared.fldK}>温度</span>
-          <input
-            value={temp}
-            inputMode="decimal"
-            spellCheck={false}
-            onChange={(event) => setTemp(event.target.value.replace(/[^\d.]/g, ""))}
-          />
-        </label>
+        {kind !== "ocr" && (
+          <label className={shared.fld}>
+            <span className={shared.fldK}>温度</span>
+            <input
+              value={temp}
+              inputMode="decimal"
+              spellCheck={false}
+              onChange={(event) => setTemp(event.target.value.replace(/[^\d.]/g, ""))}
+            />
+          </label>
+        )}
+        {kind === "embedding" && (
+          <label className={shared.fld}>
+            <span className={shared.fldK}>向量维度 · 选填</span>
+            <input
+              value={dim}
+              inputMode="numeric"
+              placeholder="1024"
+              spellCheck={false}
+              onChange={(event) => setDim(event.target.value.replace(/[^\d]/g, ""))}
+            />
+          </label>
+        )}
       </div>
 
-      <label className={shared.fld}>
-        <span className={shared.fldK}>思维强度档位 · 逗号分隔，留空表示没有</span>
-        <input
-          value={levels}
-          placeholder="low, medium, high"
-          spellCheck={false}
-          onChange={(event) => setLevels(event.target.value)}
-        />
-      </label>
+      {kind === "chat" && (
+        <label className={shared.fld}>
+          <span className={shared.fldK}>思维强度档位 · 逗号分隔，留空表示没有</span>
+          <input
+            value={levels}
+            placeholder="low, medium, high"
+            spellCheck={false}
+            onChange={(event) => setLevels(event.target.value)}
+          />
+        </label>
+      )}
 
-      <label className={styles.formCheck}>
-        <input type="checkbox" checked={vision} onChange={(event) => setVision(event.target.checked)} />
-        这个模型能看图（图片直接给模型，不走 OCR）
-      </label>
+      {kind === "chat" && (
+        <label className={styles.formCheck}>
+          <input
+            type="checkbox"
+            checked={vision}
+            onChange={(event) => setVision(event.target.checked)}
+          />
+          这个模型能看图（图片直接给模型，不走 OCR）
+        </label>
+      )}
 
       <p className={styles.formHint}>
         {override

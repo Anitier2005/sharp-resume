@@ -6,7 +6,12 @@
 //!   vendor 在 `tesseract/` 目录 —— 见那份 README.md。2026-10-28 之前这里是
 //!   tesseract.exe 子进程，切换的原因：不能要求每台装应用的机器都装 OCR 引擎。
 
+use base64::Engine as _;
+
+// 这几个只在带 OCR 的构建里用得到；默认构建不编 tesseract，别留死代码警告
+#[cfg(feature = "ocr")]
 use std::ffi::{CStr, CString};
+#[cfg(feature = "ocr")]
 use std::path::PathBuf;
 
 /// 前端把 PDF 字节传过来，这里提取纯文本。
@@ -28,6 +33,7 @@ pub fn extract_pdf(bytes: Vec<u8>) -> Result<String, String> {
 /// tessdata（训练数据）的位置，两处按序找：
 /// 1) exe 旁边的 `tessdata/` —— 打包后的形态（build.rs 会拷到 target/<档>/）；
 /// 2) 仓库里的 `src-tauri/tesseract/tessdata/` —— tauri dev / cargo test 直接吃仓库内这份。
+#[cfg(feature = "ocr")]
 fn tessdata_dir() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -54,6 +60,7 @@ fn tessdata_dir() -> Result<PathBuf, String> {
 ///
 /// 每次调用独立创建/销毁 TessBaseAPI 实例。Init 要加载训练数据（几十毫秒），
 /// 换来的是完全不碰线程安全与全局状态 —— 一张图的 OCR 本来就是秒级操作。
+#[cfg(feature = "ocr")]
 #[tauri::command]
 pub fn ocr_image(bytes: Vec<u8>, ext: String) -> Result<String, String> {
     // 扩展名只在前端展示用；解码按文件内容嗅探，后缀写错也能认
@@ -90,6 +97,7 @@ pub fn ocr_image(bytes: Vec<u8>, ext: String) -> Result<String, String> {
 /// # Safety
 /// handle 必须来自 `TessBaseAPICreate` 且尚未 Delete；gray 必须真实持有
 /// width×height 个字节（GrayImage 满足）。
+#[cfg(feature = "ocr")]
 unsafe fn run_ocr(
     handle: *mut tesseract_sys::TessBaseAPI,
     data: &CString,
@@ -128,7 +136,17 @@ unsafe fn run_ocr(
     }
 }
 
-#[cfg(test)]
+/// 默认构建（没有 tesseract）的同名命令。
+///
+/// 它必须存在且**可被前端识别**：前端拿到的这句提示就是「切到 OCR 接口」的信号，
+/// 不能改成一句笼统的失败，否则用户只看到「OCR 失败」却不知道下一步做什么。
+#[cfg(not(feature = "ocr"))]
+#[tauri::command]
+pub fn ocr_image(_bytes: Vec<u8>, _ext: String) -> Result<String, String> {
+    Err("这一版没有内置 OCR。可以在 设置 → 模型 → OCR 配置一个能看图的接口模型，或改用带 OCR 的构建（.tools\\build-ocr.bat）".into())
+}
+
+#[cfg(all(test, feature = "ocr"))]
 mod tests {
     use super::tessdata_dir;
     use std::path::PathBuf;
@@ -168,4 +186,94 @@ mod tests {
             Ok(_) | Err(_) => {}
         }
     }
+}
+
+/// 这一版构建有没有内置 OCR。
+///
+/// 默认构建不带 tesseract（DLL + 训练数据十几 MB，绝大多数人用不上）；
+/// 前端据此决定图片走「本地 OCR」还是「设置里配的 OCR 接口」，也用于界面提示。
+pub fn ocr_available() -> bool {
+    cfg!(feature = "ocr")
+}
+
+/// 走接口的 OCR：把图片发给多模态模型，让它把可见文字逐行抄出来。
+///
+/// 为什么需要它：默认构建不再内置 tesseract，而「模型本身不能看图」时
+/// 又必须把图片变成文字才能塞进上下文 —— 这条通道就是那个兜底。
+/// 接口按 OpenAI 兼容的 chat/completions 拼（image_url + data URL），
+/// 提示词只要求「原样抄写」，不要它解释或总结。
+#[tauri::command]
+pub async fn ocr_api(
+    bytes: Vec<u8>,
+    ext: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+) -> Result<String, String> {
+    if bytes.is_empty() {
+        return Err("这张图是空的".into());
+    }
+    if base_url.trim().is_empty() || model.trim().is_empty() {
+        return Err("OCR 接口还没配置：设置 → 模型 → OCR".into());
+    }
+
+    // 按扩展名给 MIME；认不出的一律按 jpeg 试 —— 多数网关只看字节，不看这个头
+    let mime = match ext.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        _ => "image/jpeg",
+    };
+    let data_url = format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    );
+
+    let content = serde_json::json!([
+        {
+            "type": "text",
+            "text": "把这张图里的可见文字逐行原样抄写出来：保留换行与原有顺序，\
+                     不要解释、不要总结、不要翻译、不要补全看不清的部分。\
+                     如果图里没有文字，只回答：没有文字。"
+        },
+        { "type": "image_url", "image_url": { "url": data_url } }
+    ]);
+
+    let request = crate::net::AiRequest {
+        base_url,
+        api_key,
+        model,
+        messages: vec![crate::net::ChatMessage {
+            role: "user".into(),
+            content: Some(content),
+            tool_calls: None,
+            tool_call_id: None,
+        }],
+        // 抄写任务不需要发挥；温度压到 0，减少它自作主张改写数字
+        temperature: Some(0.0),
+        reasoning: None,
+        max_tokens: Some(4_096),
+        tools: None,
+    };
+
+    let raw = crate::net::chat_once(request).await?;
+    let text = strip_fences(&raw);
+    if text.is_empty() || text.contains("没有文字") {
+        return Err("这张图里没有认出文字 —— 可能太糊、太小，或者不是文字图".into());
+    }
+    Ok(text)
+}
+
+/// 多模态模型爱把整段回答包进 ``` 代码块里；抄写任务不需要这层壳。
+fn strip_fences(text: &str) -> String {
+    let trimmed = text.trim();
+    let body = trimmed
+        .strip_prefix("```")
+        .map(|rest| rest.split_once('\n').map(|(_, tail)| tail).unwrap_or(rest))
+        .unwrap_or(trimmed);
+    let body = body.trim_end();
+    let body = body.strip_suffix("```").unwrap_or(body);
+    body.trim().to_string()
 }

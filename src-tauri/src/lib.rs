@@ -4,6 +4,7 @@ mod db;
 mod docx;
 mod export;
 mod extract;
+mod knowledge;
 mod model;
 mod net;
 mod pool;
@@ -30,6 +31,8 @@ struct AppInfo {
     version: &'static str,
     data_dir: String,
     portable: bool,
+    /// 这一版有没有内置 OCR：前端据此决定图片走本地还是接口
+    ocr: bool,
 }
 
 /// UI 字号的可读下限：初版设计主体只有 9–11.5px，偏小。
@@ -171,6 +174,7 @@ fn app_info(app: tauri::AppHandle) -> AppInfo {
         version: env!("CARGO_PKG_VERSION"),
         data_dir: dir.to_string_lossy().to_string(),
         portable,
+        ocr: extract::ocr_available(),
     }
 }
 
@@ -415,14 +419,82 @@ fn ensure_webview2() {
     std::process::exit(1);
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Linux 的对应检查是 WebKitGTK。它不是系统自带，发行版没装就起不来 ——
+/// Tauri 会在这里 panic 出一屏英文。没有 GUI 工具可用（连窗口都没有），
+/// 只能走 stderr；用户从终端启动才看得见，但至少比闪退强。
+#[cfg(target_os = "linux")]
+fn ensure_webview2() {
+    const CANDIDATES: &[&str] = &[
+        "/usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0",
+        "/usr/lib/aarch64-linux-gnu/libwebkit2gtk-4.1.so.0",
+        "/usr/lib/libwebkit2gtk-4.1.so.0",
+        "/usr/lib64/libwebkit2gtk-4.1.so.0",
+    ];
+    if CANDIDATES.iter().any(|path| Path::new(path).is_file()) {
+        return;
+    }
+    eprintln!(
+        "缺少 WebKitGTK 运行时（libwebkit2gtk-4.1），界面无法显示。\n\
+         安装方法（择一）：\n\
+         - Debian/Ubuntu: sudo apt install libwebkit2gtk-4.1-0\n\
+         - Fedora: sudo dnf install webkit2gtk4.1\n\
+         - Arch: sudo pacmanS webkit2gtk-4.1"
+    );
+    std::process::exit(1);
+}
+
+/// macOS 的 WKWebView 是系统组件，不存在「没装」的情况 —— 检查为空操作。
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn ensure_webview2() {}
+
+/// run() 失败的兜底。release 是 windows_subsystem="windows"，panic 的文字
+/// 谁也看不见，只剩一个静默闪退 —— 而这一步的失败几乎都是环境问题
+/// （WebView2 残缺、显卡驱动把 WebView 拉不起来），用户值得看到原因。
+#[cfg(target_os = "windows")]
+fn report_fatal_run_error(error: tauri::Error) -> ! {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn MessageBoxW(
+            hwnd: *mut core::ffi::c_void,
+            text: *const u16,
+            caption: *const u16,
+            utype: u32,
+        ) -> i32;
+    }
+    const MB_OK: u32 = 0x0000_0000;
+    const MB_ICONERROR: u32 = 0x0000_0010;
+
+    fn wide(s: &str) -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    let text = wide(&format!(
+        "程序没能完成启动：{error}\n\n\
+         常见原因：WebView2 运行时损坏、显卡驱动异常。\n\
+         可以先安装/修复 WebView2 后再试：\n\
+         https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+    ));
+    let caption = wide("Sharp Resume 无法启动");
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_OK | MB_ICONERROR);
+    }
+    std::process::exit(1);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn report_fatal_run_error(error: tauri::Error) -> ! {
+    eprintln!("程序没能完成启动：{error}");
+    std::process::exit(1);
+}
 
 pub fn run() {
     // 必须最先执行：窗口一旦创建就依赖 WebView2，届时再检查已经来不及
     ensure_webview2();
 
-    tauri::Builder::default()
+    let outcome = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
@@ -475,14 +547,23 @@ pub fn run() {
             pool::pool_get,
             pool::pool_list,
             extract::extract_pdf,
-            extract::ocr_image
+            extract::ocr_image,
+            extract::ocr_api,
+            knowledge::knowledge_list,
+            knowledge::knowledge_get,
+            knowledge::knowledge_upsert,
+            knowledge::knowledge_delete,
+            knowledge::knowledge_search,
+            knowledge::knowledge_configure
         ])
         .manage(session::Sessions::default())
         // 排版信箱：每页一份，跨命令存活。放在 manage 里而不是每次新建，
         // 否则「同一个页面同时只跑一个」这个约束就不存在了
         .manage(agent::layout::Layouts::default())
-        .run(tauri::generate_context!())
-        .expect("error while running Sharp Resume");
+        .run(tauri::generate_context!());
+    if let Err(error) = outcome {
+        report_fatal_run_error(error);
+    }
 }
 
 #[cfg(test)]

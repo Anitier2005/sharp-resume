@@ -18,6 +18,10 @@ crate-type = ["rlib"]
 # 生产构建必须启用：把 dist/ 以 tauri:// 自定义协议内嵌进二进制。
 # 缺了它，release 版会去连 devUrl（localhost:1420），窗口只剩白屏。
 custom-protocol = ["tauri/custom-protocol"]
+# 进程内 OCR（tesseract）。默认不启用：DLL + 训练数据共 ~17MB，
+# 而且需要 libclang/bindgen 一整套构建期依赖；OCR 走接口（ocr_api）作默认兜底。
+# 带 OCR 的构建：.tools\build-ocr.bat（--features ocr,custom-protocol）
+ocr = ["dep:tesseract-sys"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -39,6 +43,9 @@ reqwest = { version = "0.12", default-features = false, features = [
   "stream",
   "native-tls",
   "system-proxy",
+  # 知识库检索的工具路径是同步 fn（工具表不区分 async），算 query 向量
+  # 要在工具里发 HTTP —— 用 blocking client，不为这个改整个工具层的签名
+  "blocking",
 ] }
 futures-util = "0.3"
 
@@ -64,10 +71,13 @@ image = { version = "0.25", default-features = false, features = [
 # 附件 PDF 的文本提取。纯 Rust（lopdf 系），无 C 依赖。
 pdf-extract = "0.7"
 
+# OCR 接口通道要把图片拼成 data URL，需要 base64。纯 Rust，无 C 依赖。
+base64 = "0.22"
+
 # 图片 OCR 走进程内 tesseract（取代旧的 tesseract.exe 子进程）。
 # 库本体、导入库、头文件、语言数据全部 vendor 在 tesseract/ 目录（见其 README.md），
 # build script 靠 .tools/*.bat 设的 TESSERACT_*/LEPTONICA_*/LIBCLANG_PATH 环境变量找到它们。
-tesseract-sys = "0.6.3"
+tesseract-sys = { version = "0.6.3", optional = true }
 
 # 读取 Windows「辅助功能 → 文本大小」的实际缩放值，供 UI 字号跟随。
 [target.'cfg(windows)'.dependencies]

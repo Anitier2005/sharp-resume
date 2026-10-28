@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "@/types";
+import { loadAi, loadAux } from "@/lib/ai";
 import { isTauri } from "@/lib/storage";
 
 function extOf(name: string): string {
@@ -75,24 +76,58 @@ async function cacheImage(id: string, file: File): Promise<void> {
   }
 }
 
-/** OCR 是兜底通道，只在「模型看不了图」时才花那几秒 */
+/**
+ * OCR 是兜底通道，只在「模型看不了图」时才花那几秒。
+ *
+ * 两条腿：内置 tesseract（只有带 ocr feature 的构建才有）→ 设置里的 OCR 接口。
+ * 默认构建不带 tesseract，所以第一条腿必然报「这一版没有内置 OCR」，
+ * 这时要**自动**走第二条，而不是把错误原样扔给用户 —— 否则功能等于凭空消失。
+ */
 export async function ensureOcrText(id: string): Promise<string | undefined> {
   const cached = ocrCache.get(id);
   if (cached) return cached;
   const file = fileCache.get(id);
   if (!file || !isImage(extOf(file.name)) || !isTauri() || file.size > MAX_OCR_BYTES) return undefined;
+
+  const ext = extOf(file.name);
+  const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+
+  let failure = "";
   try {
-    const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-    const text = await invoke<string>("ocr_image", { bytes, ext: extOf(file.name) });
+    const text = await invoke<string>("ocr_image", { bytes, ext });
     const trimmed = text.slice(0, MAX_CHARS);
     ocrCache.set(id, trimmed);
     return trimmed;
   } catch (error) {
-    // 失败也记下来：同一次会话里别对同一张图反复弹同样的错
-    const message = `（OCR 失败：${errorText(error)}）`;
-    ocrCache.set(id, message);
-    return message;
+    failure = errorText(error);
   }
+
+  const aux = loadAux().ocr;
+  if (aux && aux.model.trim()) {
+    try {
+      const ai = loadAi();
+      const text = await invoke<string>("ocr_api", {
+        bytes,
+        ext,
+        // 接口地址/密钥留空表示沿用对话模型那把，与设置页的说明一致
+        baseUrl: aux.baseUrl.trim() || ai.baseUrl,
+        apiKey: aux.apiKey.trim() || ai.apiKey,
+        model: aux.model,
+      });
+      const trimmed = text.slice(0, MAX_CHARS);
+      ocrCache.set(id, trimmed);
+      return trimmed;
+    } catch (error) {
+      failure = `${failure}；OCR 接口：${errorText(error)}`;
+    }
+  } else if (!failure.includes("没有内置 OCR")) {
+    failure = `${failure}；也可在 设置 → 模型 → OCR 配置一个能看图的模型`;
+  }
+
+  // 失败也记下来：同一次会话里别对同一张图反复弹同样的错
+  const message = `（OCR 失败：${failure}）`;
+  ocrCache.set(id, message);
+  return message;
 }
 
 const errorText = (error: unknown) =>

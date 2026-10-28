@@ -65,7 +65,10 @@ echo ============================================================
 echo.
 
 pushd "%~dp0..\src-tauri"
-cargo build --no-default-features
+set "FEATURES="
+if /i "%~1"=="ocr" set "FEATURES=--features ocr"
+rem lite by default; with built-in OCR: dev-build.cmd ocr
+cargo build --no-default-features %FEATURES%
 set "RC=%ERRORLEVEL%"
 popd
 

@@ -69,6 +69,58 @@ export function aiFromModel(model: ModelConfig, prev: AiSettings = loadAi()): Ai
   };
 }
 
+/* ==========================================================================
+   辅助模型：嵌入（知识库向量检索）与 OCR（图片转文字）
+   ========================================================================== */
+
+/**
+ * 这两类不是「当前对话用哪个模型」，而是「某个功能用哪个模型」。
+ * 所以不和 AiSettings 混在一起：换对话模型不该悄悄把知识库的嵌入模型也换掉。
+ */
+export interface AuxModelChoice {
+  model: string;
+  /** 空 = 沿用对话模型那把网关 */
+  baseUrl: string;
+  /** 空 = 沿用对话模型那把密钥 */
+  apiKey: string;
+}
+
+export interface AuxSettings {
+  embedding: AuxModelChoice | null;
+  ocr: AuxModelChoice | null;
+}
+
+const AUX_KEY = "sharp-resume:aux:v1";
+const EMPTY_AUX: AuxSettings = { embedding: null, ocr: null };
+
+function pickChoice(value: unknown): AuxModelChoice | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Partial<AuxModelChoice>;
+  const model = typeof raw.model === "string" ? raw.model.trim() : "";
+  if (!model) return null;
+  return {
+    model,
+    baseUrl: typeof raw.baseUrl === "string" ? raw.baseUrl.trim() : "",
+    apiKey: typeof raw.apiKey === "string" ? raw.apiKey : "",
+  };
+}
+
+export function loadAux(): AuxSettings {
+  try {
+    const raw = localStorage.getItem(AUX_KEY);
+    if (!raw) return EMPTY_AUX;
+    const parsed = JSON.parse(raw) as Partial<AuxSettings>;
+    return { embedding: pickChoice(parsed.embedding), ocr: pickChoice(parsed.ocr) };
+  } catch {
+    return EMPTY_AUX;
+  }
+}
+
+export function saveAux(patch: Partial<AuxSettings>): void {
+  const next = { ...loadAux(), ...patch };
+  localStorage.setItem(AUX_KEY, JSON.stringify(next));
+}
+
 export const aiReady = (settings: AiSettings): boolean =>
   Boolean(settings.baseUrl.trim() && settings.model.trim() && settings.apiKey.trim());
 

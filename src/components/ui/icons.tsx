@@ -179,3 +179,11 @@ export const Grip = (p: IconProps) => (
     </g>
   </svg>
 );
+
+/** 打开的书：知识库入口。与「资料」（Layers）区分开 —— 一个是个人的材料，一个是全局的事实库 */
+export const BookOpen = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.8, ...p })}>
+    <path d="M12 6.5C10.5 5.2 8.6 4.5 6 4.5H4v14h2c2.6 0 4.5.7 6 2 1.5-1.3 3.4-2 6-2h2v-14h-2c-2.6 0-4.5.7-6 2Z" />
+    <path d="M12 6.5v14" />
+  </svg>
+);

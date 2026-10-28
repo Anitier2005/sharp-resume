@@ -8,6 +8,7 @@ import { ChatPanel } from "@/components/chat/panel";
 import { ResumePanel } from "@/components/resume/panel";
 import { readableOn } from "@/lib/color";
 import { installSelectAll } from "@/lib/shortcuts";
+import { configureKnowledge } from "@/lib/knowledge";
 
 /** 栏宽范围；中间会话区永远留够可读宽度。
     COLLAPSE 是「松手时低于它就当作想收起」的阈值 —— 刻意压得很低（80px 只剩一条缝），
@@ -24,6 +25,12 @@ const clamp = (value: number, min: number, max: number) =>
 
 function Shell() {
   const { state, dispatch } = useWorkspace();
+
+  // 启动就把嵌入模型配置推给后端：知识库工具据此决定要不要算 query 向量。
+  // 放在这里而不是面板里，是因为「用户没打开过知识库面板」才是常态。
+  useEffect(() => {
+    configureKnowledge();
+  }, []);
   const { accent, mode } = state.ui;
 
   const accentHex = state.ui.accentHex;

@@ -134,25 +134,33 @@ fs.mkdirSync(target, { recursive: true })
 fs.copyFileSync(SRC, path.join(target, EXE_NAME))
 
 // 进程内 OCR 的运行时伴侣：两个 DLL（加载期链接，缺了 exe 起不来）+ tessdata 训练数据。
-// 直接从 vendor 源拷（src-tauri/tesseract/），不依赖 build.rs 有没有先拷进 target/。
+//
+// 默认构建（lite）不带 tesseract，产物旁边本来就没有这些文件 —— 所以这里按
+// 「构建时到底带没带 OCR」决定拷不拷（build.rs 在带 OCR 时会先把 DLL 放到 exe 旁），
+// 而不是无条件从 vendor 源拷：lite 包被要求带 17MB 用不上的文件是没道理的。
 const OCR_DLLS = ['tesseract50.dll', 'leptonica-1.82.0.dll']
 const OCR_LANGS = ['eng.traineddata', 'chi_sim.traineddata']
-for (const name of OCR_DLLS) {
-  const src = path.resolve('src-tauri/tesseract/bin/x64', name)
-  if (!fs.existsSync(src)) fail(`缺 OCR 运行库 ${src}（tesseract/ 目录不完整？）`)
-  fs.copyFileSync(src, path.join(target, name))
-}
-fs.mkdirSync(path.join(target, 'tessdata'), { recursive: true })
-for (const name of OCR_LANGS) {
-  const src = path.resolve('src-tauri/tesseract/tessdata', name)
-  if (!fs.existsSync(src)) fail(`缺 OCR 语言包 ${src}`)
-  fs.copyFileSync(src, path.join(target, 'tessdata', name))
-}
-info(`OCR 伴侣已带上：${OCR_DLLS.join('、')} + tessdata(${OCR_LANGS.join('、')})`)
+const withOcr = OCR_DLLS.every((name) => fs.existsSync(path.join(path.dirname(SRC), name)))
 
-// —— 自检：exe + 两个 DLL + tessdata 目录，一样都不能少 ——
+if (withOcr) {
+  for (const name of OCR_DLLS) {
+    fs.copyFileSync(path.join(path.dirname(SRC), name), path.join(target, name))
+  }
+  fs.mkdirSync(path.join(target, 'tessdata'), { recursive: true })
+  for (const name of OCR_LANGS) {
+    const src = path.resolve('src-tauri/tesseract/tessdata', name)
+    if (!fs.existsSync(src)) fail(`缺 OCR 语言包 ${src}`)
+    fs.copyFileSync(src, path.join(target, 'tessdata', name))
+  }
+  info(`OCR 伴侣已带上：${OCR_DLLS.join('、')} + tessdata(${OCR_LANGS.join('、')})`)
+} else {
+  info('lite 构建：不含内置 OCR（图片转文字走设置里的 OCR 接口）')
+}
+
+// —— 自检：exe 必须在；带 OCR 时两个 DLL 与 tessdata 也必须齐 ——
 const finalFiles = fs.readdirSync(target)
-const missing = [EXE_NAME, ...OCR_DLLS, 'tessdata'].filter((n) => !finalFiles.includes(n))
+const expected = withOcr ? [EXE_NAME, ...OCR_DLLS, 'tessdata'] : [EXE_NAME]
+const missing = expected.filter((n) => !finalFiles.includes(n))
 if (missing.length) {
   fail(`自检失败：缺 ${missing.join('、')}`)
 }

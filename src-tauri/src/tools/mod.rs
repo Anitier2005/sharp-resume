@@ -525,7 +525,52 @@ pub const TOOLS: &[Tool] = &[
         scopes: &[Scope::Layout],
         writes: true,
     },
+    Tool {
+        name: "search_knowledge",
+        description: "查知识库：项目细节、行业口径、术语、模板规则这些「可核对的事实」。\
+                      写简历里的数字、时间、职责之前先查一次 —— 查到就照着写，查不到就照实说不知道，\
+                      不要用记忆里的印象补。返回的是命中条目的摘要与 id，需要细节再用 read_knowledge 读全文。",
+        params: knowledge_params,
+        run: crate::knowledge::search_tool,
+        scopes: &[Scope::Session],
+        writes: false,
+    },
+    Tool {
+        name: "read_knowledge",
+        description: "按 id 读一条知识库条目的完整正文。只在 search_knowledge 命中、\
+                      且摘要不足以回答时用 —— 它会把整条正文塞进上下文，读太多条会挤掉真正要改的内容。",
+        params: knowledge_read_params,
+        run: crate::knowledge::read_tool,
+        scopes: &[Scope::Session],
+        writes: false,
+    },
 ];
+
+fn knowledge_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "query": { "type": "string", "description": "要查的问题或关键词，用用户原话里的名词" },
+            "tags": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "可选：只在这些标签里找"
+            },
+            "limit": { "type": "integer", "description": "返回几条，默认 5，最多 10" }
+        },
+        "required": ["query"]
+    })
+}
+
+fn knowledge_read_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string", "description": "search_knowledge 返回的条目 id" }
+        },
+        "required": ["id"]
+    })
+}
 
 /// 转成 OpenAI 的 tools 数组（按 agent 过滤）
 pub fn specs(scope: Scope) -> Value {
@@ -611,12 +656,16 @@ mod tests {
 
         // 工具数就是能力边界的快照：少一个说明注册时漏了，多一个说明有人偷偷
         // 给某个角色开了口子，两者都该在这里被看见
-        assert_eq!(session.len(), 34, "会话 agent 的工具数变了：{session:?}");
+        assert_eq!(session.len(), 36, "会话 agent 的工具数变了：{session:?}");
         assert_eq!(layout.len(), 9, "排版 agent 的工具数变了：{layout:?}");
 
         // 会话 agent：能读、能转交、能转图，但不能自己动版面
         assert!(session.contains(&"request_layout"));
         assert!(session.contains(&"convert_image"));
+        // 知识库是只读检索：会话能查、排版不能（排版不改内容，查事实没有落点）
+        assert!(session.contains(&"search_knowledge"));
+        assert!(session.contains(&"read_knowledge"));
+        assert!(!layout.contains(&"search_knowledge"));
         assert!(!session.contains(&"set_page_layout"));
         assert!(!session.contains(&"read_layout_guide"));
 
@@ -636,6 +685,7 @@ mod tests {
         assert!(readers.contains(&"read_page"));
         assert!(readers.contains(&"read_layout_guide"));
         assert!(readers.contains(&"list_people"), "列候选人不动任何数据");
+        assert!(readers.contains(&"search_knowledge"), "查知识库不改任何状态");
         assert!(!readers.contains(&"set_page_layout"));
         assert!(!readers.contains(&"convert_image"));
         // 内容工具全部有副作用（改的是本轮暂存区，轮末才落地，但仍然是写）

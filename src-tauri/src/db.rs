@@ -27,7 +27,8 @@ use crate::model::{self, Workspace};
 /// 表结构版本。往后加列/加表时递增，`migrate` 里按版本号补。
 ///   1 → v4 表骨架
 ///   2 → asset 索引表 + chat 会话表
-const SCHEMA_VERSION: i64 = 2;
+///   3 → knowledge 表（用户自建知识库；预置条目走编译期嵌入，不进库）
+const SCHEMA_VERSION: i64 = 3;
 
 
 /// 打开（必要时创建）数据库。
@@ -133,6 +134,15 @@ fn migrate(conn: &Connection) -> Result<(), String> {
          CREATE TABLE IF NOT EXISTS meta (
              key   TEXT PRIMARY KEY,
              value TEXT NOT NULL
+         );
+         -- 用户自建知识库条目。预置条目是编译期嵌入的（knowledge/manifest.json），
+         -- 不进这张表 —— 两者在检索时合成一个索引，界面上才分「预置/我的」。
+         CREATE TABLE IF NOT EXISTS knowledge (
+             id         TEXT PRIMARY KEY,
+             title      TEXT NOT NULL,
+             tags       TEXT NOT NULL DEFAULT '[]',
+             body       TEXT NOT NULL,
+             updated_at INTEGER NOT NULL
          );
          -- 资产索引：文件本体在 pool/ 下（哈希命名），这里只记「它是什么」
          CREATE TABLE IF NOT EXISTS asset (

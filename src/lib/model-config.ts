@@ -4,7 +4,17 @@ import raw from "../../config/models.json";
  * 模型配置：来自 `config/models.json`，用静态 import 引入，
  * 所以改完刷新即生效（dev），release 里已经硬编码进 bundle，不依赖外部文件。
  */
+/**
+ * 模型分三类，存在同一份清单里：
+ * - chat：对话与工具调用（默认）
+ * - embedding：知识库向量检索（只算向量，不进对话）
+ * - ocr：图片转文字（默认构建没内置 tesseract 时的兜底）
+ */
+export type ModelKind = "chat" | "embedding" | "ocr";
+
 export interface ModelConfig {
+  /** 缺省 = chat（老数据、内置对话条目都不写这个字段） */
+  kind?: ModelKind;
   id: string;
   label: string;
   provider: string;
@@ -21,6 +31,8 @@ export interface ModelConfig {
    */
   vision: boolean;
   defaultTemperature: number;
+  /** 嵌入模型的向量维度，只在 kind=embedding 时有意义（界面展示用） */
+  dim?: number;
   note?: string;
 }
 
@@ -107,6 +119,7 @@ function normalizeCustom(input: unknown): ModelConfig | null {
   return {
     id,
     label,
+    kind: raw.kind === "embedding" || raw.kind === "ocr" ? raw.kind : "chat",
     // provider 不用存：自定义模型在界面上就是「自定义」，存了反而会被手改坏
     provider: CUSTOM_PROVIDER,
     baseUrl: typeof raw.baseUrl === "string" ? raw.baseUrl.trim() : "",
@@ -131,9 +144,15 @@ function clampTemperature(value: unknown, fallback: number): number {
   return Math.min(2, Math.max(0, value));
 }
 
-/** 内置在前、自定义在后：顺序稳定，下拉不会因为加了模型就整体重排 */
-export function listModels(): ModelConfig[] {
-  return [...MODELS, ...readCustom()];
+/** 某条模型属于哪一类；老数据没有 kind，一律当对话模型 */
+export const kindOf = (model: ModelConfig): ModelKind => model.kind ?? "chat";
+
+/**
+ * 内置在前、自定义在后：顺序稳定，下拉不会因为加了模型就整体重排。
+ * 缺省只给对话模型 —— 底栏、会话这些老调用点不该突然看到嵌入/OCR 条目。
+ */
+export function listModels(kind: ModelKind = "chat"): ModelConfig[] {
+  return [...MODELS, ...readCustom()].filter((model) => kindOf(model) === kind);
 }
 
 export function findModel(id: string): ModelConfig | undefined {

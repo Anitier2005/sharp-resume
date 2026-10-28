@@ -1,0 +1,266 @@
+/* 知识库抽屉：764 宽，与「资料」抽屉同档（都是内容型大面板，不走 420 小窗） */
+.box {
+  width: 764px;
+  max-width: calc(100vw - 48px);
+  height: min(660px, 86vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-modal, var(--shadow-paper));
+  overflow: hidden;
+}
+
+.head {
+  flex: none;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-2);
+}
+.title b {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+.title span {
+  font-size: 0.625rem;
+  color: var(--fg-4);
+  font-variant-numeric: tabular-nums;
+}
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+/* ---------- 左：检索 + 列表 ---------- */
+.side {
+  width: 268px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line-soft);
+}
+.searchRow {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 10px 6px;
+  padding: 0 8px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-sunken);
+  color: var(--fg-4);
+}
+.searchRow:focus-within {
+  border-color: var(--acc-line-2);
+  background: var(--acc-softer);
+}
+.searchRow input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  font-size: 0.6875rem;
+  color: var(--fg-1);
+}
+
+.list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 8px 12px;
+}
+.groupLabel {
+  margin: 10px 4px 4px;
+  font-size: 0.59375rem;
+  color: var(--fg-4);
+  letter-spacing: 0.02em;
+}
+.row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  text-align: left;
+  font-size: 0.6875rem;
+  color: var(--fg-1);
+  line-height: 1.4;
+}
+.row span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row i {
+  flex: none;
+  font-style: normal;
+  font-size: 0.5625rem;
+  color: var(--acc-text);
+  background: var(--acc-soft);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.row:hover {
+  background: var(--acc-softer);
+}
+.rowOn {
+  background: var(--acc-soft);
+}
+
+.hit {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px;
+  border-radius: 5px;
+  text-align: left;
+}
+.hit:hover {
+  background: var(--acc-softer);
+}
+.hitTitle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.6875rem;
+  color: var(--fg-1);
+}
+.hitTitle i {
+  font-style: normal;
+  font-size: 0.5625rem;
+  color: var(--acc-text);
+  background: var(--acc-soft);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.hitHead {
+  font-size: 0.59375rem;
+  color: var(--fg-3);
+}
+.hitText {
+  font-size: 0.625rem;
+  line-height: 1.55;
+  color: var(--fg-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.empty {
+  margin: 8px 6px;
+  font-size: 0.625rem;
+  line-height: 1.6;
+  color: var(--fg-4);
+}
+
+/* ---------- 右：详情 / 编辑 ---------- */
+.detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  overflow-y: auto;
+}
+.bodyFld {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.bodyFld textarea {
+  flex: 1 1 auto;
+  min-height: 260px;
+  resize: none;
+  font: inherit;
+  font-size: 0.6875rem;
+  line-height: 1.75;
+}
+.docHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.docHead b {
+  font-size: 0.8125rem;
+  color: var(--fg-1);
+}
+.docHead i {
+  font-style: normal;
+  font-size: 0.5625rem;
+  color: var(--acc-text);
+  background: var(--acc-soft);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.tags {
+  font-size: 0.59375rem;
+  color: var(--fg-4);
+}
+.docBody {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--bg-sunken);
+  font-family: inherit;
+  font-size: 0.6875rem;
+  line-height: 1.75;
+  color: var(--fg-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+}
+.actions {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.danger {
+  color: var(--danger);
+}
+
+.blank {
+  margin: auto;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  color: var(--fg-4);
+}
+.blank b {
+  font-size: 0.75rem;
+  color: var(--fg-2);
+  font-weight: 600;
+}
+.blank span {
+  font-size: 0.625rem;
+  line-height: 1.7;
+}
