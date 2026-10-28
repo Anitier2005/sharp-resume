@@ -50,6 +50,32 @@ export function segmentText(text: string, files: Attachment[]): Segment[] {
     });
 }
 
+/** 标记在正文里的区间（start 含、end 不含） */
+export interface TokenRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * 找出正文里每枚标记的落点。长标记先占位，避免短标记撞进长标记的区间；
+ * 同一枚标记出现多次也都算（用户手动复述了文件名，同样该整枚删）。
+ */
+export function tokenRanges(text: string, files: Attachment[]): TokenRange[] {
+  const tokens = [...new Set(files.map((file) => file.token).filter(Boolean) as string[])].sort(
+    (a, b) => b.length - a.length,
+  );
+  const ranges: TokenRange[] = [];
+  for (const token of tokens) {
+    let at = text.indexOf(token);
+    while (at !== -1) {
+      const overlap = ranges.some((r) => at < r.end && at + token.length > r.start);
+      if (!overlap) ranges.push({ start: at, end: at + token.length });
+      at = text.indexOf(token, at + 1);
+    }
+  }
+  return ranges.sort((a, b) => a.start - b.start);
+}
+
 /**
  * 追加到正文末尾（拖放场景：指针位置不等于光标位置）。
  * 返回新的正文与附件列表，两边必须一起更新，否则 token 与文件对不上。

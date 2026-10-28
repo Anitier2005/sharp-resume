@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { Attachment } from "@/types";
 import { ArrowUp, FileIcon, Plus } from "@/components/ui/icons";
 import { Dropdown, MenuItem } from "@/components/ui/menu";
 import { MODELS } from "@/lib/model-config";
-import { segmentText, uniqueToken } from "@/lib/inline-tokens";
+import { segmentText, tokenRanges, uniqueToken } from "@/lib/inline-tokens";
 import styles from "./composer.module.css";
 import { toAttachment } from "@/lib/attach";
 
@@ -177,6 +178,66 @@ export function Composer({
     onFilesChange([]);
   };
 
+  /**
+   * 退格/Delete 碰到附件标记时**整枚删除**。
+   * 高亮只在整串文件名完整匹配时才画：一个字一个字地啃，啃掉第一个字
+   * 标签底色就没了，剩下的文件名变成普通文字悬在正文里
+   * （用户报过「只删了标签、名称有残留」）——所以要么不删，要么整枚删。
+   */
+  const deleteTokenRange = (from: number, to: number) => {
+    // flushSync：新正文与新光标立刻落进 DOM，连按退格也能连删多枚
+    flushSync(() => onTextChange(text.slice(0, from) + text.slice(to)));
+    const el = areaRef.current;
+    el?.focus();
+    el?.setSelectionRange(from, from);
+  };
+
+  /** 删 [start, end) 时把贴着的一个空格一起带走：行首带右侧空格，其余吃左侧 */
+  const swallowSpace = (start: number, end: number): [number, number] => {
+    if (start === 0 && text[end] === " ") return [start, end + 1];
+    if (start > 0 && text[start - 1] === " ") return [start - 1, end];
+    return [start, end];
+  };
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) return; // 中文输入法组词中，不抢键
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submit();
+      return;
+    }
+    if (event.key !== "Backspace" && event.key !== "Delete") return;
+
+    const el = event.currentTarget;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const ranges = tokenRanges(text, files);
+
+    if (start !== end) {
+      // 选区碰到标记就按整枚算：哪怕只选中了文件名中间两个字
+      const touched = ranges.filter((r) => r.start < end && start < r.end);
+      if (!touched.length) return;
+      event.preventDefault();
+      const from = Math.min(start, ...touched.map((r) => r.start));
+      const to = Math.max(end, ...touched.map((r) => r.end));
+      // 两侧都是空格时带走一个，删除后不留双空格
+      const adj = from > 0 && text[from - 1] === " " && text[to] === " " ? from - 1 : from;
+      deleteTokenRange(adj, to);
+      return;
+    }
+
+    const backward = event.key === "Backspace";
+    // 光标贴着标记（退格：在末尾或中间；Delete：在开头或中间）→ 整枚删。
+    // 光标在标记开头按退格、在末尾按 Delete，先正常删旁边的空格，下一键才删整枚。
+    const hit = ranges.find((r) =>
+      backward ? start > r.start && start <= r.end : start >= r.start && start < r.end,
+    );
+    if (!hit) return;
+    event.preventDefault();
+    const [from, to] = swallowSpace(hit.start, hit.end);
+    deleteTokenRange(from, to);
+  };
+
   const options = useMemo(() => MODELS.map((item) => ({ id: item.id, label: item.label })), []);
   const areaHeight = manual == null ? undefined : Math.max(MIN_H, manual);
   const segments = useMemo(() => segmentText(text, files), [text, files]);
@@ -220,12 +281,7 @@ export function Composer({
               onChange={(event) => onTextChange(event.target.value)}
               onPaste={onPaste}
               onScroll={syncScroll}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
+              onKeyDown={onKeyDown}
             />
           </div>
 

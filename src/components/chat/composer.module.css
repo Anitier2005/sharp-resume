@@ -63,8 +63,12 @@
 
 .mirror {
   position: absolute;
-  inset: 0;
-  padding: 0 0 6px;
+  /* 四周留 3/8px 出血：标记的底色会向文字外扩（见 .token），
+     首行/行首的圆角和描边若没有这份出血，会被 overflow 裁成平角（用户报过「样式有问题」）。
+     padding 与负 inset 等量抵消，正文格子仍与 textarea 逐像素对齐；
+     底部 9px = 出血 3px + textarea 自身的 padding-bottom 6px。 */
+  inset: -3px -8px;
+  padding: 3px 8px 9px;
   font: inherit;
   font-size: 0.75rem;
   line-height: 1.72;
@@ -76,17 +80,19 @@
   overflow: hidden;
 }
 
-/* 行内附件标记：只上底色和描边，不加内边距 —— 加宽就会把后面的字推歪 */
 /* 行内附件标记：底色 + 描边由这一层画，文字本身仍归 textarea。
    它跑在 mirror 里（与 textarea 逐像素对齐），所以**不能**靠普通 padding 撑开 ——
    padding 会把后面的字推走、整行错位。用 padding 扩背景、负 margin 抵消占位，
-   净宽度为 0：底色比文字宽 4px，文字原地不动。 */
+   净宽度为 0。
+   横向只扩 2px（+1px 描边 = 3px）：扩得再多（试过 6px）会盖掉标记后面的
+   分隔空格、压到下一个字上，光标和新输入的字看起来都落进标签里（用户报过）。
+   首行/行首不再缺角 —— 圆角的完整由 .mirror 的负 inset 出血保证，不靠这里的 padding。 */
 .token {
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--acc-soft);
   box-shadow: 0 0 0 1px var(--acc-line);
-  padding: 1px 4px;
-  margin: -1px -4px;
+  padding: 2px;
+  margin: -2px;
 }
 
 
