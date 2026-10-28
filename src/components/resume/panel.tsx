@@ -13,7 +13,7 @@ import { Tooltip } from "@/components/ui";
 import { ContextMenu } from "@/components/ui/context-menu";
 import { Confirm } from "@/components/ui/confirm";
 import { ChevronDown, Close, More, Plus } from "@/components/ui/icons";
-import { countChars, pageIndex } from "@/lib/doc";
+import { pageIndex } from "@/lib/doc";
 import {
   exportResumeFolder,
   pageToMarkdown,
@@ -66,13 +66,10 @@ export function ResumePanel() {
     person,
     resume,
     page,
-    activePageId,
     openPages,
     openPage,
     closePage,
     dispatch,
-    saveState,
-    layoutStatus,
   } = useWorkspace();
   const toast = useToast();
   /** 视图进 store：会话要据此告诉模型「用户现在在预览」 */
@@ -381,9 +378,6 @@ export function ResumePanel() {
     );
   }
 
-  const index = pageIndex(resume, activePageId);
-  const chars = countChars(person, page);
-
   /** 打印前先切预览：保证打出来的就是屏幕上这份 DOM */
   const handlePrint = () => {
     if (preview) {
@@ -395,7 +389,6 @@ export function ResumePanel() {
   };
 
   const base = { personId: person.id, resumeId: resume.id, pageId: page.id };
-  const saveLabel = saveState === "saving" ? "保存中…" : "已保存";
 
   // 文件名与「导出」下拉保持一致：显示名-页名.扩展名
   const exportDocx = (target: ResumePage) => {
@@ -730,32 +723,9 @@ export function ResumePanel() {
         />
       )}
 
-      <div className={styles.foot} data-print="hide">
-        <span>
-          第 {index + 1} 页 / 共 {resume.pages.length} 页
-        </span>
-        <span>{chars.toLocaleString("zh-CN")} 字</span>
-        {preview && (
-          <Tooltip label="按 A4 比例估算">
-            <span className={sheets > 1.02 ? styles.over : undefined}>
-              {sheets > 1.02 ? `≈ ${sheets.toFixed(1)} 页 A4` : "1 页 A4"}
-            </span>
-          </Tooltip>
-        )}
-        {/* 排版 agent 在干活：只看「这一页」的，别页在忙不该在这显示 */}
-        {layoutStatus?.pageId === page?.id && (
-          <Tooltip label="页排版 agent 正在处理这一页">
-            <span className={styles.layout}>
-              <i />
-              {layoutStatus.text}
-            </span>
-          </Tooltip>
-        )}
-        <span className={styles.save}>
-          <i />
-          {saveLabel}
-        </span>
-        {preview && (
+      {/* 只留缩放：页码、字数、保存状态都在窗口底部的统一状态栏里 */}
+      {preview && (
+        <div className={styles.foot} data-print="hide">
           <div className={styles.zoomCtl}>
             <button
               type="button"
@@ -794,8 +764,8 @@ export function ResumePanel() {
               +
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* 页签和折叠项走同一套菜单：同一页不该因为藏在「⋯」里就少几项能力。
           区别只有「打开」和「关闭标签」——标签本身就是打开的，不需要再打开一次。 */}

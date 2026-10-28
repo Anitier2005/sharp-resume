@@ -46,6 +46,7 @@ export function Confirm({
       title={title}
       subtitle={description}
       onCancel={onCancel}
+      footerBare
       footer={
         <>
           {/* 危险操作默认停在「取消」上：回车不该替用户做决定 */}

@@ -106,6 +106,17 @@
   color: var(--fg-1);
   line-height: 1.4;
 }
+/* 列表末尾的添加入口：常态就是一条普通行，只是文字用强调色 */
+.rowAdd {
+  color: var(--acc-text);
+}
+.rowAdd span {
+  flex: 1;
+  min-width: 0;
+}
+.rowAdd:hover {
+  background: var(--acc-soft);
+}
 .row span {
   flex: 1;
   min-width: 0;

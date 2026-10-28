@@ -22,6 +22,8 @@ import { submitLayout } from "@/lib/layout";
 import { AskForm } from "./ask-form";
 import { displayName } from "@/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { openSettingsWindow, type SettingsChanged } from "@/lib/settings-window";
 import styles from "./chat.module.css";
 
 /**
@@ -58,6 +60,26 @@ export function ChatPanel() {
   const [files, setFiles] = useState<Attachment[]>([]);
   const [ai, setAi] = useState<AiSettings>(() => loadAi());
   const [aiOpen, setAiOpen] = useState(false);
+
+  /**
+   * 模型设置在独立窗口里。窗口改完会推 `settings:changed` —— 这里重读 localStorage，
+   * 否则本面板还拿着旧模型，下一条消息会发给已经换掉的接口。
+   * 浏览器调试开不了窗口，退回老的小窗（只服务开发）。
+   */
+  const openModelSettings = async () => {
+    if (!(await openSettingsWindow("model"))) setAiOpen(true);
+  };
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let off: (() => void) | undefined;
+    void listen<SettingsChanged>("settings:changed", (event) => {
+      if (event.payload.kind === "ai") setAi(loadAi());
+    }).then((fn) => {
+      off = fn;
+    });
+    return () => off?.();
+  }, []);
   const [dragging, setDragging] = useState(false);
   /** 模型发来的表单；非空时盖在会话上 */
   const [ask, setAsk] = useState<AskQuestion[] | null>(null);
@@ -190,7 +212,7 @@ export function ChatPanel() {
       if (!configured) {
         // 内部往返是后台发起的，把设置面板顶到用户面前会很突兀
         if (silent) return;
-        setAiOpen(true);
+        void openModelSettings();
         toast("先配置模型才能对话");
         return;
       }
@@ -624,7 +646,7 @@ export function ChatPanel() {
     }
 
     if (action.label === "去检查设置") {
-      setAiOpen(true);
+      void openModelSettings();
       return;
     }
     setInput("把这段再具体一点，补上当时的判断依据。");
@@ -711,7 +733,7 @@ export function ChatPanel() {
       <Composer
         model={modelLabel}
         onPickModel={pickModel}
-        onOpenSettings={() => setAiOpen(true)}
+        onOpenSettings={() => void openModelSettings()}
         onSend={send}
         busy={busy}
         text={input}

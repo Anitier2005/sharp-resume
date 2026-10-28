@@ -88,3 +88,26 @@
    参考 `Slider` / `Checkbox`：input 透明铺在上面，像素全归 CSS。
 4. **注释写「为什么」**：写清「为什么不用原生件」「为什么是这个尺寸」，
    否则下一个人会顺手改回去。
+
+---
+
+## 5. 窗口与外壳
+
+| 层 | 做法 |
+|---|---|
+| 主窗口 | `decorations: false` + 自绘 `TitleBar`；三栏 + 一条**贯通全宽**的 `StatusBar` |
+| 设置窗（模型 / 外观） | 独立 Tauri 窗口（系统标题栏、固定尺寸），无底栏、无「完成」，改一项即时生效 |
+| 确认 / 表单小窗 | `Modal` + `footerBare`：按钮靠右、无分界线 |
+
+三条容易踩的规矩：
+
+1. **不要在前端建窗**。`new WebviewWindow` 需要一组 ACL（`allow-create-webview-window`、
+   拿到已有窗口又要 `allow-get-all-webviews`），少一条就静默失败。统一走 Rust 命令
+   `open_settings`（`src-tauri/src/lib.rs`）。
+2. **建窗命令必须是 `async fn`**。同步命令跑在主线程上，而建窗要把任务交回主线程并等待，
+   于是自锁：窗口壳出现了、页面永远不导航，表现为**纯白窗**。
+3. **新窗口要带上主窗口那套 `additional_browser_args`**（`--disable-gpu-sandbox` 等），
+   否则这台机器上同样是白窗。
+
+状态栏只有一条（`components/status-bar.tsx`），三栏不再各带底栏：
+左「本地工作区」、中「Enter 发送」、右「页码 / 字数 / 保存状态」。

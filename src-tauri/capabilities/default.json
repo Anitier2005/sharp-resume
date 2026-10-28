@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Sharp Resume 主窗口权限",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -11,6 +13,8 @@
     "core:window:allow-close",
     "core:window:allow-is-maximized",
     "dialog:default",
-    "fs:default"
+    "fs:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit-to"
   ]
 }

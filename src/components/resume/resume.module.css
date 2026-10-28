@@ -245,18 +245,13 @@
 }
 
 /* ---------- 状态栏 ---------- */
+/* 只剩缩放：整条不再画边框与底色，滚轮区看起来是连成一片的。
+   页码/字数/保存状态统一在窗口底部的 StatusBar 里 */
 .foot {
-  height: 22px;
   flex: none;
   display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 0 12px;
-  border-top: 1px solid var(--line-soft);
-  background: var(--bg-title);
-  font-size: 0.5625rem;
-  color: var(--fg-3);
-  font-variant-numeric: tabular-nums;
+  justify-content: flex-end;
+  padding: 0 12px 8px;
 }
 .foot .pn {
   font-weight: 600;
@@ -313,11 +308,16 @@
   }
 }
 
+/* 悬浮药丸：浮层底 + 阴影，不再靠一条底栏托着 */
 .zoomCtl {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 3px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-control);
 }
 /* 同上：数字/百分号用 flex + line-height:1 居中，grid 会把墨迹压偏下 */
 .zoomCtl button {

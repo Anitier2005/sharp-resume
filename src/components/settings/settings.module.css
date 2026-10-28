@@ -1,0 +1,197 @@
+/* ==========================================================================
+   设置窗口（模型 / 外观）
+   ========================================================================== */
+
+/* 整窗就是一页：没有卡片、没有底栏。窗框由系统标题栏给，内容从这里开始 */
+.page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 18px;
+  overflow: auto;
+  background: var(--bg-elev);
+  font-size: 0.6875rem;
+  color: var(--fg-2);
+}
+
+/* ---------- 详情页的头：返回 + 名称 ---------- */
+.head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+}
+
+.head b {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+
+/* ---------- 页签 ---------- */
+/* 下划线与分隔线重合，和设置里的「页」是同一套语言 */
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tabs button {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 0.6875rem;
+  color: var(--fg-3);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.tabs button:hover {
+  color: var(--fg-1);
+}
+
+.tabs button[aria-selected="true"] {
+  color: var(--acc-text);
+  border-bottom-color: var(--acc);
+}
+
+/* ---------- 列表 ---------- */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.row {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: 5px;
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.row:hover {
+  background: var(--bg-hover);
+}
+
+.rowOn {
+  background: var(--acc-soft);
+}
+
+.rowName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.6875rem;
+  color: var(--fg-1);
+}
+
+.rowOn .rowName {
+  color: var(--acc-text);
+}
+
+.rowMeta {
+  flex: none;
+  font-size: 0.59375rem;
+  color: var(--fg-4);
+}
+
+/* 列表最后一项：添加。与普通行同样高，只靠文字颜色区分 —— 它不是数据 */
+.rowAdd .rowName {
+  color: var(--acc-text);
+}
+
+/* ---------- 详情字段 ---------- */
+.fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+/* ---------- 外观页的分组 ---------- */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.groupTitle {
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+
+/* 分段按钮：和 ui/choice 的分段控件同一套外观，这里是本地布局（每项等宽） */
+.segRow {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-hover);
+}
+
+.segBtn {
+  flex: 1;
+  height: 22px;
+  border-radius: 4px;
+  font-size: 0.65625rem;
+  color: var(--fg-3);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.segBtn:hover {
+  color: var(--fg-1);
+}
+
+.segBtn[aria-pressed="true"] {
+  background: var(--bg-elev);
+  color: var(--acc-text);
+  box-shadow: var(--shadow-control);
+}
+
+.swatches {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sw {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  transition: border-color 0.12s ease;
+}
+
+.sw:hover {
+  border-color: var(--line-strong);
+}
+
+/* 选中：外框套一层强调色环，色块本身不变形 */
+.swOn {
+  border-color: var(--acc-line-2);
+  box-shadow: 0 0 0 2px var(--acc-soft);
+}
+
+.sw i {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}

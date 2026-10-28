@@ -16,11 +16,14 @@ import {
 } from "@/components/ui/icons";
 import { LibraryDrawer } from "@/components/library/drawer";
 import { KnowledgePanel } from "@/components/knowledge/panel";
-import { SettingsSheet } from "@/components/settings/sheet";
+import { openSettingsWindow, type SettingsView } from "@/lib/settings-window";
+import { ModelSettings } from "@/components/settings/model-settings";
+import { LookSettings } from "@/components/settings/look-settings";
+import { Modal } from "@/components/ui/modal";
 import { ContextMenu } from "@/components/ui/context-menu";
 import { Confirm } from "@/components/ui/confirm";
 import { MenuItem as CtxItem, MenuSep as CtxSep } from "@/components/ui/menu";
-import { displayName, type Person, type Resume } from "@/types";
+import { displayName, type AccentKey, type Person, type Resume } from "@/types";
 import { cx } from "@/lib/cx";
 import styles from "./sidebar.module.css";
 
@@ -29,7 +32,8 @@ function pageBadges(resume: Resume): string {
 }
 
 export function Sidebar() {
-  const { state, person, resume, dispatch, expanded, toggleExpanded } = useWorkspace();
+  const { state, person, resume, dispatch, expanded, toggleExpanded, systemTextScale, setTextScale } =
+    useWorkspace();
   const toast = useToast();
   const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -37,8 +41,11 @@ export function Sidebar() {
   const [libOpen, setLibOpen] = useState(false);
   /** 知识库是全局的（跨候选人）；设置同理，两者都收在左下角的「设置」项下面 */
   const [kbOpen, setKbOpen] = useState(false);
-  /** 设置面板打开在哪一页；null = 关闭 */
-  const [sheetTab, setSheetTab] = useState<"model" | "look" | null>(null);
+  /**
+   * 设置是独立窗口。浏览器调试时开不了窗口，退回一个浮层 ——
+   * 它只服务开发，所以只要能用就行，不做完整对齐。
+   */
+  const [fallback, setFallback] = useState<SettingsView | null>(null);
   /** 「设置」下挂三个二级项，默认展开：默认收起的话这三个入口等于藏起来了 */
   const [navOpen, setNavOpen] = useState(true);
   /** 右键菜单：记下坐标与目标，null 表示关闭 */
@@ -69,13 +76,24 @@ export function Sidebar() {
     return item.resumes.some((r) => r.title.toLowerCase().includes(q));
   });
 
-  const openSheet = (tab: "model" | "look") => {
+  const openSettings = async (view: SettingsView) => {
     setKbOpen(false);
-    setSheetTab(tab);
+    // 外观窗要把当前值带过去：它不读工作区，只负责改
+    const params: Record<string, string> =
+      view === "look"
+        ? {
+            accent: state.ui.accent,
+            hex: state.ui.accentHex ?? "",
+            mode: state.ui.mode,
+            scale: state.ui.textScale == null ? "" : String(state.ui.textScale),
+            sys: String(systemTextScale),
+          }
+        : {};
+    const opened = await openSettingsWindow(view, params);
+    if (!opened) setFallback(view);
   };
 
   const openKnowledge = () => {
-    setSheetTab(null);
     setKbOpen(true);
   };
 
@@ -315,16 +333,16 @@ export function Sidebar() {
             </button>
             <button
               type="button"
-              className={cx(styles.subItem, sheetTab === "model" && styles.subItemOn)}
-              onClick={() => openSheet("model")}
+              className={styles.subItem}
+              onClick={() => void openSettings("model")}
             >
               <Sparkles size={12} />
               模型
             </button>
             <button
               type="button"
-              className={cx(styles.subItem, sheetTab === "look" && styles.subItemOn)}
-              onClick={() => openSheet("look")}
+              className={styles.subItem}
+              onClick={() => void openSettings("look")}
             >
               <Palette size={12} />
               外观
@@ -333,10 +351,6 @@ export function Sidebar() {
         )}
       </nav>
 
-      <div className={styles.foot}>
-        <span className={styles.live} />
-        <span className={styles.footText}>本地工作区 · 自动保存</span>
-      </div>
 
       {ctx && (
         <ContextMenu x={ctx.x} y={ctx.y} onClose={() => setCtx(null)}>
@@ -412,11 +426,33 @@ export function Sidebar() {
 
       <LibraryDrawer open={libOpen} onClose={() => setLibOpen(false)} />
       <KnowledgePanel open={kbOpen} onClose={() => setKbOpen(false)} />
-      <SettingsSheet
-        open={sheetTab !== null}
-        initialTab={sheetTab ?? "model"}
-        onClose={() => setSheetTab(null)}
-      />
+      {fallback && (
+        <Modal
+          title={fallback === "model" ? "模型" : "外观"}
+          onClose={() => setFallback(null)}
+          bodyClassName={styles.settingsBody}
+        >
+          {fallback === "model" ? (
+            <ModelSettings />
+          ) : (
+            <LookSettings
+              accent={state.ui.accent as AccentKey}
+              hex={state.ui.accentHex ?? ""}
+              mode={state.ui.mode}
+              scale={state.ui.textScale == null ? "" : String(state.ui.textScale)}
+              systemScale={systemTextScale}
+              onAccent={(accent) =>
+                dispatch({ type: "setAccent", accent, accentHex: "" })
+              }
+              onHex={(accentHex) =>
+                dispatch({ type: "setAccent", accent: state.ui.accent, accentHex })
+              }
+              onMode={(mode) => dispatch({ type: "setMode", mode })}
+              onScale={(value) => setTextScale(value === "" ? null : Number(value))}
+            />
+          )}
+        </Modal>
+      )}
     </aside>
   );
 }

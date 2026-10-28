@@ -68,3 +68,12 @@
   border-top: 1px solid var(--line);
   background: var(--bg-canvas);
 }
+
+/* 无分界的按钮区：与正文同一块底，按钮一律靠右。
+   确认窗只有一句话 + 两个按钮，切成上下两截反而显得东西很多 */
+.footBare {
+  justify-content: flex-end;
+  padding: 2px 16px 16px;
+  border-top: 0;
+  background: transparent;
+}

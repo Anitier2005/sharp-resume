@@ -345,24 +345,6 @@
   color: var(--fg-3);
 }
 
-/* ---------- 底部状态 ---------- */
-.foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 8px 2px;
-  border-top: 1px solid var(--line-soft);
-  font-size: 0.625rem;
-  color: var(--fg-3);
-}
-/* 状态文字要能被截断：栏窄时「本地工作区 · 自动保存」先省略，
-   而不是把菜单按钮挤出去（菜单是唯一入口，不能被挤掉） */
-.footText {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 /* ---------- 左下角导航：设置 + 三个二级项 ---------- */
 /* margin-top:auto 把它顶到栏底：这三个入口是常驻的，不跟着列表滚动 */
 .nav {
@@ -425,10 +407,8 @@
 .subItemOn:hover svg {
   color: var(--acc-text);
 }
-.live {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 0 3px var(--ok-soft);
+
+/* 浏览器调试时的设置浮层：内容自己会撑高，这里只给一个最小高度 */
+.settingsBody {
+  min-height: 320px;
 }

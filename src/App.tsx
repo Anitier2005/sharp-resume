@@ -6,9 +6,14 @@ import { TitleBar } from "@/components/title-bar";
 import { Sidebar } from "@/components/sidebar";
 import { ChatPanel } from "@/components/chat/panel";
 import { ResumePanel } from "@/components/resume/panel";
+import { StatusBar } from "@/components/status-bar";
 import { readableOn } from "@/lib/color";
 import { installSelectAll } from "@/lib/shortcuts";
 import { configureKnowledge } from "@/lib/knowledge";
+import { listen } from "@tauri-apps/api/event";
+import { isTauri } from "@/lib/storage";
+import type { AccentKey } from "@/types";
+import type { UiPatch } from "@/lib/settings-window";
 
 /** 栏宽范围；中间会话区永远留够可读宽度。
     COLLAPSE 是「松手时低于它就当作想收起」的阈值 —— 刻意压得很低（80px 只剩一条缝），
@@ -38,13 +43,37 @@ const snap = (value: number, min: number, max: number) =>
   value < min ? 0 : Math.min(Math.max(value, min), Math.max(min, max));
 
 function Shell() {
-  const { state, dispatch } = useWorkspace();
+  const { state, dispatch, setTextScale } = useWorkspace();
 
   // 启动就把嵌入模型配置推给后端：知识库工具据此决定要不要算 query 向量。
   // 放在这里而不是面板里，是因为「用户没打开过知识库面板」才是常态。
   useEffect(() => {
     configureKnowledge();
   }, []);
+  /**
+   * 外观窗改一项就推一条 `ui:patch` 过来，这里立刻落到 store。
+   * 设置窗自己不持有工作区，所以「改一下、看一眼」全靠这条通道。
+   */
+  useEffect(() => {
+    if (!isTauri()) return;
+    let off: (() => void) | undefined;
+    void listen<UiPatch>("ui:patch", (event) => {
+      const patch = event.payload;
+      if (patch.mode) dispatch({ type: "setMode", mode: patch.mode });
+      if (patch.accent !== undefined) {
+        dispatch({
+          type: "setAccent",
+          accent: patch.accent as AccentKey,
+          accentHex: patch.accentHex ?? "",
+        });
+      }
+      if (patch.textScale !== undefined) setTextScale(patch.textScale);
+    }).then((fn) => {
+      off = fn;
+    });
+    return () => off?.();
+  }, [dispatch, setTextScale]);
+
   const { accent, mode } = state.ui;
 
   const accentHex = state.ui.accentHex;
@@ -197,6 +226,9 @@ function Shell() {
           onPointerDown={startDrag("doc")}
         />
       </div>
+
+      {/* 一条贯通整个窗口的状态栏：三栏不再各带一条底边 */}
+      <StatusBar />
     </div>
   );
 }

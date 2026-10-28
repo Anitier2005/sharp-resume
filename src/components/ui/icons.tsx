@@ -213,3 +213,10 @@ export const Palette = (p: IconProps) => (
     <path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none" />
   </svg>
 );
+
+/** 返回：详情页左上角。与 ChevronRight 成对，方向语义不能靠 transform 混用 */
+export const ChevronLeft = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.9, ...p })}>
+    <path d="M14.5 5.5 8 12l6.5 6.5" />
+  </svg>
+);

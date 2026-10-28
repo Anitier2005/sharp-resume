@@ -159,6 +159,98 @@ fn state_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 /// 返回应用信息与数据目录，前端用于状态栏与「打开目录」。
+/// 打开（或前置）一个设置窗口。
+///
+/// 为什么由 Rust 建窗、而不是前端 `new WebviewWindow`：
+///   1. 前端建窗要先给主窗口开 `allow-create-webview-window`，再用 `getByLabel`
+///      去重 —— 那又是一条 ACL（`allow-get-all-webviews`）。少一条就静默失败，
+///      排查成本远高于收益；
+///   2. 自定义命令不走 ACL，label 去重、尺寸、标题都在一处，改起来只有一份。
+///
+/// 参数走查询串传给窗口：设置窗不挂工作区 store，初值（当前强调色/字号）由这里带过去。
+#[tauri::command]
+async fn open_settings(
+    app: tauri::AppHandle,
+    view: String,
+    params: std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    let (label, title, width, height, key) = if view == "look" {
+        ("settings-look", "外观", 500.0, 420.0, "look")
+    } else {
+        ("settings-model", "模型", 720.0, 560.0, "model")
+    };
+
+    if let Some(win) = app.get_webview_window(label) {
+        let _ = win.set_focus();
+        return Ok(());
+    }
+
+    // 建窗是异步的：两次快速点击（或 StrictMode 的重复 effect）会在「标签还没注册、
+    // 但窗口已经在建」的空档里各建一个，于是同名双窗。用一把锁把这个空档堵住。
+    {
+        let mut opening = opening_labels().lock().expect("窗口锁被毒化");
+        if !opening.insert(label.to_string()) {
+            return Ok(());
+        }
+    }
+
+    // 参数要百分号编码：自定义强调色形如 #3b50b4，裸 # 会被当成 fragment 截断
+    let mut query = format!("view={key}");
+    for (k, v) in params {
+        query.push('&');
+        query.push_str(&encode_param(&k));
+        query.push('=');
+        query.push_str(&encode_param(&v));
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        label,
+        tauri::WebviewUrl::App(format!("index.html?{query}").into()),
+    )
+    .title(title)
+    .inner_size(width, height)
+    // 与主窗口一致：这台机器上不关 GPU sandbox 时，新的 WebView2 窗口会白屏
+    .additional_browser_args(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu-sandbox",
+    )
+    // 固定尺寸：内容长度是确定的，允许拉伸只会把字段拉成一行一个字
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .center()
+    .build()
+    .map_err(|e| {
+        opening_labels().lock().expect("窗口锁被毒化").remove(label);
+        e.to_string()
+    })?;
+
+    opening_labels().lock().expect("窗口锁被毒化").remove(label);
+
+    Ok(())
+}
+
+/// 正在创建中的窗口 label（防止同一标签被并发建两次）
+fn opening_labels() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static LABELS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    LABELS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// 只保留 RFC 3986 的 unreserved 字符，其余一律 %XX
+fn encode_param(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 #[tauri::command]
 fn app_info(app: tauri::AppHandle) -> AppInfo {
     let (dir, portable) = match DATA_DIR.get() {
@@ -521,6 +613,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            open_settings,
             app_info,
             text_scale,
             read_state,

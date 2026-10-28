@@ -169,11 +169,7 @@ export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () =
           <div className={styles.title}>
             <BookOpen size={13} />
             <b>知识库</b>
-            <span>{entries.length} 条 · 预置 {preset.length} 条</span>
           </div>
-          <Button leading={<Plus size={11} />} onClick={startNew}>
-            新建
-          </Button>
           <button type="button" className={shared.overlayClose} aria-label="关闭" onClick={onClose}>
             <Close size={11} />
           </button>
@@ -241,6 +237,13 @@ export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () =
                       <span>{item.title}</span>
                     </button>
                   ))}
+
+                  {/* 新建是列表的最后一项，而不是头部按钮：这一列本来就是「条目清单」，
+                      添加动作放在清单末尾，视线不用在两个位置之间来回跳 */}
+                  <button type="button" className={cx(styles.row, styles.rowAdd)} onClick={startNew}>
+                    <Plus size={10} />
+                    <span>新建条目</span>
+                  </button>
                 </>
               )}
             </div>
@@ -315,7 +318,7 @@ export function KnowledgePanel({ open, onClose }: { open: boolean; onClose: () =
                 <BookOpen size={18} />
                 <b>知识库给模型查事实用</b>
                 <span>
-                  左侧选一条看内容；「新建」写你自己的。检索不看的条目也不会被用上 ——
+                  左侧选一条看内容；列表最后一行可以新建。没写清的条目不会被检索命中 ——
                   写清楚、单一主题最容易命中。
                 </span>
               </div>

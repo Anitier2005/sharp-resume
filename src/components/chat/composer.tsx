@@ -362,10 +362,6 @@ export function Composer({
             }}
           />
         </div>
-        <div className={styles.hint}>
-          <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>
-          <kbd>Enter</kbd> 换行 · 拖上边框可调高度
-        </div>
       </div>
     </div>
   );
