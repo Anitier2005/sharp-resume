@@ -8,9 +8,15 @@
       "baseUrl": "https://tokenhub.tencentmaas.com/v1",
       "contextWindow": 128000,
       "maxOutput": 8192,
-      "reasoning": ["off", "low", "medium", "high"],
+      "reasoning": [
+        "off",
+        "low",
+        "medium",
+        "high"
+      ],
       "defaultTemperature": 0.4,
-      "note": "便宜快，适合日常改写与对齐 JD"
+      "note": "便宜快，适合日常改写与对齐 JD",
+      "vision": false
     },
     {
       "id": "deepseek-chat",
@@ -20,7 +26,8 @@
       "contextWindow": 64000,
       "maxOutput": 8192,
       "reasoning": [],
-      "defaultTemperature": 0.4
+      "defaultTemperature": 0.4,
+      "vision": false
     },
     {
       "id": "gpt-4o-mini",
@@ -29,8 +36,13 @@
       "baseUrl": "https://api.openai.com/v1",
       "contextWindow": 128000,
       "maxOutput": 16384,
-      "reasoning": ["low", "medium", "high"],
-      "defaultTemperature": 0.4
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "defaultTemperature": 0.4,
+      "vision": true
     },
     {
       "id": "qwen2.5:7b",
@@ -40,7 +52,8 @@
       "contextWindow": 32768,
       "maxOutput": 4096,
       "reasoning": [],
-      "defaultTemperature": 0.5
+      "defaultTemperature": 0.5,
+      "vision": false
     }
   ]
 }

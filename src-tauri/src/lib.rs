@@ -3,6 +3,7 @@ mod assets;
 mod db;
 mod docx;
 mod export;
+mod extract;
 mod model;
 mod net;
 mod pool;
@@ -472,7 +473,9 @@ pub fn run() {
             export::export_resume,
             pool::pool_put,
             pool::pool_get,
-            pool::pool_list
+            pool::pool_list,
+            extract::extract_pdf,
+            extract::ocr_image
         ])
         .manage(session::Sessions::default())
         // 排版信箱：每页一份，跨命令存活。放在 manage 里而不是每次新建，

@@ -1,4 +1,6 @@
+import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "@/types";
+import { isTauri } from "@/lib/storage";
 
 function extOf(name: string): string {
   const dot = name.lastIndexOf(".");
@@ -16,9 +18,19 @@ export const isReadableText = (ext: string) => TEXT_EXT.has(ext.toLowerCase());
 
 /** 单份上限 200KB，超出截断，避免把上下文撑爆 */
 const MAX_CHARS = 200 * 1024;
+/** PDF 提取的原始字节上限：超过它解析又慢又容易把内存吃爆 */
+const MAX_PDF_BYTES = 20 * 1024 * 1024;
+/** OCR 的原图上限：OCR 只认图，超大图先让 convert_image 那条路压一压 */
+const MAX_OCR_BYTES = 10 * 1024 * 1024;
 
 /** 选完文件就把正文读进内存，发送时不必再等 IO */
 const bodyCache = new Map<string, string>();
+/** 原始 File：OCR 按「当前模型有没有视觉」决定跑不跑，跑的时候要字节 */
+const fileCache = new Map<string, File>();
+/** 图片的 data URL —— 模型支持视觉时 base64 直传，不再走 OCR */
+const imageCache = new Map<string, string>();
+/** OCR 结果。懒执行：OCR 一张要几秒，不在选文件时抢跑 */
+const ocrCache = new Map<string, string>();
 
 async function cacheBody(id: string, file: File): Promise<void> {
   if (!isReadableText(extOf(file.name)) || file.size > MAX_CHARS) return;
@@ -29,6 +41,62 @@ async function cacheBody(id: string, file: File): Promise<void> {
     /* 读不出来就只留文件名 */
   }
 }
+
+/**
+ * PDF 的文字在 Rust 侧提（pdf-extract，纯 Rust）。
+ * 浏览器调试模式没有通讯层，保持「只给文件名」的旧行为。
+ */
+async function extractPdf(id: string, file: File): Promise<void> {
+  if (!isTauri() || file.size > MAX_PDF_BYTES) return;
+  try {
+    const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+    const text = await invoke<string>("extract_pdf", { bytes });
+    bodyCache.set(id, text.slice(0, MAX_CHARS));
+  } catch (error) {
+    // 提取失败也要说清原因 —— 模型读到「只有文件名」时，用户收到的回答
+    // 会是「请把内容贴给我」，把真实原因留在这他才知道该换扫描件还是修 PDF
+    bodyCache.set(id, `（这份 PDF 读不出来：${errorText(error)}）`);
+  }
+}
+
+/** 图片：存一份 data URL 给视觉模型直传；OCR 懒到发送时按需跑 */
+async function cacheImage(id: string, file: File): Promise<void> {
+  if (file.size > MAX_OCR_BYTES) return;
+  try {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("读不出图片内容"));
+      reader.readAsDataURL(file);
+    });
+    imageCache.set(id, dataUrl);
+  } catch {
+    /* 读不出就只留文件名 */
+  }
+}
+
+/** OCR 是兜底通道，只在「模型看不了图」时才花那几秒 */
+export async function ensureOcrText(id: string): Promise<string | undefined> {
+  const cached = ocrCache.get(id);
+  if (cached) return cached;
+  const file = fileCache.get(id);
+  if (!file || !isImage(extOf(file.name)) || !isTauri() || file.size > MAX_OCR_BYTES) return undefined;
+  try {
+    const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+    const text = await invoke<string>("ocr_image", { bytes, ext: extOf(file.name) });
+    const trimmed = text.slice(0, MAX_CHARS);
+    ocrCache.set(id, trimmed);
+    return trimmed;
+  } catch (error) {
+    // 失败也记下来：同一次会话里别对同一张图反复弹同样的错
+    const message = `（OCR 失败：${errorText(error)}）`;
+    ocrCache.set(id, message);
+    return message;
+  }
+}
+
+const errorText = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"]);
 
@@ -46,6 +114,11 @@ export function toAttachment(file: File): Attachment {
   const id = `f-${crypto.randomUUID().slice(0, 8)}`;
   void cacheBody(id, file);
   const ext = extOf(file.name);
+  // PDF / 图片是「读不到正文」的重灾区，各自的通道见上面的函数注释。
+  // fileCache 无条件存：OCR 懒执行，跑的时候才需要字节。
+  fileCache.set(id, file);
+  if (ext === "pdf") void extractPdf(id, file);
+  if (isImage(ext)) void cacheImage(id, file);
   return {
     id,
     name: file.name,
@@ -57,6 +130,9 @@ export function toAttachment(file: File): Attachment {
 
 /** 取已缓存的正文；非文本类型或还没读完返回 undefined */
 export const attachmentText = (id: string): string | undefined => bodyCache.get(id);
+
+/** 取图片的 data URL；非图片、超大或浏览器调试模式返回 undefined */
+export const attachmentImage = (id: string): string | undefined => imageCache.get(id);
 
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

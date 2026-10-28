@@ -53,9 +53,18 @@ export function saveAi(settings: AiSettings): void {
 export const aiReady = (settings: AiSettings): boolean =>
   Boolean(settings.baseUrl.trim() && settings.model.trim() && settings.apiKey.trim());
 
+/**
+ * 多模态消息段（OpenAI 兼容格式）。
+ * 只有「模型有视觉」时才会构造数组 content；纯文本对话保持字符串 ——
+ * 两种形状都按协议原样透传，不做二次包装。
+ */
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export interface ChatMsg {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | ContentPart[];
 }
 
 function endpoint(baseUrl: string): string {

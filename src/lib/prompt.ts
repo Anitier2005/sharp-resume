@@ -78,6 +78,8 @@ export function toApiMessages(
   history: { role: "user" | "assistant"; content: string }[],
   prompt: string,
   attachments: { name: string; text?: string }[],
+  /** 图片 data URL。只在模型支持视觉时由调用方传进来，走协议的 image_url 段 */
+  images: string[] = [],
 ): ChatMsg[] {
   const recent = history.slice(-6).map((message) => ({
     role: message.role,
@@ -92,7 +94,16 @@ export function toApiMessages(
 
   const text = blocks.length ? `${prompt}\n\n本次上传的附件：\n${blocks.join("\n\n")}` : prompt;
 
-  return [{ role: "system", content: system }, ...recent, { role: "user", content: text }];
+  // 图片走多模态段而不是塞进正文：data URL 动辄几百 KB，
+  // 拼进字符串会让模型（和 token 计数）都很难受 —— 协议本来就有专门的段类型。
+  const userContent: ChatMsg["content"] = images.length
+    ? [
+        { type: "text", text },
+        ...images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+      ]
+    : text;
+
+  return [{ role: "system", content: system }, ...recent, { role: "user", content: userContent }];
 }
 
 const norm = (value: string) => value.replace(/\s+/g, "").replace(/[，。；、,.．:：!！?？"'“”‘’]/g, "");

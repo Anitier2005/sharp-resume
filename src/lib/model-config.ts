@@ -14,6 +14,12 @@ export interface ModelConfig {
   maxOutput: number;
   /** 可选的思维强度档位；空数组表示这个模型没有该能力 */
   reasoning: string[];
+  /**
+   * 模型本身能不能看图。注意写的是「模型的客观能力」，与用户有没有 key 无关 ——
+   * 附件管线靠它决定图片是 base64 直传（vision）还是走 OCR 转文字。
+   * 新模型进 config/models.json 时必须同时给这个字段，缺了按不能看图处理。
+   */
+  vision: boolean;
   defaultTemperature: number;
   note?: string;
 }

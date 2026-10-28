@@ -20,8 +20,10 @@ use tauri::ipc::Channel;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatMessage {
     pub role: String,
+    /// 字符串（普通消息）或数组（视觉消息：`[{type:"text"},{type:"image_url"}]`）。
+    /// 原样透传 —— 各家兼容端对段类型的校验不同，在这里建模反而束手束脚。
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -29,20 +31,34 @@ pub struct ChatMessage {
 }
 
 impl ChatMessage {
+    /// 正文文本。视觉消息的 content 是数组，取其中 text 段拼接；
+    /// 工具调用场景基本是纯文本，读字符串即可。
+    pub fn text(&self) -> String {
+        match &self.content {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(serde_json::Value::Array(parts)) => parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        }
+    }
+
     pub fn system(text: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: Some(text.into()), tool_calls: None, tool_call_id: None }
+        Self { role: "system".into(), content: Some(serde_json::Value::String(text.into())), tool_calls: None, tool_call_id: None }
     }
     pub fn user(text: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: Some(text.into()), tool_calls: None, tool_call_id: None }
+        Self { role: "user".into(), content: Some(serde_json::Value::String(text.into())), tool_calls: None, tool_call_id: None }
     }
     pub fn assistant(text: impl Into<String>) -> Self {
-        Self { role: "assistant".into(), content: Some(text.into()), tool_calls: None, tool_call_id: None }
+        Self { role: "assistant".into(), content: Some(serde_json::Value::String(text.into())), tool_calls: None, tool_call_id: None }
     }
     /// 模型这一轮只要调工具、不说话
     pub fn assistant_calls(calls: Vec<ToolCall>, text: String) -> Self {
         Self {
             role: "assistant".into(),
-            content: if text.is_empty() { None } else { Some(text) },
+            content: if text.is_empty() { None } else { Some(serde_json::Value::String(text)) },
             tool_calls: Some(calls),
             tool_call_id: None,
         }
@@ -51,7 +67,7 @@ impl ChatMessage {
     pub fn tool_result(call_id: impl Into<String>, text: impl Into<String>) -> Self {
         Self {
             role: "tool".into(),
-            content: Some(text.into()),
+            content: Some(serde_json::Value::String(text.into())),
             tool_calls: None,
             tool_call_id: Some(call_id.into()),
         }

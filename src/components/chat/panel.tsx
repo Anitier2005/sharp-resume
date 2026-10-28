@@ -5,7 +5,7 @@ import { uid } from "@/lib/uid";
 import { useToast } from "@/components/ui/toast-context";
 import { ChevronDown, ChevronRight } from "@/components/ui/icons";
 import { Composer } from "./composer";
-import { toAttachment, stripPreview, attachmentText } from "@/lib/attach";
+import { toAttachment, stripPreview, attachmentText, attachmentImage, ensureOcrText, isImage } from "@/lib/attach";
 import { attachAtEnd } from "@/lib/inline-tokens";
 import { modelById } from "@/lib/model-config";
 import { diff, flatten, renderDelta, type Flat } from "@/lib/changes";
@@ -217,13 +217,32 @@ export function ChatPanel() {
         let acc = "";
         void (async () => {
           try {
+            // 图片的两条通道在这里分流：
+            //   模型有视觉 → data URL 直传（走协议的 image_url 段）
+            //   没有视觉   → OCR 转文字混进附件正文（慢几秒，只对图片跑）
+            const modelHasVision = modelById(ai.model)?.vision === true;
+            const imageUrls = modelHasVision
+              ? attachments
+                  .filter((file) => isImage(file.ext))
+                  .map((file) => attachmentImage(file.id))
+                  .filter((url): url is string => Boolean(url))
+              : [];
+            const attachmentBlocks = await Promise.all(
+              attachments.map(async (file) => ({
+                name: file.name,
+                text:
+                  attachmentText(file.id) ??
+                  (!modelHasVision && isImage(file.ext) ? await ensureOcrText(file.id) : undefined),
+              })),
+            );
             await streamChat({
               settings: ai,
               messages: toApiMessages(
                 buildSystemPrompt(context),
                 person.messages.map((item) => ({ role: item.role, content: item.content })),
                 text,
-                attachments.map((file) => ({ name: file.name, text: attachmentText(file.id) })),
+                attachmentBlocks,
+                imageUrls,
               ),
               signal: controller.signal,
               onDelta: (delta) => {
