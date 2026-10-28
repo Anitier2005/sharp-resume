@@ -77,10 +77,16 @@
 }
 
 /* 行内附件标记：只上底色和描边，不加内边距 —— 加宽就会把后面的字推歪 */
+/* 行内附件标记：底色 + 描边由这一层画，文字本身仍归 textarea。
+   它跑在 mirror 里（与 textarea 逐像素对齐），所以**不能**靠普通 padding 撑开 ——
+   padding 会把后面的字推走、整行错位。用 padding 扩背景、负 margin 抵消占位，
+   净宽度为 0：底色比文字宽 4px，文字原地不动。 */
 .token {
   border-radius: 3px;
   background: var(--acc-soft);
   box-shadow: 0 0 0 1px var(--acc-line);
+  padding: 1px 4px;
+  margin: -1px -4px;
 }
 
 

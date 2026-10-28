@@ -1,9 +1,10 @@
-/* 设置页：一个弹窗，三个 tab。刻意比经历库抽屉更窄，像系统设置 */
-
+/* 设置页：一个弹窗，两个 tab。比资料库抽屉窄一档，像系统设置。
+   高度写死（跟窗口走）而不是随内容：切 tab 时面板不该忽高忽低，
+   内容少的页留白是设置页的正常观感。 */
 .box {
-  width: 560px;
+  width: 640px;
+  height: min(600px, calc(100vh - 100px));
   max-width: calc(100vw - 80px);
-  max-height: calc(100vh - 100px);
   display: flex;
   flex-direction: column;
   background: var(--bg-elev);
@@ -57,11 +58,14 @@
   background: var(--acc);
 }
 
+/* `flex: 1` 是 basis 0%，在自动高度容器里会把内容压成一条滚动带；
+   写成 1 1 auto 才按内容撑开。这里容器已有固定高度，两种写法都填满，
+   但保持与 ui/modal 一致，免得以后改高度时又塌一次 */
 .body {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 14px;
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -136,37 +140,8 @@
   border-color: var(--acc);
   box-shadow: 0 0 0 2px var(--acc-soft);
 }
-.custom {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.custom input[type="color"] {
-  width: 30px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: none;
-  cursor: pointer;
-}
-.custom input[type="text"] {
-  width: 92px;
-  height: 26px;
-  padding: 0 7px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--bg-elev);
-  font: inherit;
-  font-size: 0.6875rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-1);
-  outline: none;
-}
-.custom input[type="text"]:focus {
-  border-color: var(--acc-line-2);
-  background: var(--acc-softer);
-}
+/* 自定义色的取色器已抽成 ui/color-picker（色块 + 弹层自带 HEX 输入），
+   这里不再有 input[type=color] 的样式 —— 原生控件的皮肤永远追不上界面主题 */
 
 .hint {
   font-size: 0.625rem;

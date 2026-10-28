@@ -1,0 +1,108 @@
+/* 自绘取色器。颜色全部走令牌（描边、浮层底色），唯一不能走令牌的是
+   色相条与明度层本身 —— 那两块是「内容」，不是界面皮肤。 */
+
+.swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--line-strong);
+  /* 当前色由 style.background 给：一个按钮就是预览也是开关 */
+  box-shadow: inset 0 0 0 2px var(--bg-elev);
+}
+.swatch:hover {
+  border-color: var(--acc-line-2);
+}
+.swatchOn {
+  outline: 2px solid var(--acc-line-2);
+  outline-offset: 1px;
+}
+
+.pop {
+  position: fixed;
+  z-index: 130;
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(20, 20, 15, 0.06),
+    0 20px 48px -20px rgba(20, 20, 15, 0.4);
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+/* 明度 × 饱和度方块：
+   底层是当前色相的纯色，上面盖白→透明的横向渐变（做出「白→色」），
+   再盖透明→黑的纵向渐变（做出「色→黑」）。三层叠加 = 标准 HSV 平面 */
+.sv {
+  --h: 220;
+  position: relative;
+  height: 140px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(to top, #000, transparent),
+    linear-gradient(to right, #fff, hsl(var(--h) 100% 50%));
+  cursor: crosshair;
+}
+
+/* 色相条：六段彩虹。拖它只改 h，s/v 保持不动 */
+.hue {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: linear-gradient(
+    to right,
+    #f00 0%,
+    #ff0 17%,
+    #0f0 33%,
+    #0ff 50%,
+    #00f 67%,
+    #f0f 83%,
+    #f00 100%
+  );
+  cursor: ew-resize;
+}
+
+/* 圆点指示器。描边用纸面白 + 外圈灰，两种底色上都看得清 */
+.knob {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(20, 20, 15, 0.55);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hash {
+  font-size: 0.6875rem;
+  color: var(--fg-3);
+}
+.hex {
+  flex: 1;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-title);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--fg-1);
+}
+.hex:focus,
+.hex:focus-visible {
+  outline: none;
+  border-color: var(--acc-line-2);
+}

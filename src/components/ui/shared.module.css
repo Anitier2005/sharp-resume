@@ -31,11 +31,15 @@
 }
 
 /* ---------- 面板头：标题 + 副标题 + 关闭 ---------- */
+/* 标题列吃掉剩余宽度，右上角的关闭键才会被顶到最右端。
+   这条写在标题自己身上（而不是每个调用方的 `.head` 里）：
+   drawer 与 modal 两处头部都要它，各写一遍就会像刚才那样漏掉一处、X 贴着标题跑。 */
 .overlayTitle {
   display: flex;
   flex-direction: column;
   gap: 1px;
   min-width: 0;
+  flex: 1;
 }
 .overlayTitle b {
   font-size: 0.78125rem;

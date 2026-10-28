@@ -10,11 +10,12 @@ import { readableOn } from "@/lib/color";
 import { installSelectAll } from "@/lib/shortcuts";
 
 /** 栏宽范围；中间会话区永远留够可读宽度。
-    FLOOR 是「再窄就当作想收起」的阈值 —— 松手时低于它就折叠，
-    高于它就停在用户拖到的位置（不回弹，避免「拖到 150 跳回 180」）。 */
-const SIDE_FLOOR = 140;
+    COLLAPSE 是「松手时低于它就当作想收起」的阈值 —— 刻意压得很低（80px 只剩一条缝），
+    因为拖动过程中用户经常只是想把栏拉窄看看，把阈值设在 260 会让面板在仍可读的时候
+    突然消失。真要收起就拖到底，或者用顶栏的开关。 */
+const SIDE_COLLAPSE = 80;
 const SIDE_MAX = 420;
-const DOC_FLOOR = 260;
+const DOC_COLLAPSE = 80;
 const DOC_MAX = 720;
 const CENTER_MIN = 360;
 
@@ -60,11 +61,11 @@ function Shell() {
         const next =
           edge === "side"
             ? {
-                // 窗口太窄时宁可挤中间区，也要让侧栏停在 FLOOR 之上，不然一拖就折叠
+                // 窗口太窄时宁可挤中间区，也要让侧栏能停在拖到的位置，不然一拖就折叠
                 side: clamp(
                   startSide + dx,
                   0,
-                  Math.max(SIDE_FLOOR, Math.min(SIDE_MAX, total - startDoc - CENTER_MIN)),
+                  Math.max(SIDE_COLLAPSE, Math.min(SIDE_MAX, total - startDoc - CENTER_MIN)),
                 ),
                 doc: startDoc,
               }
@@ -73,7 +74,7 @@ function Shell() {
                 doc: clamp(
                   startDoc - dx,
                   0,
-                  Math.max(DOC_FLOOR, Math.min(DOC_MAX, total - startSide - CENTER_MIN)),
+                  Math.max(DOC_COLLAPSE, Math.min(DOC_MAX, total - startSide - CENTER_MIN)),
                 ),
               };
         liveRef.current = next;
@@ -85,11 +86,13 @@ function Shell() {
         if (next) {
           const patch: Partial<Workspace["ui"]> = {};
           if (edge === "side") {
-            patch.showSide = next.side >= SIDE_FLOOR;
-            if (patch.showSide) patch.sideW = Math.round(clamp(next.side, SIDE_FLOOR, SIDE_MAX));
+            // 只有拖到「一条缝」才收起；80–260 之间保持用户拖到的宽度，
+            // 面板自己会横向滚动，不会被压成一团
+            patch.showSide = next.side >= SIDE_COLLAPSE;
+            if (patch.showSide) patch.sideW = Math.round(clamp(next.side, SIDE_COLLAPSE, SIDE_MAX));
           } else {
-            patch.showDoc = next.doc >= DOC_FLOOR;
-            if (patch.showDoc) patch.docW = Math.round(clamp(next.doc, DOC_FLOOR, DOC_MAX));
+            patch.showDoc = next.doc >= DOC_COLLAPSE;
+            if (patch.showDoc) patch.docW = Math.round(clamp(next.doc, DOC_COLLAPSE, DOC_MAX));
           }
           // 折叠时故意不改 sideW/docW：下次展开还是原来的宽度
           dispatch({ type: "patchUi", patch });

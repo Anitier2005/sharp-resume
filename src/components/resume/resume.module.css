@@ -228,7 +228,12 @@
   flex: 1;
   min-height: 0;
   display: flex;
-  justify-content: center;
+  /*
+   * 刻意不用 justify-content:center —— 子元素比容器宽时，居中会把左半边
+   * 挤到「滚不到」的位置（overflow 的经典坑）。居中交给纸面自己的 margin:auto：
+   * 放得下时居中，放不下时两条边都能滚到。
+   */
+  justify-content: flex-start;
   padding: 20px;
   background: var(--bg-canvas);
   overflow: auto;

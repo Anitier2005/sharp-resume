@@ -7,6 +7,7 @@ import { isHexColor } from "@/lib/color";
 import { loadAi, saveAi, testAi, type AiSettings } from "@/lib/ai";
 import { MODELS, modelById } from "@/lib/model-config";
 import { isTauri } from "@/lib/storage";
+import { ColorPicker } from "@/components/ui/color-picker";
 import { cx } from "@/lib/cx";
 import shared from "@/components/ui/shared.module.css";
 import styles from "./sheet.module.css";
@@ -268,22 +269,14 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
                     <i style={{ background: item.color }} />
                   </button>
                 ))}
-                <span className={styles.custom}>
-                  <input
-                    type="color"
-                    aria-label="自定义强调色"
-                    value={isHexColor(hex) ? hex : state.ui.accentHex ?? "#3b50b4"}
-                    onChange={(event) => applyHex(event.target.value)}
-                  />
-                  <input
-                    type="text"
-                    aria-label="强调色 HEX"
-                    placeholder="#3b50b4"
-                    value={hex}
-                    spellCheck={false}
-                    onChange={(event) => applyHex(event.target.value)}
-                  />
-                </span>
+                {/* 自定义色：点色块弹出取色器（色相/明度/饱和 + HEX）。
+                    HEX 输入在取色器里，这里不再放第二个 —— 两个框显示同一个值
+                    看起来像出了 bug。 */}
+                <ColorPicker
+                  value={isHexColor(hex) ? hex : state.ui.accentHex ?? "#3b50b4"}
+                  onChange={applyHex}
+                  label="自定义强调色"
+                />
               </div>
               <span className={styles.hint}>
                 自定义色会覆盖预设；强调色上的文字会按亮度自动取黑或白。
@@ -320,31 +313,42 @@ function SheetBody({ onClose, initialTab }: { onClose: () => void; initialTab: T
         )}
       </div>
 
+      {/* 底栏按 tab 分开：外观页没有「通讯层」「测试连接」这些东西 ——
+          那是模型的诊断手段，出现在配色页上只会让人以为配色也要联网 */}
       <footer className={styles.foot}>
-        <span className={styles.route} title="桌面端请求走 Rust，浏览器调试走 fetch（会被跨域拦）">
-          通讯层：{isTauri() ? "Rust · 不经跨域" : "浏览器 fetch · 会被跨域拦"}
-        </span>
-
-        <span
-          className={cx(
-            styles.probe,
-            probe.tone === "ok" && styles.probeOk,
-            probe.tone === "fail" && styles.probeFail,
-          )}
-          title={probe.text}
-          data-selectable
-        >
-          {probe.text || "配置即时保存"}
-        </span>
-        <button
-          type="button"
-          className={shared.btnGhost}
-          onClick={() => {
-            void runProbe();
-          }}
-        >
-          测试连接
-        </button>
+        {tab === "model" ? (
+          <>
+            <span
+              className={styles.route}
+              title="桌面端请求走 Rust，浏览器调试走 fetch（会被跨域拦）"
+            >
+              通讯层：{isTauri() ? "Rust · 不经跨域" : "浏览器 fetch · 会被跨域拦"}
+            </span>
+            <span
+              className={cx(
+                styles.probe,
+                probe.tone === "ok" && styles.probeOk,
+                probe.tone === "fail" && styles.probeFail,
+              )}
+              title={probe.text}
+              data-selectable
+            >
+              {probe.text || "配置即时保存"}
+            </span>
+            <button
+              type="button"
+              className={shared.btnGhost}
+              onClick={() => {
+                void runProbe();
+              }}
+            >
+              测试连接
+            </button>
+          </>
+        ) : (
+          // 外观页只有一句说明，用 flex:1 把「完成」顶到右端
+          <span className={styles.probe}>主题与字号只影响界面，不改纸面与导出</span>
+        )}
         <button type="button" className={shared.btnPrimary} onClick={onClose}>
           完成
         </button>

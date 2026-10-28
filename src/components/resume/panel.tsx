@@ -93,11 +93,15 @@ export function ResumePanel() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const preview = mode === "preview";
 
-  // 只在预览态有纸面，所以跟着 mode 重跑
+  // 只在预览态有纸面，所以跟着 mode 重跑；page.kind 变了也要重判（见 fit 里的分支）
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
     const fit = () => {
+      // 整页原件（扫描的 PDF / Word 转图）是位图：自动缩放只会把它压糊，
+      // 而且「原件」的意义就是按原样看 —— 面板再窄也保持原倍率，
+      // 看不全就横向滚动，或用状态栏的 ± 自己调。HTML 页仍然自动适配宽度。
+      if (page?.kind === "file") return;
       const width = el.clientWidth - 40;
       setZoom(Math.round(Math.min(1, Math.max(0.68, width / 374)) * 100));
     };
@@ -105,7 +109,7 @@ export function ResumePanel() {
     const observer = new ResizeObserver(fit);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [mode]);
+  }, [mode, page?.kind]);
 
   // 刚新增的那一页：直接选中。折叠逻辑会把当前页顶进可见区，不用再滚
   useEffect(() => {
