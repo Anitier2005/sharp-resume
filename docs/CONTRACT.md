@@ -264,8 +264,14 @@ pub page_index: Option<u32>,    // 在来源 PDF 里的页序（1 基）
 | `extract_images` | `stored, name?` | 落池的 candidate 资产 + 候选清单文本 |
 
 - `stored` 是附件在 `inbox/` 里的存储名，从会话材料段的「附件标识」行取，**不是文件名**。
-- 幂等：同一份内容只登记一次源资产，同一张图只落一份、id 恒等于池内存储名（`<sha16>.<ext>`），
-  所以「每行开头反引号里的 assetId」可以直接交给 `set_field`。
+- **不动源附件**：直接从 `inbox/` 读字节，只把候选图落池成 image 资产；源附件不进
+  `person.assets`（一轮 8 个名额全给候选图）。所以候选图上 `extra.source` 记的是**源文件名**，
+  不是源 PDF 的 assetId —— 那个 id 在 `person.assets` 里查不到，写了就是悬空引用。
+- **本期不做「把源 PDF 登记成 `kind:"file"` 资产」**（幂等材料化）。原因：抽图只需要读 `inbox/`，
+  不需要源 PDF 的 assetId；而一旦登记，`pool/` 里就多一份没有任何资产引用、`sync` 也永远不会
+  回收的副本，每抽一次攒一份。
+- 幂等：同一张图只落一份、id 恒等于池内存储名（`<sha16>.<ext>`），所以「每行开头反引号里的
+  assetId」可以直接交给 `set_field`；已登记的按 id 跳过、且不占这 8 个名额 —— 再调一次就是拿下一批。
 - 只对 PDF 生效，非 PDF 直接报「这不是 PDF」。
 - 抽出的图**进 `person.assets`** 并带 `role:"candidate"`：模型能用它，渲染层不会拿它当页头照片。
 - 系统**不判断**哪张是证件照 —— 只给尺寸与占比，选哪张由模型定。
