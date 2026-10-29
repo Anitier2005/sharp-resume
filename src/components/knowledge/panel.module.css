@@ -25,26 +25,6 @@
   box-shadow: none;
 }
 
-.head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 38px;
-  padding: 0 8px 0 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.title {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.75rem;
-  color: var(--fg-1);
-}
-
 .title svg {
   color: var(--fg-3);
 }
@@ -67,7 +47,7 @@
   flex-direction: column;
   background: var(--bg-side);
   /* 列与列的界就是这一条线：底色统一成白的之后，不画线就看不出这里有两列 */
-  border-right: 1px solid var(--line);
+  border-right: 1px solid var(--line-strong);
 }
 
 .paneHead {
@@ -489,4 +469,12 @@
   font-size: 0.5625rem;
   color: var(--fg-3);
   background: var(--bg-canvas);
+}
+
+/* Modal 的正文区：三列自己占满，不要 Modal 默认的 14px 内边距与滚动 */
+.colsHost {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }

@@ -60,10 +60,10 @@
   background: color-mix(in srgb, var(--danger) 8%, #ffffff);
   color: var(--danger);
 }
-:global(html[data-mode="dark"]) .resultOk {
+:global(.win[data-mode="dark"]) .resultOk {
   background: color-mix(in srgb, var(--ok) 16%, #17171a);
 }
-:global(html[data-mode="dark"]) .resultBad {
+:global(.win[data-mode="dark"]) .resultBad {
   background: color-mix(in srgb, var(--danger) 16%, #17171a);
 }
 

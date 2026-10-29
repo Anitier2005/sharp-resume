@@ -100,10 +100,21 @@ html {
    --acc-paper 不参与主题覆盖——纸面上的元素（抬头职位、小节标题、
    分页虚线、作品缩略图底纹、编辑焦点底色）必须恒定，否则同一份简历
    换个主题颜色就变了，导出结果也会跟着变。 */
-html[data-accent="white"] .win { --acc: #242422; }
-html[data-accent="indigo"] .win { --acc: #3b50b4; }
-html[data-accent="pine"] .win { --acc: #2a6650; }
-html[data-accent="clay"] .win { --acc: #b2452c; }
+/* 四种强调色的原始值：全应用只在这里写一次。
+   标题栏那几个色点要同时展示四种颜色，不能让它们各写一份 hex */
+:root {
+  --acc-white: #242422;
+  --acc-indigo: #3b50b4;
+  --acc-pine: #2a6650;
+  --acc-clay: #b2452c;
+  /* 危险按钮上的字色：红底上必须是白的，不随明暗变 */
+  --on-danger: #ffffff;
+}
+
+html[data-accent="white"] .win { --acc: var(--acc-white); }
+html[data-accent="indigo"] .win { --acc: var(--acc-indigo); }
+html[data-accent="pine"] .win { --acc: var(--acc-pine); }
+html[data-accent="clay"] .win { --acc: var(--acc-clay); }
 
 /* 深色：表面换成石墨，组件强调色换成同色相的亮色 */
 .win[data-mode="dark"] {

@@ -18,7 +18,7 @@
   background: rgba(20, 20, 15, 0.2);
   animation: veilIn 0.14s ease both;
 }
-:global(html[data-mode="dark"]) .veil {
+:global(.win[data-mode="dark"]) .veil {
   background: rgba(0, 0, 0, 0.46);
 }
 @keyframes veilIn {

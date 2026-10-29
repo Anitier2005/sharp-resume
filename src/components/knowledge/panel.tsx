@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   BookOpen,
-  Close,
   Pencil,
   Search,
   Sparkles,
@@ -13,7 +11,6 @@ import {
 import { Confirm } from "@/components/ui/confirm";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast-context";
-import { useVeilWheelLock } from "@/components/ui/veil";
 import {
   configureKnowledge,
   ingestFile,
@@ -43,7 +40,6 @@ import { aiReady, loadAi, loadAux, slotAi } from "@/lib/ai";
 import { extOf, resolveStored, saveAsset } from "@/lib/assets";
 import { ImageView } from "@/components/ui/image-view";
 import { cx } from "@/lib/cx";
-import shared from "@/components/ui/shared.module.css";
 import {
   Button,
   Field,
@@ -135,7 +131,6 @@ export function KnowledgePanel({
    */
   embedded?: boolean;
 }) {
-  const veilRef = useRef<HTMLDivElement | null>(null);
   const toast = useToast();
 
   const [libs, setLibs] = useState<KnowledgeLibrary[]>([]);
@@ -286,19 +281,7 @@ export function KnowledgePanel({
     return () => window.clearTimeout(timer);
   }, [focusChunk, doc]);
 
-  // ESC 关闭：捕获阶段拦下，别让底下的编辑器也收到（窗口模式不需要，关窗即可）
-  useEffect(() => {
-    if (!open || embedded) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
-      onClose();
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [open, onClose, embedded]);
-
-  useVeilWheelLock(veilRef, open);
+  /* ESC 与滚轮锁都交给 Modal：它是弹窗的唯一出口，这里再实现一遍必然走形 */
 
   const dragColumn = (which: "lib" | "entry") => (event: React.PointerEvent) => {
     event.preventDefault();
@@ -615,24 +598,10 @@ export function KnowledgePanel({
   /** 第三列（块）在选中条目或正在编辑时才有内容可放 */
   const entryOpen = entryId !== "" || draft !== null;
 
-  const box = (
-    <div
-      className={embedded ? `${styles.box} ${styles.windowBox}` : styles.box}
-      role={embedded ? undefined : "dialog"}
-      aria-modal={embedded ? undefined : true}
-      aria-label="知识库"
-    >
-      {!embedded && (
-        <div className={styles.head}>
-          <div className={styles.title}>
-            <BookOpen size={13} />
-            <b>知识库</b>
-          </div>
-          <button type="button" className={shared.overlayClose} aria-label="关闭" onClick={onClose}>
-            <Close size={11} />
-          </button>
-        </div>
-      )}
+  /* 窗内（embedded）只是一个铺满的容器；弹窗模式走统一的 Modal，
+     不再自己画遮罩、标题栏和关闭键 —— 那套东西每改一次都要改两处 */
+  const content = (
+    <>
 
       {/* 隐藏的文件选择框：accept 与后端 ingest_file 支持的格式一一对应 */}
       <input
@@ -1036,25 +1005,20 @@ export function KnowledgePanel({
           )}
         </section>
       </div>
-    </div>
+    </>
   );
 
   const surface = embedded ? (
-    box
+    <div className={cx(styles.box, styles.windowBox)}>{content}</div>
   ) : (
-    <div ref={veilRef} className={shared.veil} data-print="hide">
-      {box}
-    </div>
+    <Modal title="知识库" onClose={onClose} size="lg" bodyClassName={styles.colsHost}>
+      {content}
+    </Modal>
   );
-
-  const host =
-    typeof document === "undefined" || embedded
-      ? null
-      : document.querySelector<HTMLElement>(".win");
 
   return (
     <>
-      {host ? createPortal(surface, host) : surface}
+      {surface}
 
       {viewer && (
         <ImageView src={viewer.src} name={viewer.name} onClose={() => setViewer(null)} />

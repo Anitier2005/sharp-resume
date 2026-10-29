@@ -76,7 +76,7 @@
 .item.danger:hover {
   background: color-mix(in srgb, var(--danger) 8%, #ffffff);
 }
-:global(html[data-mode="dark"]) .item.danger:hover {
+:global(.win[data-mode="dark"]) .item.danger:hover {
   background: color-mix(in srgb, var(--danger) 16%, #17171a);
 }
 

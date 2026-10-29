@@ -244,8 +244,9 @@
 
 .colLeft {
   flex: none;
-  width: 200px;
-  border-right: 1px solid var(--line);
+  width: 220px;
+  /* 结构线用 --line-strong：--line(#ededea) 在白底上只有「隐约」的程度 */
+  border-right: 1px solid var(--line-strong);
 }
 
 .colRight {

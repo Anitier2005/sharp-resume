@@ -210,7 +210,7 @@
   background: color-mix(in srgb, var(--danger) 9%, var(--bg-elev));
   color: var(--danger);
 }
-:global(html[data-mode="dark"]) .acts button.rm:hover {
+:global(.win[data-mode="dark"]) .acts button.rm:hover {
   background: color-mix(in srgb, var(--danger) 18%, #17171a);
 }
 

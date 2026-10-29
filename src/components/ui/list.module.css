@@ -35,7 +35,8 @@
   position: absolute;
   inset: 0 5px auto 5px;
   height: 1px;
-  background: var(--line-soft);
+  /* 用 --line 而不是 --line-soft：白底上 #f4f4f1 实测根本看不出来（244 vs 255） */
+  background: var(--line);
 }
 
 .row:hover {
@@ -78,8 +79,13 @@
   color: var(--fg-1);
 }
 
+/* meta 允许被压缩：标题比次要信息重要，窄列里先截 meta 再截标题 */
 .meta {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.5625rem;
   color: var(--fg-4);
   font-variant-numeric: tabular-nums;

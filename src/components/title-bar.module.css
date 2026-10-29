@@ -45,7 +45,7 @@
 }
 .winbtns button:last-child:hover {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 .right {
@@ -78,14 +78,17 @@
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14);
   background: #fff;
 }
+.dot[data-accent="white"] {
+  background: var(--acc-white);
+}
 .dot[data-accent="indigo"] {
-  background: #3b50b4;
+  background: var(--acc-indigo);
 }
 .dot[data-accent="pine"] {
-  background: #2a6650;
+  background: var(--acc-pine);
 }
 .dot[data-accent="clay"] {
-  background: #b2452c;
+  background: var(--acc-clay);
 }
 
 /* 面板显隐开关：按下=该栏可见 */

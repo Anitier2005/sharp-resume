@@ -21,7 +21,7 @@
   box-shadow: 0 12px 26px -18px rgba(0, 0, 0, 0.6);
   animation: toastIn 0.18s ease both;
 }
-:global(html[data-mode="dark"]) .toast {
+:global(.win[data-mode="dark"]) .toast {
   background: #edede8;
   color: #171714;
 }
