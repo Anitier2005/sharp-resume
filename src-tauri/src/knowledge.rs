@@ -1178,6 +1178,10 @@ pub fn knowledge_entries(state: State<'_, Shared>, library_id: String) -> Result
 #[serde(rename_all = "camelCase")]
 pub struct ChunkItem {
     pub id: String,
+    /// 所属条目。界面只做两层（库 → chunk），但删除要按归属校验，
+    /// 所以这里带出来 —— 否则前端每次删块都得先反查条目。
+    pub entry_id: String,
+    pub ord: u32,
     pub heading: String,
     pub text: String,
     pub summary: String,
@@ -1188,10 +1192,12 @@ pub struct ChunkItem {
     pub annotation: String,
 }
 
-impl From<&ChunkDoc> for ChunkItem {
-    fn from(chunk: &ChunkDoc) -> Self {
+impl ChunkItem {
+    fn new(entry_id: &str, chunk: &ChunkDoc) -> Self {
         ChunkItem {
             id: chunk.id.clone(),
+            entry_id: entry_id.to_string(),
+            ord: chunk.ord as u32,
             heading: chunk.heading.clone(),
             text: chunk.text.clone(),
             summary: chunk.summary.clone(),
@@ -1212,6 +1218,8 @@ pub fn knowledge_chunks(state: State<'_, Shared>, library_id: String) -> Result<
             for (index, chunk) in entry.chunks.iter().enumerate() {
                 out.push(ChunkItem {
                     id: format!("{}#{}", entry.id, index + 1),
+                    entry_id: entry.id.clone(),
+                    ord: index as u32 + 1,
                     heading: chunk.heading.clone(),
                     text: chunk.text.clone(),
                     summary: String::new(),
@@ -1228,7 +1236,7 @@ pub fn knowledge_chunks(state: State<'_, Shared>, library_id: String) -> Result<
     let docs = state.with(|conn| read_docs(conn, Some(&library_id)))?;
     Ok(docs
         .iter()
-        .flat_map(|(doc, _)| doc.chunks.iter().map(ChunkItem::from))
+        .flat_map(|(doc, _)| doc.chunks.iter().map(|chunk| ChunkItem::new(&doc.id, chunk)))
         .collect())
 }
 
@@ -1510,13 +1518,16 @@ pub fn knowledge_image_update(
         .ok_or_else(|| "条目读不回来了".to_string())
 }
 
-/// 删掉单块；图片块会顺手把条目正文里对应的 ![名](asset:x) 一起删掉
+/// 删掉单块；图片块会顺手把条目正文里对应的 ![名](asset:x) 一起删掉。
+///
+/// 返回 `()`：界面是两层（库 → chunk），删完统一重读列表，
+/// 把「删掉的块所属条目」再回传一遍只是噪声。块删光时空条目一起删。
 #[tauri::command]
 pub fn knowledge_chunk_delete(
     state: State<'_, Shared>,
     entry_id: String,
     chunk_id: String,
-) -> Result<EntryDoc, String> {
+) -> Result<(), String> {
     state.with(|conn| {
         let (owner, kind, asset) = locate_chunk(conn, &chunk_id)?
             .ok_or_else(|| "这块已经不在了".to_string())?;
@@ -1555,9 +1566,22 @@ pub fn knowledge_chunk_delete(
         Ok(())
     })?;
     invalidate();
-    // 删空了的条目不在这里级联删除：用户可能还想留着标题继续补内容
-    state.with(|conn| read_entry(conn, &entry_id))?
-        .ok_or_else(|| "条目读不回来了".to_string())
+    // 界面只有两层（库 → chunk），块删光之后那条条目就再也点不到了 ——
+    // 留着只会让库上的「条目数」比看得见的多。所以这里级联删掉空条目。
+    state.with(|conn| {
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_chunk WHERE entry_id = ?1",
+                params![entry_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("读取切片失败：{error}"))?;
+        if left == 0 {
+            conn.execute("DELETE FROM knowledge_entry WHERE id = ?1", params![entry_id])
+                .map_err(|error| format!("删除空条目失败：{error}"))?;
+        }
+        Ok(())
+    })
 }
 
 /* ---------- 命令：摘要 ---------- */

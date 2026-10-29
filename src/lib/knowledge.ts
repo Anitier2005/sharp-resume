@@ -4,9 +4,10 @@ import { loadAux, type AuxModelChoice } from "@/lib/ai";
 /**
  * 知识库的前端接口。
  *
- * 三层：库 → 条目 → chunk。
- *   - 库与条目由用户维护（增删改都在这边发起）
- *   - chunk 由后端按固定规则切，摘要与关联问题由模型生成
+ * 界面只有两层：库 → chunk。条目是切块的中间产物（一篇长文进来被切成若干块），
+ * 用户看不见也不需要维护它 —— 他要管理的就是「这个库里有哪些块」。
+ *   - 库由用户维护；块可以逐块改正文、改图片说明、删
+ *   - 块的摘要与关联问题由模型生成，改过正文就作废
  *   - 模型只能读：`search_knowledge` / `read_knowledge` 两个工具，没有写入口
  */
 
@@ -25,18 +26,6 @@ export interface KnowledgeLibrary {
   vectorized: number;
 }
 
-export interface KnowledgeEntry {
-  id: string;
-  libraryId: string;
-  title: string;
-  tags: string[];
-  chunks: number;
-  /** 每一块都有摘要 = true；界面据此提示「待生成摘要」 */
-  enriched: boolean;
-  updatedAt: number;
-  preset: boolean;
-}
-
 export interface KnowledgeChunk {
   /** `entryId#序号`：检索命中的是它，读原文也认它 */
   id: string;
@@ -52,6 +41,16 @@ export interface KnowledgeChunk {
   assetName: string;
   /** 图片摘要来源：model / ocr / 空 */
   annotation: string;
+}
+
+/**
+ * 平铺的块：一列跨条目的块，界面第二列直接用这个。
+ *
+ * `entryId` 由后端带出来只是为了删除时按归属校验（后端会拦「这块不属于这条」），
+ * 界面不展示它 —— 条目在用户眼里不存在。
+ */
+export interface KnowledgeChunkItem extends KnowledgeChunk {
+  entryId: string;
 }
 
 export interface KnowledgeDoc {
@@ -109,22 +108,30 @@ export const knowledgeLibrarySave = (draft: KnowledgeLibraryDraft) =>
 export const knowledgeLibraryDelete = (id: string) =>
   invoke<void>("knowledge_library_delete", { id });
 
-export const knowledgeEntries = (libraryId: string) =>
-  invoke<KnowledgeEntry[]>("knowledge_entries", { libraryId });
+/** 一个库里的全部块，平铺。界面第二列就是它 */
+export const knowledgeChunks = (libraryId: string) =>
+  invoke<KnowledgeChunkItem[]>("knowledge_chunks", { libraryId });
 
-export const knowledgeEntryGet = (id: string) =>
-  invoke<KnowledgeDoc | null>("knowledge_entry_get", { id });
+/**
+ * 改一块的正文。后端会连带清掉这块的摘要与向量（照旧正文算的，改完就是错的），
+ * 返回整库的块列表 —— 少一次往返，也不会出现「列表里的字和详情里的字不一样」。
+ */
+export const knowledgeChunkSave = (chunkId: string, text: string) =>
+  invoke<KnowledgeChunkItem[]>("knowledge_chunk_save", { chunkId, text });
 
+/**
+ * 存一段文字：后端按空行分段、每段不超过 400 字切成块。
+ *
+ * `title` 只用于检索结果里露一面的「这是哪来的」，界面上没有这一栏 ——
+ * 用户给的是正文，标题由第一行截断得来（见 panel 的 deriveTitle）。
+ */
 export const knowledgeEntrySave = (draft: KnowledgeEntryDraft) =>
   invoke<KnowledgeDoc>("knowledge_entry_save", { draft: { ...draft, id: draft.id ?? "" } });
 
-export const knowledgeEntryDelete = (id: string) =>
-  invoke<void>("knowledge_entry_delete", { id });
-
 /**
- * 给这一条的每个块生成摘要与关联问题。
+ * 给这些块生成摘要与关联问题（按条目发一次请求，条目就是一篇文章切出来的那组块）。
  *
- * `force` = 连已有摘要的块也重写（改了正文但块文本没变时用得上）。
+ * `force` = 连已有摘要的块也重写。
  * 模型没配就由调用方跳过 —— 这个接口自己不做降级判断。
  */
 export const knowledgeEntryEnrich = (id: string, ai: EnrichConfig, force = false) =>
@@ -180,9 +187,9 @@ export const knowledgeImageAnnotate = (args: {
 export const knowledgeImageUpdate = (chunkId: string, summary: string, annotation: string) =>
   invoke<KnowledgeDoc>("knowledge_image_update", { chunkId, summary, annotation });
 
-/** 删掉一个块；图片块会顺手清掉正文里对应的 `![名](asset:…)` 行 */
+/** 删掉一个块；图片块会顺手清掉正文里对应的 `![名](asset:…)` 行，块删光则整条消失 */
 export const knowledgeChunkDelete = (entryId: string, chunkId: string) =>
-  invoke<KnowledgeDoc>("knowledge_chunk_delete", { entryId, chunkId });
+  invoke<void>("knowledge_chunk_delete", { entryId, chunkId });
 
 export const knowledgeSearch = (query: string, libraryId?: string, limit = 8) =>
   invoke<KnowledgeHit[]>("knowledge_search", { query, libraryId: libraryId ?? "", limit });

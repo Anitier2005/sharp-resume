@@ -163,15 +163,15 @@
   overflow: hidden;
 }
 
-/* ---------- 第三列：块 ---------- */
+/* ---------- 第三列：选中的那一块 ---------- */
 
 .detailHead {
   flex: none;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line-soft);
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
 }
 
 .detailLead {
@@ -201,61 +201,30 @@
 .detailActs {
   flex: none;
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 4px;
 }
 
-.chunkList {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 12px 14px;
+/* 详情正文：一块的内容自己滚动，列头固定在上面。
+   内边距由 PaneScroll 的 pad 给，这里只管纵向节奏 */
+.detailBody {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
-.chunk {
-  border: 1px solid var(--line-soft);
-  border-radius: 7px;
-  padding: 9px 11px;
-  background: var(--bg-canvas);
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
-}
-
-/* 从检索结果跳进来时高亮一下：让人一眼看到「就是这一段」 */
-.chunkFocus {
-  border-color: var(--acc-line-2);
-  box-shadow: 0 0 0 2px var(--acc-soft);
-}
-
-.chunkHead {
+/* 块内编辑：正文框吃掉剩下的高度，说明与按钮在下面 */
+.editorBox {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  align-items: baseline;
-  gap: 6px;
-  font-size: 0.625rem;
-  color: var(--fg-4);
-}
-
-.chunkHead b {
-  font-size: 0.6875rem;
-  color: var(--fg-2);
-}
-
-.chunkNo {
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-4);
-}
-
-.chunkLen {
-  margin-left: auto;
-  font-size: 0.5625rem;
-  color: var(--fg-4);
-  font-variant-numeric: tabular-nums;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .summary {
-  margin: 6px 0 0;
-  padding: 5px 7px;
+  margin: 0;
+  padding: 6px 8px;
   border-radius: 4px;
   background: var(--acc-softer);
   font-size: 0.6875rem;
@@ -264,12 +233,10 @@
 }
 
 .chunkText {
-  margin: 6px 0 0;
-  max-height: 220px;
-  overflow: auto;
+  margin: 0;
   font-family: inherit;
   font-size: 0.6875rem;
-  line-height: 1.72;
+  line-height: 1.78;
   color: var(--fg-2);
   white-space: pre-wrap;
   word-break: break-word;
