@@ -145,7 +145,7 @@ pub fn extract_images(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
 
 /// 候选排序：`pct` 升序（小的先留 —— 证件照总比整页扫描件小）；
 /// `pct` 不可测的排最后，按像素面积升序兜底。
-fn order_by_share(report: &Report) -> Vec<usize> {
+pub(crate) fn order_by_share(report: &Report) -> Vec<usize> {
     let mut order: Vec<usize> = (0..report.images.len()).collect();
     let area = |index: usize| {
         let image = &report.images[index];
@@ -195,7 +195,7 @@ fn known(ctx: &ToolCtx, id: &str) -> bool {
 ///
 /// JPEG 原样落盘（PDF 里那张流本身就是完整文件，重编码一次只会更糊更大）；
 /// 其余解出来的像素统一写 PNG。
-fn encode_candidate(image: &Embedded) -> Result<(Vec<u8>, &'static str), String> {
+pub(crate) fn encode_candidate(image: &Embedded) -> Result<(Vec<u8>, &'static str), String> {
     if image.codec == "jpg" {
         if let Some(jpeg) = &image.jpeg {
             return Ok((jpeg.clone(), "jpg"));

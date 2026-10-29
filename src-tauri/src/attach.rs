@@ -78,10 +78,13 @@ fn cache() -> &'static Mutex<HashMap<String, Parsed>> {
 /// 单个附件进上下文的字数上限：200KB 字符足够一份简历，
 /// 再长的东西该让模型用工具分段读，而不是一次塞进 prompt
 const MAX_CHARS: usize = 200 * 1024;
-/// 一次请求最多几张图（含 PDF 页面）：再多 token 和请求体都撑不住
+/// 一次请求最多几张图（含 PDF 页面与内嵌图）：再多 token 和请求体都撑不住
 const MAX_IMAGES: usize = 4;
 /// 附件里最多渲染几页
 const MAX_PAGES: usize = 3;
+/// 一份 PDF 最多附几张内嵌图。整页渲染已经占了名额，所以真实张数是
+/// `min(MAX_INNER, 剩余名额)` —— 别指望这两个上限能同时打满
+const MAX_INNER: usize = 3;
 
 /// 纯文本类扩展名。和 `lib/attach.ts` 那张表是同一批，只是判断点挪到了这里
 const TEXT_EXTS: &[&str] = &[
@@ -233,6 +236,7 @@ pub async fn materials(
     refs: &[AttachRef],
     vision: bool,
     ocr: Option<&OcrConf>,
+    model: &str,
 ) -> Materials {
     let mut blocks: Vec<String> = Vec::new();
     let mut images: Vec<String> = Vec::new();
@@ -271,7 +275,7 @@ pub async fn materials(
                     "──── {name} ────\n（图片已作为视觉输入附上，说明文字只描述版式，不要复述画面内容）\n──── 文件结束 ────"
                 ));
             } else {
-                let text = ocr_text(&bytes, &ext, ocr).await;
+                let text = image_unreadable_text(&bytes, &ext, ocr, model).await;
                 blocks.push(format!("──── {name} ────\n{text}\n──── 文件结束 ────"));
             }
             continue;
@@ -283,11 +287,30 @@ pub async fn materials(
         } else {
             Vec::new()
         };
-        let note = if pages.is_empty() {
+        let mut notes: Vec<String> = Vec::new();
+        if !pages.is_empty() {
+            notes.push(format!("（另附前 {} 页的图片，版式看图片）", pages.len()));
+            images.extend(pages.iter().cloned());
+        }
+        // 视觉模型为什么要单独给内嵌图：整页渲染是按页宽缩的，证件照在整页里
+        // 只有几十像素，模型认不出那张脸。内嵌图是原件分辨率，同一套解码矩阵现成。
+        if ext == "pdf" && vision {
+            let (attached, available) = attach_inner_images(&bytes, &mut images);
+            if attached > 0 {
+                notes.push(format!("（另附这份 PDF 里的 {attached} 张内嵌图，按出现顺序）"));
+            } else if available == 0 {
+                notes.push("（这份 PDF 里没有可附的内嵌图）".to_string());
+            } else {
+                // 有图但名额被页面渲染占满：不许说「没有」，那是假话
+                notes.push(format!(
+                    "（这份 PDF 里还有 {available} 张内嵌图，但这一轮的附图名额已满）"
+                ));
+            }
+        }
+        let note = if notes.is_empty() {
             String::new()
         } else {
-            images.extend(pages.iter().cloned());
-            format!("\n（另附前 {} 页的图片，版式看图片）", pages.len())
+            format!("\n{}", notes.join("\n"))
         };
 
         // 扫描件 + 看不了图：只剩 OCR 这一条路，否则这份文件在模型眼里是空的
@@ -328,7 +351,10 @@ pub async fn materials(
             if marks.is_empty() {
                 format!("（附件 {name}：读不到内容）")
             } else {
-                format!("──── {name} ────\n{marks}（附件 {name}：读不到内容）\n──── 文件结束 ────")
+                // 读不到正文时附图说明照样要给：扫描件正是最需要看图的那种
+                format!(
+                    "──── {name} ────\n{marks}（附件 {name}：读不到内容）{note}\n──── 文件结束 ────"
+                )
             }
         } else {
             format!(
@@ -378,6 +404,83 @@ fn cached(stored: &str, ext: &str, bytes: &[u8]) -> Parsed {
         map.insert(stored.to_string(), cloned);
     }
     parsed
+}
+
+/// 图片附件 + 非视觉模型时的交代：说清「读不了」还是「没读出来」，并给出下一步。
+///
+/// 为什么不直接复用 `ocr_text` 的返回：它还要服务「扫描件 PDF 逐页 OCR」，
+/// 那里是按页说「第 N 页」的措辞；这里只管「单张图片附件」这一个场景。
+async fn image_unreadable_text(
+    bytes: &[u8],
+    ext: &str,
+    ocr: Option<&OcrConf>,
+    model: &str,
+) -> String {
+    let raw = ocr_text(bytes, ext, ocr).await;
+    if !raw.starts_with("（OCR 失败") {
+        return raw;
+    }
+    if ocr_ready(ocr) {
+        // 有 OCR 通道但失败了：给原因，别让模型以为「再试一次就好了」
+        format!(
+            "（这张图我没读出来：{}。可以换一张，或直接把图里的文字贴过来。）",
+            ocr_reason(&raw)
+        )
+    } else {
+        // 模型看不见 + 没有 OCR：这是唯一必须给「两条路」的地方
+        format!(
+            "（这张图我读不了：当前模型{}不支持看图，也没有配置 OCR。要看图，要么在 设置 → 模型 里换成支持视觉的模型，要么在 设置 → 模型 → OCR 里配一个能看图的模型。）",
+            crate::tools::model_label(model)
+        )
+    }
+}
+
+/// 这一轮有没有任何 OCR 通道：内置引擎（带 `ocr` 特性的构建）+ 设置里配的接口。
+/// 判断口径与 `ocr_text` 内部一致，否则会出现「说没配 OCR，结果又读出了字」
+fn ocr_ready(ocr: Option<&OcrConf>) -> bool {
+    crate::extract::ocr_available()
+        || ocr
+            .map(|conf| !conf.model.trim().is_empty())
+            .unwrap_or(false)
+}
+
+/// 从 `ocr_text` 的「（OCR 失败：原因；…）」里只取原因，好接进新文案
+fn ocr_reason(raw: &str) -> &str {
+    raw.trim_start_matches('（')
+        .trim_start_matches("OCR 失败：")
+        .split('；')
+        .next()
+        .unwrap_or(raw)
+        .trim_end_matches('）')
+}
+
+/// 视觉模型的第二份输入：PDF 里的内嵌图。
+///
+/// 排序与 `extract_images` 同一口径（复用它的 `order_by_share`）：按「占版心」升序
+/// 留小的 —— 证件照总比整页扫描件小，名额先花在小的上面才不会全被整页图吃掉。
+/// 返回 `(已附张数, 可解出的总张数)`：调用方要用后者区分「没有图」与「名额满了」。
+fn attach_inner_images(bytes: &[u8], images: &mut Vec<String>) -> (usize, usize) {
+    let Ok(report) = crate::pdfembed::extract(bytes) else {
+        return (0, 0);
+    };
+    if report.images.is_empty() {
+        return (0, 0);
+    }
+    let room = MAX_IMAGES.saturating_sub(images.len()).min(MAX_INNER);
+    let mut attached = 0;
+    for index in crate::tools::extract::order_by_share(&report) {
+        if attached >= room {
+            break;
+        }
+        let image = &report.images[index];
+        let Ok((data, ext)) = crate::tools::extract::encode_candidate(image) else {
+            continue;
+        };
+        let mime = if ext == "jpg" { "image/jpeg" } else { "image/png" };
+        images.push(crate::pdfimage::data_url_of(mime, &data));
+        attached += 1;
+    }
+    (attached, report.images.len())
 }
 
 /// OCR：先内置引擎，再设置里配的接口。两条都没有时把「为什么」说清楚，
@@ -441,6 +544,44 @@ fn non_empty(value: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    /// 本机真实样本：环境变量优先，其次两个已知路径；都没有就 skip
+    fn real_sample() -> Option<Vec<u8>> {
+        if let Some(path) = option_env!("SHARP_RESUME_SAMPLE_PDF") {
+            if let Ok(bytes) = std::fs::read(path) {
+                return Some(bytes);
+            }
+        }
+        for path in [
+            "E:/文档/实习/华北电力大学 谭轶天.pdf",
+            "E:/文档/实习/谭轶天简历.pdf",
+        ] {
+            if let Ok(bytes) = std::fs::read(path) {
+                return Some(bytes);
+            }
+        }
+        None
+    }
+
+    /// 把一份字节放进临时 inbox，返回 (数据目录, stored)
+    fn inbox_with(bytes: &[u8], ext: &str) -> (PathBuf, String) {
+        let root = std::env::temp_dir().join(format!("sr-attach-{}", crate::session::uuid_like()));
+        std::fs::create_dir_all(root.join("inbox")).unwrap();
+        let stored = crate::snapshot::pool_name(&crate::pool::sha256_hex(bytes), Some(ext)).unwrap();
+        std::fs::write(root.join("inbox").join(&stored), bytes).unwrap();
+        (root, stored)
+    }
+
+    fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+        use std::io::Cursor;
+        let image = image::DynamicImage::new_rgb8(width, height);
+        let mut out = Vec::new();
+        image
+            .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
 
     #[test]
     fn text_files_are_decoded_eagerly() {
@@ -487,7 +628,7 @@ mod tests {
             name: "简历.md".into(),
             ext: "md".into(),
         }];
-        let materials = materials(&root, &refs, false, None).await;
+        let materials = materials(&root, &refs, false, None, "test-model").await;
         assert!(materials.section.contains("【本次附件】"), "{}", materials.section);
         assert!(materials.section.contains("华北电力大学"), "{}", materials.section);
         assert!(materials.images.is_empty());
@@ -518,7 +659,7 @@ mod tests {
                 ext: "pdf".into(),
             },
         ];
-        let materials = materials(&root, &refs, false, None).await;
+        let materials = materials(&root, &refs, false, None, "test-model").await;
         let origin = materials.origin.expect("有 PDF 附件就该有 origin");
         assert_eq!(origin.name, "原件.pdf");
         assert_eq!(origin.pages, Some(2));
@@ -546,7 +687,7 @@ mod tests {
             name: "坏.pdf".into(),
             ext: "pdf".into(),
         }];
-        let materials = materials(&root, &refs, false, None).await;
+        let materials = materials(&root, &refs, false, None, "test-model").await;
         assert_eq!(materials.origin.expect("文件名还是要报").pages, None);
         // 坏文件不能变成「原件 0 页」
         assert!(materials.section.contains("（页数读不出）"), "{}", materials.section);
@@ -571,8 +712,126 @@ mod tests {
             name: "丢了.md".into(),
             ext: "md".into(),
         }];
-        let materials = materials(&root, &refs, false, None).await;
+        let materials = materials(&root, &refs, false, None, "test-model").await;
         assert!(materials.section.contains("附件已不在"), "{}", materials.section);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 视觉模型：除了整页渲染，还要把 PDF 里的内嵌图单独给一份 ——
+    /// 整页渲染里证件照只有几十像素，模型认不出那张脸
+    #[tokio::test]
+    async fn vision_models_also_get_the_pdf_inner_images() {
+        let Some(bytes) = real_sample() else {
+            eprintln!("skipped: 本机没有可用的 PDF 样本（设 SHARP_RESUME_SAMPLE_PDF 指一份）");
+            return;
+        };
+        let (root, stored) = inbox_with(&bytes, "pdf");
+        let refs = vec![AttachRef {
+            stored: stored.clone(),
+            name: "原件.pdf".into(),
+            ext: "pdf".into(),
+        }];
+        let materials = materials(&root, &refs, true, None, "vision-model").await;
+        assert!(
+            materials.images.len() >= 2,
+            "整页渲染 + 内嵌图至少两张，实际 {}：{}",
+            materials.images.len(),
+            materials.section
+        );
+        assert!(materials.section.contains("内嵌图"), "{}", materials.section);
+        assert!(
+            materials.images.iter().all(|url| url.starts_with("data:image/")),
+            "只许塞 data URL"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 内嵌图的名额受「整页渲染先占」约束：`(已附, 可解出总数)`
+    #[test]
+    fn inner_images_take_the_smallest_ones_and_respect_the_room() {
+        let names = ["Im0", "Im1", "Im2", "Im3"];
+        let mut images = Vec::new();
+        let mut content = String::new();
+        for (index, name) in names.iter().enumerate() {
+            let mut pixels = vec![7u8; 30 * 30 * 3];
+            pixels[0] = index as u8;
+            images.push((*name, crate::pdfembed::fixtures::raw_image(30, 30, pixels)));
+            // 缩放递减 = 占版心递减：升序排完应该从最后一张开始取
+            let scale = 200.0 - 20.0 * index as f64;
+            content.push_str(&format!("q {scale} 0 0 {scale} 0 0 cm /{name} Do Q "));
+        }
+        let bytes = crate::pdfembed::fixtures::pdf(images, &content);
+
+        let mut urls = Vec::new();
+        let (attached, available) = attach_inner_images(&bytes, &mut urls);
+        assert_eq!((attached, available), (MAX_INNER, 4), "空名额时最多 MAX_INNER 张");
+        assert_eq!(urls.len(), 3);
+
+        // 名额已经被占掉 3 个（整页渲染），只剩 1 个给内嵌图
+        let mut urls = vec!["data:image/jpeg;base64,AA".to_string(); MAX_IMAGES - 1];
+        let (attached, available) = attach_inner_images(&bytes, &mut urls);
+        assert_eq!((attached, available), (1, 4));
+        assert_eq!(urls.len(), MAX_IMAGES);
+    }
+
+    /// 抽不出内嵌图时不许沉默
+    #[tokio::test]
+    async fn a_pdf_without_inner_images_says_so() {
+        let (root, stored) = inbox_with(&crate::pdfembed::fixtures::pdf_with_pages(1), "pdf");
+        let refs = vec![AttachRef {
+            stored,
+            name: "纯文字.pdf".into(),
+            ext: "pdf".into(),
+        }];
+        let materials = materials(&root, &refs, true, None, "vision-model").await;
+        assert!(materials.section.contains("没有可附的内嵌图"), "{}", materials.section);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 非视觉模型 + 没配 OCR：说清「读不了」在哪两处修，不许提「用提取出来的文字」
+    #[cfg(not(feature = "ocr"))]
+    #[tokio::test]
+    async fn an_image_without_vision_and_without_ocr_says_where_to_fix_it() {
+        let (root, stored) = inbox_with(&png_bytes(4, 4), "png");
+        let refs = vec![AttachRef {
+            stored,
+            name: "照片.png".into(),
+            ext: "png".into(),
+        }];
+        let materials = materials(&root, &refs, false, None, "deepseek-chat").await;
+        assert!(materials.section.contains("不支持看图"), "{}", materials.section);
+        assert!(materials.section.contains("设置 → 模型"), "{}", materials.section);
+        assert!(materials.section.contains("deepseek-chat"), "要指名道姓：{}", materials.section);
+        assert!(
+            !materials.section.contains("提取出来的文字"),
+            "这句会让人以为有文字：{}",
+            materials.section
+        );
+        assert!(materials.images.is_empty(), "看不了图就别塞图");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 配了 OCR 但读不出来：给原因，并给「换一张 / 贴文字」两条路
+    #[tokio::test]
+    async fn an_image_with_a_broken_ocr_channel_says_it_failed() {
+        let (root, stored) = inbox_with(&png_bytes(4, 4), "png");
+        let refs = vec![AttachRef {
+            stored,
+            name: "照片.png".into(),
+            ext: "png".into(),
+        }];
+        let conf = OcrConf {
+            base_url: "http://127.0.0.1:9".into(),
+            api_key: "sk-test".into(),
+            model: "some-vl".into(),
+        };
+        let materials = materials(&root, &refs, false, Some(&conf), "deepseek-chat").await;
+        assert!(materials.section.contains("没读出来"), "{}", materials.section);
+        assert!(
+            materials.section.contains("贴过来"),
+            "要给下一步：{}",
+            materials.section
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

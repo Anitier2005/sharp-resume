@@ -36,16 +36,21 @@ pub fn params() -> Value {
 }
 
 pub fn render(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
-    if !ctx.out.vision {
-        return Err("当前模型看不了图，把 PDF 转成图片没有意义 —— 直接用提取出来的文字".into());
-    }
-    let root = ctx
-        .root
-        .ok_or_else(|| "当前环境不支持文件渲染（浏览器调试模式没有数据目录）".to_string())?;
     let asset_id = args
         .get("assetId")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    if !ctx.out.vision {
+        // 别在这句里提「用提取出来的文字」：本轮材料可能一个字都没有，
+        // 那句话会让模型以为「有文字只是我没找到」，然后反复空转
+        return Err(format!(
+            "当前模型{}不支持看图，我没法把这张图渲染给你。图还在（assetId: {asset_id}）；要看图请换成支持视觉的模型，或配置 OCR。",
+            super::model_label(&ctx.out.model)
+        ));
+    }
+    let root = ctx
+        .root
+        .ok_or_else(|| "当前环境不支持文件渲染（浏览器调试模式没有数据目录）".to_string())?;
     let asset = super::image::find_asset(ctx.workspace, asset_id)
         .ok_or_else(|| format!("找不到材料 {asset_id}"))?;
     let stored = asset
@@ -110,4 +115,37 @@ pub fn render(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
     lines.push(String::new());
     lines.push("这些页面的原图已经附在下一轮消息里，可以直接看。".into());
     Ok(lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::{Outbox, ToolCtx};
+    use serde_json::json;
+
+    /// 非视觉模型的拒绝文案：指名道姓、说清「图还在」，且不许再提「用提取出来的文字」
+    /// —— 本轮材料可能一个字都没有，那句话会让模型以为有文字只是没找到，然后空转
+    #[test]
+    fn refusing_a_non_vision_model_names_the_model_and_keeps_the_exit() {
+        let workspace = json!({
+            "people": [{
+                "id": "p1",
+                "assets": [{ "id": "a1", "kind": "image", "name": "照片.png", "stored": "a1.png" }],
+                "items": [],
+                "resumes": []
+            }]
+        });
+        let mut out = Outbox::default();
+        out.model = "deepseek-chat".into();
+        let ctx = ToolCtx::of(&workspace, "p1", "r1", "pg1", &out);
+
+        let error = render(&json!({ "assetId": "a1" }), &ctx).unwrap_err();
+        assert!(error.contains("不支持看图"), "{error}");
+        assert!(error.contains("deepseek-chat"), "要指名道姓：{error}");
+        assert!(error.contains("a1"), "要告诉模型图还在：{error}");
+        assert!(
+            !error.contains("提取出来的文字"),
+            "这句会让人以为有文字：{error}"
+        );
+    }
 }

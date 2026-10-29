@@ -59,6 +59,9 @@ pub struct Outbox {
     /// 当前模型能不能看图。放在出站口是为了不污染 `ToolCtx` 的构造点
     /// （工具与测试里有一堆），每轮由 `chat_send` 按模型能力写一次。
     pub vision: bool,
+    /// 本轮用的模型名。只给「看不了图」这类文案用（要指名道姓说清是哪个模型），
+    /// 空串表示测试/离线，文案里就不带名字。
+    pub model: String,
     /// 这一轮是「第几条用户消息」。工具写目标页数时要把它落库
     /// （`targetPagesTurn`），下一轮才能判出「这一轮刚要求」还是「以前要求过」。
     pub turn: u32,
@@ -120,6 +123,17 @@ pub fn push_action(ctx: &ToolCtx, action: Value) -> Result<(), String> {
 
 /// 把一份新材料放进出站队列。
 /// 渲染出来的图片交给「下一轮消息」。上限 4：再多也不会有模型认真看。
+/// 文案里怎么写模型名：`「deepseek-chat」`。名字缺失（测试、离线）时留空，
+/// 免得印出「当前模型「」不支持看图」。
+pub(crate) fn model_label(model: &str) -> String {
+    let name = model.trim();
+    if name.is_empty() {
+        String::new()
+    } else {
+        format!("「{name}」")
+    }
+}
+
 pub fn push_view(ctx: &ToolCtx, data_url: &str) -> Result<(), String> {
     let mut list = ctx.out.views.lock().map_err(|_| "图片队列不可用".to_string())?;
     if list.len() < 4 {
