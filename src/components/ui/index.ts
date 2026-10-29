@@ -19,6 +19,7 @@ export { Checkbox, Switch } from "./check";
 export { Disclosure } from "./disclosure";
 export { Tooltip } from "./tooltip";
 export { List, ListRow, ListAdd, ListEmpty, type ListRowProps } from "./list";
+export { Grip } from "./grip";
 export { Modal, type ModalProps } from "./modal";
 export { Dropdown, MenuItem, MenuLabel, MenuSep } from "./menu";
 export { Confirm } from "./confirm";

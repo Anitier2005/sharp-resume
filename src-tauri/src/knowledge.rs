@@ -1170,6 +1170,112 @@ pub fn knowledge_entries(state: State<'_, Shared>, library_id: String) -> Result
     })
 }
 
+/// 库下的块（平铺）。
+///
+/// 条目只是「一次投料」的批次容器：界面上不再把它当一层 —— 用户看到的就是
+/// 一块块可以改、可以删的知识，跟最初粘进来的那段文本是不是同一条没有关系。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChunkItem {
+    pub id: String,
+    pub heading: String,
+    pub text: String,
+    pub summary: String,
+    pub questions: Vec<String>,
+    pub kind: String,
+    pub asset: String,
+    pub asset_name: String,
+    pub annotation: String,
+}
+
+impl From<&ChunkDoc> for ChunkItem {
+    fn from(chunk: &ChunkDoc) -> Self {
+        ChunkItem {
+            id: chunk.id.clone(),
+            heading: chunk.heading.clone(),
+            text: chunk.text.clone(),
+            summary: chunk.summary.clone(),
+            questions: chunk.questions.clone(),
+            kind: chunk.kind.clone(),
+            asset: chunk.asset.clone(),
+            asset_name: chunk.asset_name.clone(),
+            annotation: chunk.annotation.clone(),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn knowledge_chunks(state: State<'_, Shared>, library_id: String) -> Result<Vec<ChunkItem>, String> {
+    if library_id == PRESET_LIBRARY {
+        let mut out = Vec::new();
+        for entry in preset_entries() {
+            for (index, chunk) in entry.chunks.iter().enumerate() {
+                out.push(ChunkItem {
+                    id: format!("{}#{}", entry.id, index + 1),
+                    heading: chunk.heading.clone(),
+                    text: chunk.text.clone(),
+                    summary: String::new(),
+                    questions: Vec::new(),
+                    kind: "text".into(),
+                    asset: String::new(),
+                    asset_name: String::new(),
+                    annotation: String::new(),
+                });
+            }
+        }
+        return Ok(out);
+    }
+    let docs = state.with(|conn| read_docs(conn, Some(&library_id)))?;
+    Ok(docs
+        .iter()
+        .flat_map(|(doc, _)| doc.chunks.iter().map(ChunkItem::from))
+        .collect())
+}
+
+/// 改一块的正文。
+///
+/// 摘要与向量是照着旧正文算的，正文一改它们就是错的 —— 一并清掉，
+/// 让「生成摘要」与「向量化」变成用户显式的下一步，而不是拿旧结论骗检索。
+#[tauri::command]
+pub fn knowledge_chunk_save(
+    state: State<'_, Shared>,
+    chunk_id: String,
+    text: String,
+) -> Result<Vec<ChunkItem>, String> {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("这一块不能是空的 —— 空块既检索不到，也占地方".into());
+    }
+    let (entry_id, kind, _) = state
+        .with(|conn| locate_chunk(conn, &chunk_id))?
+        .ok_or_else(|| "这块已经不在了".to_string())?;
+    if kind == "image" {
+        return Err("图片块改的是说明，不是正文".into());
+    }
+    let (heading, body) = split_heading(&text);
+    state.with(|conn| {
+        conn.execute(
+            "UPDATE knowledge_chunk
+                SET heading = ?1, text = ?2, summary = '', questions = '[]',
+                    updated_at = ?3, vector = NULL, vector_model = ''
+              WHERE id = ?4",
+            params![heading, body, now_secs(), chunk_id],
+        )
+        .map_err(|error| format!("写入切片失败：{error}"))?;
+        Ok(())
+    })?;
+    invalidate();
+    let library_id: String = state.with(|conn| {
+        conn.query_row(
+            "SELECT library_id FROM knowledge_entry WHERE id = ?1",
+            params![entry_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("读取知识条目失败：{error}"))
+    })?;
+    knowledge_chunks(state, library_id)
+}
+
 #[tauri::command]
 pub fn knowledge_entry_get(state: State<'_, Shared>, id: String) -> Result<Option<EntryDoc>, String> {
     if let Some(entry) = preset_entries().into_iter().find(|item| item.id == id) {
@@ -1717,10 +1823,6 @@ pub async fn knowledge_import_text(
     draft: ImportTextDraft,
     ai: AiConfig,
 ) -> Result<EntryDoc, String> {
-    let title = draft.title.trim().to_string();
-    if title.is_empty() {
-        return Err("标题不能为空".into());
-    }
     if draft.library_id.trim().is_empty() || draft.library_id == PRESET_LIBRARY {
         return Err("先选一个自己的库（预置库只读）".into());
     }
@@ -1728,6 +1830,19 @@ pub async fn knowledge_import_text(
     if text.is_empty() {
         return Err("没有可导入的正文".into());
     }
+    // 标题不再是用户必须填的东西：没有就取正文第一行（批次容器的名字而已）
+    let title = if draft.title.trim().is_empty() {
+        text.lines()
+            .next()
+            .unwrap_or("未命名")
+            .chars()
+            .take(24)
+            .collect::<String>()
+            .trim()
+            .to_string()
+    } else {
+        draft.title.trim().to_string()
+    };
 
     let mut chunks: Vec<(String, String, String, Vec<String>)> = Vec::new();
     let mut model_error = String::new();

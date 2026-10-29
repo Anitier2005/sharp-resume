@@ -43,6 +43,7 @@ import { cx } from "@/lib/cx";
 import {
   Button,
   Field,
+  Grip,
   Input,
   List,
   ListAdd,
@@ -83,8 +84,6 @@ function readWidths(): [number, number] {
   }
   return [190, 232];
 }
-
-const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 const parseTags = (text: string) =>
   text
@@ -282,25 +281,6 @@ export function KnowledgePanel({
   }, [focusChunk, doc]);
 
   /* ESC 与滚轮锁都交给 Modal：它是弹窗的唯一出口，这里再实现一遍必然走形 */
-
-  const dragColumn = (which: "lib" | "entry") => (event: React.PointerEvent) => {
-    event.preventDefault();
-    const startX = event.clientX;
-    const [libWidth, entryWidth] = widths;
-    const onMove = (move: PointerEvent) => {
-      const delta = move.clientX - startX;
-      if (which === "lib") setWidths([clamp(libWidth + delta, 132, 380), entryWidth]);
-      else setWidths([libWidth, clamp(entryWidth + delta, 150, 460)]);
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      document.body.style.cursor = "";
-    };
-    document.body.style.cursor = "col-resize";
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  };
 
   const runSearch = async (text: string) => {
     setQuery(text);
@@ -689,13 +669,13 @@ export function KnowledgePanel({
           </div>
         </section>
 
-        <div
-          className={styles.grip}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="调整库列宽度"
-          onPointerDown={dragColumn("lib")}
-          style={libId ? undefined : { display: "none" }}
+        <Grip
+          label="调整库列宽度"
+          width={widths[0]}
+          min={132}
+          max={380}
+          hidden={!libId}
+          onChange={(next) => setWidths([next, widths[1]])}
         />
 
         {/* ---------- 第二列：条目（选中库之后才出现） ---------- */}
@@ -806,13 +786,13 @@ export function KnowledgePanel({
           </List>
         </section>
 
-        <div
-          className={styles.grip}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="调整条目列宽度"
-          onPointerDown={dragColumn("entry")}
-          style={entryOpen ? undefined : { display: "none" }}
+        <Grip
+          label="调整内容列宽度"
+          width={widths[1]}
+          min={150}
+          max={460}
+          hidden={!entryOpen}
+          onChange={(next) => setWidths([widths[0], next])}
         />
 
         {/* ---------- 第三列：这一条的块（选中条目后才出现） ---------- */}

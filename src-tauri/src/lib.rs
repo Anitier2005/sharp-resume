@@ -651,6 +651,8 @@ pub fn run() {
             knowledge::knowledge_library_save,
             knowledge::knowledge_library_delete,
             knowledge::knowledge_entries,
+            knowledge::knowledge_chunks,
+            knowledge::knowledge_chunk_save,
             knowledge::knowledge_entry_get,
             knowledge::knowledge_entry_save,
             knowledge::knowledge_entry_delete,

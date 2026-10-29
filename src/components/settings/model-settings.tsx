@@ -37,6 +37,7 @@ import { notifySettingsChanged } from "@/lib/settings-window";
 import {
   Button,
   Field,
+  Grip,
   Input,
   List,
   ListAdd,
@@ -48,7 +49,7 @@ import {
 } from "@/components/ui";
 import { cx } from "@/lib/cx";
 import { Confirm } from "@/components/ui/confirm";
-import { Check, Trash } from "@/components/ui/icons";
+import { Check, Plus, Trash } from "@/components/ui/icons";
 import styles from "./settings.module.css";
 
 /**
@@ -104,6 +105,11 @@ export function ModelSettings() {
   } | null>(null);
   /** localStorage 写完之后用它触发重读 */
   const [tick, setTick] = useState(0);
+  /** 左列（模型列）宽度：拖拽手柄改它，落 localStorage，下次打开还在 */
+  const [colW, setColW] = useState(() => {
+    const saved = Number(localStorage.getItem("sharp-resume:modelColW") ?? "");
+    return Number.isFinite(saved) && saved >= 160 && saved <= 380 ? saved : 220;
+  });
 
   const models = useMemo(() => listAllModels(), [tick]);
   /**
@@ -422,7 +428,7 @@ export function ModelSettings() {
 
       <div className={styles.cols}>
         {/* 左列：模型。选一个模型，右列才长出来 —— 和知识库的「库 → 条目」同一套读法 */}
-        <section className={cx(styles.col, styles.colLeft)}>
+        <section className={cx(styles.col, styles.colLeft)} style={{ width: colW }}>
           <div className={styles.colHead}>
             <span className={styles.colTitle}>模型</span>
           </div>
@@ -473,6 +479,17 @@ export function ModelSettings() {
           </List>
         </section>
 
+        <Grip
+          label="调整模型列宽度"
+          width={colW}
+          min={160}
+          max={380}
+          onChange={(next) => {
+            setColW(next);
+            localStorage.setItem("sharp-resume:modelColW", String(next));
+          }}
+        />
+
         {/* 右列：这个模型的配置。没选模型时整列不出现，不留空壳 */}
         {editing && (
           <section className={cx(styles.col, styles.colRight)}>
@@ -508,47 +525,66 @@ export function ModelSettings() {
                 modelFields
               ) : (
                 <>
-                  <List>
-                    <ListAdd label="添加配置" onClick={addProfile} />
+                  {/* 配置用页签而不是列表：配置之间是「切换」关系，不是「从上往下读」的清单，
+                      一组占一整行只会让下面的字段被推得很远 */}
+                  <div className={styles.configTabs} role="tablist">
                     {profiles.map((profile) => {
                       const used = profileUsedBy(editing.id, profile.id);
                       return (
-                        <ListRow
+                        <button
                           key={profile.id}
-                          active={profile.id === selectedProfile?.id}
-                          leading={used.length > 0 ? <Check size={10} /> : undefined}
-                          title={profile.label}
-                          meta={profile.baseUrl || "沿用网关"}
-                          /* 点配置行 = 看这一组的字段；换用途是「模型选择」页的事 */
-                          onSelect={() => setOpenProfileId(profile.id)}
-                          actions={
-                            <Tooltip label="删除这组配置">
-                              <Button
-                                variant="quiet"
-                                size="xs"
-                                icon
-                                aria-label={`删除配置 ${profile.label}`}
-                                onClick={() => setDropProfile({ model: editing, profile })}
-                              >
-                                <Trash size={10} />
-                              </Button>
-                            </Tooltip>
-                          }
-                        />
+                          type="button"
+                          role="tab"
+                          aria-selected={profile.id === selectedProfile?.id}
+                          onClick={() => setOpenProfileId(profile.id)}
+                        >
+                          {profile.label}
+                          {/* 正在被用途引用的那组标一个点，省得逐个点开找 */}
+                          {used.length > 0 && <i aria-hidden />}
+                        </button>
                       );
                     })}
-                    {profiles.length === 0 && <ListEmpty>还没有配置，点上面那行</ListEmpty>}
-                  </List>
+                    <Tooltip label="添加配置">
+                      <button
+                        type="button"
+                        className={styles.configAdd}
+                        aria-label="添加配置"
+                        onClick={addProfile}
+                      >
+                        <Plus size={10} />
+                      </button>
+                    </Tooltip>
+                    {selectedProfile && profiles.length > 1 && (
+                      <Tooltip label="删除这组配置">
+                        <button
+                          type="button"
+                          className={styles.configDel}
+                          aria-label={`删除配置 ${selectedProfile.label}`}
+                          onClick={() =>
+                            setDropProfile({ model: editing, profile: selectedProfile })
+                          }
+                        >
+                          <Trash size={10} />
+                        </button>
+                      </Tooltip>
+                    )}
+                  </div>
 
-                  {/* 只显示选中那一组的字段：四组配置全摊开时，改一个网关要滚半屏 */}
-                  {selectedProfile && (
-                    <ProfileFields
-                      key={selectedProfile.id}
-                      model={editing}
-                      profile={selectedProfile}
-                      live={profileUsedBy(editing.id, selectedProfile.id).length > 0}
-                      onPatch={(patch) => patchProfile(selectedProfile, patch)}
-                    />
+                  {selectedProfile ? (
+                    <>
+                      <span className={styles.configMeta}>
+                        {selectedProfile.baseUrl || "沿用网关"}
+                      </span>
+                      <ProfileFields
+                        key={selectedProfile.id}
+                        model={editing}
+                        profile={selectedProfile}
+                        live={profileUsedBy(editing.id, selectedProfile.id).length > 0}
+                        onPatch={(patch) => patchProfile(selectedProfile, patch)}
+                      />
+                    </>
+                  ) : (
+                    <ListEmpty>还没有配置，点上面的 + 加一组</ListEmpty>
                   )}
                 </>
               )}

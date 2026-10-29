@@ -69,20 +69,6 @@
 }
 
 /* 拖动条：4px 抓不住，10px 又像一条分割线 */
-.grip {
-  flex: none;
-  width: 7px;
-  cursor: col-resize;
-  /* 线由列自己的 border-right 画，这里不重复画 —— 两条 1px 中间夹 7px 白，看着像缝隙 */
-  border-left: 0;
-  transition: background 0.12s ease;
-}
-
-.grip:hover,
-.grip:active {
-  background: var(--acc-soft);
-}
-
 .iconBtn {
   flex: none;
   width: 20px;

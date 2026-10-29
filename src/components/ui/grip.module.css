@@ -1,0 +1,13 @@
+/* 分栏手柄：7px 命中区，视觉上是一条 1px 的线（线由相邻列的 border 画，
+   这里只负责 hover 高亮与光标），拖拽时整条变强调色 */
+.grip {
+  flex: none;
+  width: 7px;
+  cursor: col-resize;
+  transition: background 0.12s ease;
+}
+
+.grip:hover,
+.grip:active {
+  background: var(--acc-soft);
+}
