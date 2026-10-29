@@ -36,6 +36,7 @@ pub fn locate(
     page_id: &str,
     view: &str,
     facts: &crate::agent::facts::PageFacts,
+    capability: &crate::capability::Capability,
 ) -> String {
     let person = workspace["people"]
         .as_array()
@@ -87,6 +88,10 @@ pub fn locate(
     // 文案全在 facts 模块里，这里只负责放位置 —— 两处各写一遍就会出现同一页两个页数。
     out.push('\n');
     out.push_str(&crate::agent::facts::block(facts));
+    // 能力也是实测值，跟页面事实同一处注入、同一个原则（照抄，不要自己推）。
+    // 它决定模型这一轮该不该说「我看得到图」—— 写进提示词就会随换 key / 换网关过期。
+    out.push('\n');
+    out.push_str(&crate::agent::facts::capability_block(capability));
     out.push_str("\n- 你可以用工具读取真实内容；不要凭记忆断言简历里写了什么。");
     out
 }
@@ -95,6 +100,11 @@ pub fn locate(
 mod tests {
     use super::*;
     use crate::agent::facts::{measure_line, PageFacts, PageMeasure};
+
+    /// 测试默认用「没测出来」：它不该在页面事实的断言之外多说任何话
+    fn unknown() -> crate::capability::Capability {
+        crate::capability::Capability::default()
+    }
 
     fn workspace() -> Value {
         serde_json::json!({
@@ -128,7 +138,7 @@ mod tests {
     fn facts_block_sits_between_the_view_line_and_the_closing_line() {
         let ws = workspace();
         let facts = PageFacts::assemble(&ws, "p1", "r1", "pg1", Some(measure(1000.0)), None, Some(1));
-        let text = locate(&ws, "p1", "r1", "pg1", "edit", &facts);
+        let text = locate(&ws, "p1", "r1", "pg1", "edit", &facts, &unknown());
 
         // 只能出现一次：注入点加了两处的话模型会看到两个页数
         assert_eq!(text.match_indices("【页面事实】").count(), 1, "{text}");
@@ -143,7 +153,7 @@ mod tests {
     fn without_measure_it_says_cannot_measure_instead_of_disappearing() {
         let ws = workspace();
         let facts = PageFacts::assemble(&ws, "p1", "r1", "pg1", None, None, Some(1));
-        let text = locate(&ws, "p1", "r1", "pg1", "preview", &facts);
+        let text = locate(&ws, "p1", "r1", "pg1", "preview", &facts, &unknown());
 
         assert!(text.contains("【页面事实】"), "没有测量也要有事实块：{text}");
         assert!(text.contains("尚未实测"), "{text}");
@@ -160,8 +170,8 @@ mod tests {
         let before = PageFacts::assemble(&ws, "p1", "r1", "pg1", Some(measure(1000.0)), None, Some(1));
         let after = PageFacts::assemble(&ws, "p1", "r1", "pg1", Some(measure(1010.0)), None, Some(2));
 
-        let first = locate(&ws, "p1", "r1", "pg1", "edit", &before);
-        let second = locate(&ws, "p1", "r1", "pg1", "edit", &after);
+        let first = locate(&ws, "p1", "r1", "pg1", "edit", &before, &unknown());
+        let second = locate(&ws, "p1", "r1", "pg1", "edit", &after, &unknown());
 
         assert!(first.contains(&measure_line(&before)), "{first}");
         assert!(second.contains(&measure_line(&after)), "{second}");

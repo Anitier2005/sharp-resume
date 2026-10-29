@@ -40,9 +40,12 @@ export interface ModelConfig {
   /** 可选的思维强度档位；空数组表示这个模型没有该能力 */
   reasoning: string[];
   /**
-   * 模型本身能不能看图。注意写的是「模型的客观能力」，与用户有没有 key 无关 ——
-   * 附件管线靠它决定图片是 base64 直传（vision）还是走 OCR 转文字。
-   * 新模型进 config/models.json 时必须同时给这个字段，缺了按不能看图处理。
+   * 清单里的**出厂声明**，只是给用户看的说明，**不再驱动管线**。
+   *
+   * 能不能看图现在由 Rust 侧实测（`capability::resolve` / `probe`）决定 ——
+   * 这个字段说「支持」而网关不认，图发过去只会换一个 400；说「不支持」而模型
+   * 其实能看，图就永远只以元数据出现。新模型进 `config/models.json` 时照旧填它，
+   * 但别拿它当判定依据。
    */
   vision: boolean;
   defaultTemperature: number;

@@ -1,6 +1,7 @@
 mod agent;
 mod assets;
 mod attach;
+mod capability;
 mod db;
 mod docx;
 mod export;
@@ -378,6 +379,18 @@ fn settings_drop(state: tauri::State<'_, db::Shared>, key: String) -> Result<(),
     state.with(|conn| db::settings_drop(conn, &key))
 }
 
+/// 这个模型现在被记成什么（不发请求，只读设置）。
+#[tauri::command]
+fn capability_of(conf: capability::Conf) -> capability::Capability {
+    capability::resolve(&conf.base_url, &conf.model, &conf.api_key)
+}
+
+/// 测一次多模态：画 3×3 随机色块图，问模型颜色，答对了才记成「支持」。
+#[tauri::command]
+async fn capability_test(conf: capability::Conf) -> capability::Capability {
+    capability::probe(&conf.base_url, &conf.model, &conf.api_key).await
+}
+
 /// 在文件管理器里打开数据目录，方便用户备份 / 拷走。
 #[tauri::command]
 fn reveal_data_dir(app: tauri::AppHandle) -> Result<(), String> {
@@ -634,6 +647,9 @@ pub fn run() {
                 // 导出、资产池这些命令通过 State 拿连接。不注册的话，
                 // 命令一被调用就是「state not managed」panic —— 编译期看不出来。
                 app.manage(db::Shared::new(dir.join("app.db")));
+                // 能力判定要在 net.rs（协议层拒图改判）里用得着，那里没有 AppHandle，
+                // 所以给它一条同文件的独立连接（WAL，可并发读）
+                capability::init(dir.join("app.db"));
                 let _ = DATA_DIR.set(dir);
             }
 
@@ -651,6 +667,8 @@ pub fn run() {
             settings_load,
             settings_put,
             settings_drop,
+            capability_of,
+            capability_test,
             reveal_data_dir,
             save_text_file,
             save_binary_file,

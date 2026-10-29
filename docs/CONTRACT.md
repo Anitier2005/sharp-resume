@@ -481,7 +481,7 @@ UI 常驻提示：`这是一份由 {n} 个原件组成的简历，不可编辑`�
 ```json
 { "version": 1,
   "items": { "<fp>": { "state": "supported|unsupported|unknown",
-                       "reason": ""|"protocol-reject"|"bad-request"|"offline"|"timeout"|"no-probe",
+                       "reason": "none"|"protocol-reject"|"auth"|"quota"|"bad-request"|"offline"|"timeout"|"no-probe",
                        "checkedAt": 1765000000, "model": "…", "baseUrl": "…" } } }
 ```
 
@@ -504,3 +504,23 @@ Rust：`capability::resolve(base_url, model, api_key) -> Capability`。
 `unsupported(protocol-reject)` 由 `net.rs` 在收到 ImageRejected 时就地写入；
 同指纹探测得 `supported` → **无条件覆盖**（后写胜）。
 400 但与图像无关、429 / 5xx / 超时 / 连接失败 → **不得改判**。
+判 `ImageRejected` 还要求**这条请求真的带了图**（`net::has_images`）：纯文本请求被 400
+拒绝跟能力无关。
+
+### 7.6 自动探针（否则「没测过」等于永远不发图）
+
+`unknown` 不发图，所以「用户没点过那个按钮」会让能看图的模型永远只收到元数据 ——
+这正是这条链路坏掉时的症状。因此 `chat_send` 在**带附件**且 `should_auto_probe()`
+为真时，当场探一次再决定。节流规则（三种，不许合并）：
+
+| 上一次的结论 | 这一轮 |
+|---|---|
+| 从没测过（`checkedAt` 为 null） | **测** |
+| `offline` / `timeout` 且已过 60 秒 | **测**（那是暂时的） |
+| `supported` / `unsupported` / `auth` / `quota` / `bad-request` / `no-probe` | **不测**（配置问题重复测只是白花一次请求） |
+
+### 7.7 两侧同源
+
+`chat_send`（会话）与 `layout_submit`（排版）各自 `resolve` 一次，写入自己的
+`Outbox.vision`，并把 `facts::capability_block(cap)` 拼进 system。排版侧不许省这一步：
+它同样会在 `view` 里渲染页面给自己看。

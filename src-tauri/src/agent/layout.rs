@@ -499,7 +499,12 @@ async fn run_turn(
         args.origin.clone(),
         None,
     );
-    let system = SYSTEM.replace("{{page}}", &describe_page(args, &facts));
+    // 排版侧也要知道「这一轮到底能不能看图」：它会在 `view` 里渲染页面给自己看，
+    // 能力是三态里唯一靠实测的那一栏，不许由提示词假定。
+    let capability = crate::capability::resolve(&args.base_url, &args.model, &args.api_key);
+    let mut system = SYSTEM.replace("{{page}}", &describe_page(args, &facts));
+    system.push('\n');
+    system.push_str(&crate::agent::facts::capability_block(&capability));
 
     let budget_window = args.context_window.unwrap_or(64_000);
     let budget = budget_window.saturating_sub(session::estimate_tokens(&system) + 2_000) * 6 / 10;
@@ -533,7 +538,9 @@ async fn run_turn(
         tools: None,
     };
 
-    let out = crate::tools::Outbox::default();
+    let mut out = crate::tools::Outbox::default();
+    out.vision = capability.can_see();
+    out.model = args.model.clone();
     // 排版 agent 也能转图片：作品集里放一张压好的图，比让用户自己去压缩现实
     let root = crate::data_dir(app).ok();
     let ctx = ToolCtx {

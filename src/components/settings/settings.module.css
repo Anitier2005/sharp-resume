@@ -320,3 +320,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* 能不能看图：一句话结论 + 一个测试按钮。没有勾选框 —— 这是实测值 */
+.probe {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.probeText {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.625rem;
+  color: var(--fg-2);
+}
+
+.probeMeta {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.5625rem;
+  color: var(--fg-4);
+}

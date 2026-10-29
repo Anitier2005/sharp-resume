@@ -467,10 +467,6 @@ pub struct SendArgs {
     /// 设置里配的 OCR 接口。缺省表示只有内置 OCR（lite 构建则等于没有）
     #[serde(default)]
     pub ocr: Option<crate::attach::OcrConf>,
-    /// 当前模型能不能看图。决定「PDF 转图片」这类工具能不能给出图，
-    /// 也决定工具层要不要白跑一趟渲染。
-    #[serde(default)]
-    pub vision: bool,
     /// 前端量的页面实测值。只在本次请求里有效 —— 落库的测量值下次启动会变成假数据。
     #[serde(default)]
     pub measure: Option<crate::agent::facts::PageMeasure>,
@@ -500,6 +496,24 @@ pub async fn chat_send(
         running.insert(args.key.clone(), flag.clone());
     }
 
+    // 这个模型能不能看图：唯一来源是 capability::resolve（设置里那份实测结论），
+    // 不再由前端传一个「用户勾的开关」上来。三处用到它 —— 材料组装、工具出站、
+    // 【模型能力】事实块 —— 都读这同一个值，不许各判各的。
+    let mut capability = crate::capability::resolve(&args.base_url, &args.model, &args.api_key);
+    // 收图前的一次性探针：结论是「没测出来」而这一轮又带了附件，就当场测一次再决定。
+    //
+    // 为什么必须自动测：三态里 `unknown` 不发图（宁可少发也不要换一个 400），
+    // 于是「用户没去设置里点那个按钮」就等于「能看图的模型永远只收到元数据」——
+    // 那正是这条链路坏了几个版本的症状。测一次的成本是这一轮多一两秒，
+    // 收益是一座已经建好的桥真的通了。结论落库，同一组 baseUrl+模型+key 只测这一次。
+    if crate::capability::should_auto_probe(&capability)
+        && !args.attachments.is_empty()
+        && !args.api_key.trim().is_empty()
+    {
+        capability = crate::capability::probe(&args.base_url, &args.model, &args.api_key).await;
+    }
+    let vision = capability.can_see();
+
     // 附件解析全在这里：取字、OCR、PDF 渲染都是 Rust 的活，
     // 前端只传「哪几个附件」，拿不到字节也拿不到正文
     let root = crate::data_dir(&app).ok();
@@ -508,7 +522,7 @@ pub async fn chat_send(
             crate::attach::materials(
                 dir,
                 &args.attachments,
-                args.vision,
+                vision,
                 args.ocr.as_ref(),
                 &args.model,
             )
@@ -557,6 +571,7 @@ pub async fn chat_send(
         &args.page_id,
         args.view.as_deref().unwrap_or("edit"),
         &facts,
+        &capability,
     ));
     if !args.extra.trim().is_empty() {
         system.push_str("\n\n");
@@ -609,8 +624,9 @@ pub async fn chat_send(
 
     // 工具出站：界面指令与新产出的材料，本轮结束后随返回值交给前端
     let mut out = crate::tools::Outbox::default();
-    // 模型能不能看图：决定工具渲染出来的页面图片要不要真的发过去
-    out.vision = args.vision;
+    // 模型能不能看图：决定工具渲染出来的页面图片要不要真的发过去。
+    // 派生自上面那一次 resolve —— 真相只有一个。
+    out.vision = vision;
     out.model = args.model.clone();
     // 工具写目标页数时要落「第几条用户消息」：下一轮据此判「这一轮刚要求」还是「以前说过」
     out.turn = turn;

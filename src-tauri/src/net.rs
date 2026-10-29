@@ -215,8 +215,91 @@ fn body(req: &AiRequest, stream: bool) -> serde_json::Value {
     map
 }
 
-fn describe(status: u16, body: &str) -> String {
-    let detail = serde_json::from_str::<serde_json::Value>(body)
+/// 失败的类别。只有 `ImageRejected` 会触发一个动作（改判能力），其余六支只影响措辞。
+///
+/// 为什么不把它传遍调用栈：为了一个枚举去把 `Result<String, String>` 改成
+/// `Result<_, TurnError>` 会波及 `session.rs` / `agent/layout.rs` / `agent/turn.rs`
+/// 三处签名与十几处 `?`。唯一需要知道 status 的地方就是这里（我们手里正拿着响应），
+/// 就地判、就地改判，是最小改动。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    Auth,
+    Quota,
+    NotFound,
+    Offline,
+    Timeout,
+    /// 400 且错误体明确指向图像字段：**强证据**，但要可逆
+    ImageRejected,
+    BadRequest,
+    Server,
+}
+
+/// 从 `(status, body)` 判类别。
+///
+/// `status == 0` 表示「请求没走到 HTTP」——连接失败、DNS、超时都在这一支，
+/// 调用方把 reqwest 的错误文本当 body 传进来。
+///
+/// `ImageRejected` 的判据必须**两条同时**命中（图像字段 + 拒绝措辞）：
+/// 只命中一半一律 `BadRequest`。宁可少判一次支持，也不要多判一次不支持 ——
+/// 前者只是少发一次图，后者是永久拉黑用户的看图能力。
+pub fn classify_error(status: u16, body: &str) -> ErrorKind {
+    let lowered = body.to_lowercase();
+    match status {
+        0 => {
+            if lowered.contains("timed out")
+                || lowered.contains("timeout")
+                || lowered.contains("超时")
+            {
+                ErrorKind::Timeout
+            } else {
+                ErrorKind::Offline
+            }
+        }
+        401 | 403 => ErrorKind::Auth,
+        402 | 429 => ErrorKind::Quota,
+        404 => ErrorKind::NotFound,
+        408 => ErrorKind::Timeout,
+        400 if looks_like_image_reject(&lowered) => ErrorKind::ImageRejected,
+        400 => ErrorKind::BadRequest,
+        code if (500..600).contains(&code) => ErrorKind::Server,
+        _ => ErrorKind::BadRequest,
+    }
+}
+
+/// 图像字段 + 拒绝措辞，两条同时命中才算。
+fn looks_like_image_reject(lowered: &str) -> bool {
+    const FIELD: [&str; 5] = ["image_url", "image", "vision", "multimodal", "content[].type"];
+    const REFUSE: [&str; 5] = ["not support", "unsupported", "invalid", "unknown", "unrecognized"];
+    // 尺寸/体积类的话即使带「invalid」也不判能力：那是「这张太大」，
+    // 压缩之后就能过，不代表模型不能看图
+    const SIZE: [&str; 5] = ["too large", "size", "dimension", "resolution", "payload"];
+    if SIZE.iter().any(|word| lowered.contains(word)) {
+        return false;
+    }
+    FIELD.iter().any(|word| lowered.contains(word))
+        && REFUSE.iter().any(|word| lowered.contains(word))
+}
+
+/// 这条请求里到底有没有图。
+///
+/// 只有带了图，400 才可能是「拒图」—— 纯文本请求被 400 拒绝跟能力无关，
+/// 不许顺手把一个模型判成看不了图。
+fn has_images(req: &AiRequest) -> bool {
+    req.messages.iter().any(|message| {
+        message
+            .content
+            .as_ref()
+            .and_then(|content| content.as_array())
+            .map(|parts| {
+                parts
+                    .iter()
+                    .any(|part| part.get("type").and_then(|kind| kind.as_str()) == Some("image_url"))
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn describe(status: u16, body: &str) -> String {    let detail = serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|json| {
             json.get("error")
@@ -232,34 +315,43 @@ fn describe(status: u16, body: &str) -> String {
     }
 }
 
-/// 一次性请求（设置页的「测试连接」、以及不需要流式的场合）
-#[tauri::command]
-pub async fn chat_once(req: AiRequest) -> Result<String, String> {
+/// 一次性请求，**把状态码原样带出来**。
+///
+/// 只给两处用：能力探针（要区分「400 拒图」与「400 别的原因」），以及 `chat_once`。
+/// 其它调用方一律用 `chat_once` —— 它们只需要一句人话。
+pub async fn chat_once_status(req: AiRequest) -> Result<(String, Option<u64>), (u16, String)> {
     let response = client()
         .post(endpoint(&req.base_url))
         .bearer_auth(req.api_key.trim())
         .json(&body(&req, false))
         .send()
         .await
-        .map_err(|error| format!("请求失败：{error}"))?;
+        // 没走到 HTTP：status 用 0 表示，分类函数据此判 Offline / Timeout
+        .map_err(|error| (0u16, format!("请求失败：{error}")))?;
 
     let status = response.status().as_u16();
     let text = response
         .text()
         .await
-        .map_err(|error| format!("读取响应失败：{error}"))?;
+        .map_err(|error| (status, format!("读取响应失败：{error}")))?;
 
     if !(200..300).contains(&status) {
-        return Err(describe(status, &text));
+        return Err((status, describe(status, &text)));
     }
 
-    let json: serde_json::Value =
-        serde_json::from_str(&text).map_err(|error| format!("响应不是合法 JSON：{error}"))?;
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| (status, format!("响应不是合法 JSON：{error}")))?;
     let content = json["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("")
         .to_string();
-    let total = json["usage"]["total_tokens"].as_u64();
+    Ok((content, json["usage"]["total_tokens"].as_u64()))
+}
+
+/// 一次性请求（设置页的「测试连接」、以及不需要流式的场合）
+#[tauri::command]
+pub async fn chat_once(req: AiRequest) -> Result<String, String> {
+    let (content, total) = chat_once_status(req).await.map_err(|(_, message)| message)?;
     Ok(match total {
         Some(tokens) => format!("{content} · {tokens} tokens"),
         None => content,
@@ -316,7 +408,18 @@ pub async fn stream_with<E: FnMut(StreamChunk)>(
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
         let text = response.text().await.unwrap_or_default();
-        let message = describe(status, &text);
+        let mut message = describe(status, &text);
+        // 协议层明确拒图（且这一轮确实带了图）→ 就地改判，下一轮起不再发图。
+        // 为什么在这里改判而不是把错误码往上传：只有这里有 status + body，
+        // 也是唯一知道「这条请求是不是真的带了图」的地方之一（`has_images`）。
+        // 改判本身就让这条路径一次收敛 —— 下一轮 `resolve()` 给出 Unsupported，
+        // 材料组装不再附图，不会再有第二次。不需要额外的计数器。
+        if classify_error(status, &text) == ErrorKind::ImageRejected && has_images(req) {
+            crate::capability::mark_protocol_reject(&req.base_url, &req.model, &req.api_key);
+            message.push_str(
+                "（这个模型不接受图像输入。去 设置 → 模型 点一次「测一次多模态」确认，或换一个能看图的模型。）",
+            );
+        }
         emit(StreamChunk::error(message.clone()));
         return Err(message);
     }
@@ -477,9 +580,101 @@ mod tests {
         ))
     }
 
+    /* ---------- classify_error：误判的代价不对称，所以逐条钉住 ---------- */
+
     #[test]
-    fn endpoint_is_normalized() {
+    fn a_model_that_refuses_images_is_recognized() {
+        // 这是唯一会触发「改判」的一支：400 + 图像字段 + 拒绝措辞，三条同时命中
         assert_eq!(
+            classify_error(400, r#"{"error":{"message":"image_url is not supported by this model"}}"#),
+            ErrorKind::ImageRejected
+        );
+        assert_eq!(
+            classify_error(400, "This model does not support vision input"),
+            ErrorKind::ImageRejected
+        );
+        assert_eq!(
+            classify_error(400, r#"{"error":"unknown variant `image_url`, expected `text`"}"#),
+            ErrorKind::ImageRejected
+        );
+    }
+
+    #[test]
+    fn a_plain_400_never_changes_capability() {
+        // 只有图像词、没有拒绝措辞 → 不是拒图
+        assert_eq!(
+            classify_error(400, r#"{"error":"messages must not be empty"}"#),
+            ErrorKind::BadRequest
+        );
+        assert_eq!(
+            classify_error(400, r#"{"error":"image_url is required"}"#),
+            ErrorKind::BadRequest
+        );
+    }
+
+    #[test]
+    fn a_too_large_image_is_not_a_capability_problem() {
+        // 「这张太大」压缩后就能过，判成不支持等于永久拉黑
+        assert_eq!(
+            classify_error(400, "image is too large, max 5MB"),
+            ErrorKind::BadRequest
+        );
+        assert_eq!(
+            classify_error(400, "invalid image size: 12000x12000 exceeds limit"),
+            ErrorKind::BadRequest
+        );
+        assert_eq!(
+            classify_error(400, "invalid image resolution"),
+            ErrorKind::BadRequest
+        );
+    }
+
+    #[test]
+    fn transport_failures_are_not_verdicts() {
+        assert_eq!(classify_error(0, "请求失败：timed out"), ErrorKind::Timeout);
+        assert_eq!(classify_error(0, "请求失败：dns error"), ErrorKind::Offline);
+        assert_eq!(classify_error(408, "request timeout"), ErrorKind::Timeout);
+    }
+
+    #[test]
+    fn config_errors_are_classified_apart() {
+        assert_eq!(classify_error(401, "bad key"), ErrorKind::Auth);
+        assert_eq!(classify_error(403, "forbidden"), ErrorKind::Auth);
+        assert_eq!(classify_error(402, "no balance"), ErrorKind::Quota);
+        assert_eq!(classify_error(429, "rate limited"), ErrorKind::Quota);
+        assert_eq!(classify_error(404, "model not found"), ErrorKind::NotFound);
+        assert_eq!(classify_error(500, "boom"), ErrorKind::Server);
+        assert_eq!(classify_error(503, "unavailable"), ErrorKind::Server);
+    }
+
+    #[test]
+    fn only_a_request_carrying_images_can_be_blamed_on_images() {
+        // 纯文本请求撞 400，就算错误体里提到 image，也不许判能力 ——
+        // 这一条挡的是「把别的问题算到多模态头上」
+        let text_only = AiRequest {
+            base_url: "https://x/v1".into(),
+            api_key: "k".into(),
+            model: "m".into(),
+            messages: vec![ChatMessage::system("s"), ChatMessage::user("纯文本")],
+            temperature: None,
+            reasoning: None,
+            max_tokens: None,
+            tools: None,
+        };
+        assert!(!has_images(&text_only));
+
+        let with_image = AiRequest {
+            messages: vec![ChatMessage::user_with_images(
+                "看图",
+                &["data:image/png;base64,AAAA".to_string()],
+            )],
+            ..text_only
+        };
+        assert!(has_images(&with_image));
+    }
+
+    #[test]
+    fn endpoint_is_normalized() {        assert_eq!(
             endpoint("https://a.com/v1/"),
             "https://a.com/v1/chat/completions"
         );

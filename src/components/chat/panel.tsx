@@ -319,9 +319,6 @@ export function ChatPanel() {
       const current = flatten(person, targetPage);
       const deltas = baseRef.current?.key === sceneKey ? diff(baseRef.current.flat, current) : [];
       baseRef.current = { key: sceneKey, flat: current };
-      // 模型能不能看图：决定附件是直传图片还是先 OCR。
-      // 用 findModel 而不是 modelById —— 后者只查内置清单，自建模型会被当成看不了图
-      const vision = findModel(ai.model)?.vision === true;
       const context = [buildContext(person, targetPage), renderDelta(deltas)]
         .filter(Boolean)
         .join("\n\n");
@@ -428,8 +425,6 @@ export function ChatPanel() {
               attachments: attachRefs(attachments),
               // 设置里配的 OCR 接口；没配就只有内置 OCR（lite 构建等于没有）
               ocr: ocrConf(ai),
-              // 工具层据此判断「PDF 转图片给自己看」做不做、发不发
-              vision,
               extra: skillsPrompt(),
               baseUrl: ai.baseUrl,
               apiKey: ai.apiKey,

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
   aiFromModel,
   choiceOf,
@@ -32,11 +32,11 @@ import {
   type ModelKind,
   type ModelProfile,
 } from "@/lib/model-config";
+import { capabilityLine, capabilityOf, capabilityTest, checkedAgo, type Capability } from "@/lib/capability";
 import { configureKnowledge } from "@/lib/knowledge";
 import { notifySettingsChanged } from "@/lib/settings-window";
 import {
   Button,
-  Checkbox,
   Columns,
   Field,
   Grip,
@@ -136,6 +136,50 @@ export function ModelSettings() {
   );
   /** 详情页当前看的那组配置：从列表点进来的优先，否则退回第一组 */
   const selectedProfile = profiles.find((item) => item.id === openProfileId) ?? profiles[0];
+
+  /* ---------------- 能不能看图：实测，不手勾 ---------------- */
+
+  /**
+   * 能力不是配置项，是**这一组链路测出来的事实**。所以这里没有勾选框，
+   * 只有「现在的结论」和一个测试按钮 —— 结论由 Rust 侧的探针写进设置表，
+   * 换 key / 换网关 / 换模型都会让指纹变化，自动回到「没测过」。
+   */
+  const probeConf = {
+    baseUrl: selectedProfile?.baseUrl || editing?.baseUrl || "",
+    model: editing?.id ?? "",
+    apiKey: selectedProfile?.apiKey || "",
+  };
+  const [capability, setCapability] = useState<Capability | null>(null);
+  const [probing, setProbing] = useState(false);
+
+  useEffect(() => {
+    if (!probeConf.model || !probeConf.baseUrl) {
+      setCapability(null);
+      return;
+    }
+    let live = true;
+    capabilityOf(probeConf)
+      .then((cap) => {
+        if (live) setCapability(cap);
+      })
+      .catch(() => {
+        if (live) setCapability(null);
+      });
+    return () => {
+      live = false;
+    };
+    // 只在这三项变化时重读：拿整个对象当依赖会每帧都发一次 IPC
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [probeConf.baseUrl, probeConf.apiKey, probeConf.model]);
+
+  const runProbe = () => {
+    if (probing || !probeConf.model || !probeConf.baseUrl) return;
+    setProbing(true);
+    capabilityTest(probeConf)
+      .then(setCapability)
+      .catch(() => setCapability(null))
+      .finally(() => setProbing(false));
+  };
 
   /* ---------------- 读取当前指针 ---------------- */
 
@@ -399,16 +443,24 @@ export function ModelSettings() {
           onChange={(value) => patchModel({ kind: value as ModelKind })}
         />
       </Field>
-      {/* 能不能看图是模型的客观能力，不是配置项，所以放在「模型」这栏而不是配置里。
-          它直接决定附件怎么走：能看图就直传图片，看不了就先 OCR 成文字 */}
-      <Field label="能看图 · 多模态">
-        <Checkbox
-          checked={editing.vision}
-          disabled={!custom}
-          onChange={(checked) => patchModel({ vision: checked })}
-        >
-          {editing.vision ? "模型支持图像输入，图片会直接发给它" : "看不了图，图片先走 OCR 转文字"}
-        </Checkbox>
+      {/* 能不能看图是**实测出来的能力**，不是配置项 —— 所以这一栏没有勾选框。
+          以前那个手勾开关勾的是用户的印象：勾了但网关不认，图片发过去换一个 400；
+          没勾而模型其实能看，图片就永远只以元数据形式出现（这就是"照片进不了简历"的病根）。 */}
+      <Field label="能看图 · 多模态 · 实测">
+        <div className={styles.probe}>
+          <span className={styles.probeText}>{capabilityLine(capability)}</span>
+          <Button
+            variant="quiet"
+            size="xs"
+            disabled={probing || !probeConf.model || !probeConf.baseUrl}
+            onClick={runProbe}
+          >
+            {probing ? "测试中…" : "测一次多模态"}
+          </Button>
+        </div>
+        <span className={styles.probeMeta}>
+          {probeConf.apiKey ? checkedAgo(capability) || "还没测过" : "这组配置还没有密钥，先填密钥再测"}
+        </span>
       </Field>
       {kindOf(editing) !== "ocr" && custom && (
         <Field label="思维强度档位 · 逗号分隔">
