@@ -6,8 +6,8 @@
 //!
 //! 阈值也只有这一处：`FIT_MAX` / `TOLERANCE_MAX`。前端不复刻，渲染层不复刻。
 
-// Batch 0 只落骨架：文案与判定是 Batch 2 的活，在那之前这些类型没人调用。
-// Batch 2 接线完成后请删掉这一行，让未使用的东西重新报警。
+// Batch 2 接线（B2-4/5/6）还没全部落地，`block` / `measure_section` / `layout_result_line`
+// 目前只有单测在调。Batch 2 接线完成后请删掉这一行，让未使用的东西重新报警。
 #![allow(dead_code)]
 
 use serde::Deserialize;
@@ -132,6 +132,17 @@ impl Reason {
             _ => Self::NoPreview,
         }
     }
+
+    /// `测量不可用：{…}` 括号里只要原因本身：前面已经写了「尚未实测」，
+    /// 再说一遍「量不到」是同一句话说两次。
+    fn brief(&self) -> &'static str {
+        match self {
+            Self::NoPreview => "预览没打开",
+            Self::Fonts => "字体还没加载完",
+            Self::Timeout => "测量超时",
+            Self::Empty => "这一页是空的",
+        }
+    }
 }
 
 /// 把测量折算成判定。这是全仓唯一的 pages 计算。
@@ -152,44 +163,418 @@ pub enum Fit {
 pub const FIT_MAX: f64 = 1.00;
 pub const TOLERANCE_MAX: f64 = 1.02;
 
+/// paper.css 默认正文行高（`--fs:10px × --lh:1.7`）。前端没上传行高时用它折算行数。
+const DEFAULT_LINE_HEIGHT: f64 = 17.0;
+
 /// 实测口径（逐字定稿）：测量发生在预览 DOM 上 —— 374 容器 − 两侧各 34px = 正文 306px。
 /// 这里**不写 16mm**，那是「接近整页」面积换算用的打印口径，与实测不是同一把尺子。
 pub const MEASURE_RULER: &str =
     "A4 210×297mm、正文宽 306px、页边距 34px、预览容器宽 374px";
 
 /// 完整事实块。会话侧 system 注入用它。
-pub fn block(_f: &PageFacts) -> String {
-    String::new()
+pub fn block(f: &PageFacts) -> String {
+    // file 页是用户上传的整页图片，没有可排的空间：只给一句 verdict 就够，
+    // 给它编实测/目标槽位会诱导模型去「压」一张图片。
+    if f.page_kind == "file" {
+        return format!("结论：{}", FILE_VERDICT);
+    }
+
+    let mut out = String::from(
+        "【页面事实】下面是程序实测的当前值。页数只能照抄这几个数：不要改写、不要四舍五入、不要按比例推算。\n\n",
+    );
+    out.push_str(&origin_line(f.origin.as_ref()));
+    out.push('\n');
+    out.push_str("目标页数：");
+    out.push_str(&target_line(&f.target, f.origin.as_ref()));
+    out.push('\n');
+    out.push_str(&format!("这一页「{}」：{}\n", f.page_label, measure_line(f)));
+    out.push_str(&format!("结论：{}", verdict_line(f)));
+    out
 }
 
 /// fit 段（带 `## 这一页的实测` 标题）。排版侧 describe_page 末尾追加用它。
-pub fn measure_section(_f: &PageFacts) -> String {
-    String::new()
+pub fn measure_section(f: &PageFacts) -> String {
+    let mut out = String::from("## 这一页的实测\n");
+    let fit = fit_of(f.measure.as_ref());
+
+    match fit {
+        Fit::Fit(pages) => out.push_str(&format!("{}。\n", measured_sentence(pages, false))),
+        Fit::Tolerance(pages) => out.push_str(&format!("{}。\n", measured_sentence(pages, true))),
+        Fit::Overflow { pages, over, lines } => {
+            // 超出量单独成行：这里是「一行一件事」的版面描述，
+            // 与 measure_line 里那句合在一行的写法共用同一个 over_sentence。
+            out.push_str(&format!("实测 {pages:.2} 页（{MEASURE_RULER}）。\n"));
+            out.push_str(&over_sentence(over, lines));
+            out.push('\n');
+        }
+        Fit::Unknown(_) | Fit::Stale { .. } => {
+            out.push_str(&unavailable_head(f, fit));
+            out.push('\n');
+            out.push_str("不知道有没有达标。这一轮不要说「已经压到一页」「放在一页内」。\n");
+            return out;
+        }
+    }
+
+    match f.target.pages {
+        Some(_) => {
+            let verdict = match fit {
+                Fit::Overflow { .. } => "未达标。",
+                _ => "达标。",
+            };
+            out.push_str(&format!(
+                "目标页数 {}。{verdict}\n",
+                target_short(&f.target)
+            ));
+            // 段尾要交代「这些数字会作废」，否则模型会拿旧实测值当永久结论
+            out.push_str(&format!(
+                "{}。内容一改，这些数字作废，要重新量。\n",
+                version_line(f)
+            ));
+        }
+        None => {
+            out.push_str(&format!("目标页数 {}。\n", target_short(&f.target)));
+            out.push_str("没有目标，不讲达标与否；实测值仍然要照报。\n");
+        }
+    }
+    out
 }
 
 /// 只要 {measure} 那一句。两处共用，保证「实测 1.00 页，没有溢出（口径）」一字不差。
-pub fn measure_line(_f: &PageFacts) -> String {
-    String::new()
+pub fn measure_line(f: &PageFacts) -> String {
+    let fit = fit_of(f.measure.as_ref());
+    match fit {
+        Fit::Fit(pages) => format!("{}。{}", measured_sentence(pages, false), version_line(f)),
+        Fit::Tolerance(pages) => format!("{}{}", measured_sentence(pages, true), version_line(f)),
+        Fit::Overflow { pages, over, lines } => format!(
+            "实测 {pages:.2} 页，{}（{MEASURE_RULER}）{}",
+            over_sentence(over, lines),
+            version_line(f)
+        ),
+        Fit::Unknown(_) => format!(
+            "{}量不到就不能说这一页「在一页内」。测量版本 无",
+            unavailable_head(f, fit)
+        ),
+        Fit::Stale { .. } => format!("{}测量版本 无", unavailable_head(f, fit)),
+    }
 }
 
 /// set_page_layout 返回值末尾追加的那一行。三态。
-pub fn layout_result_line(_f: &PageFacts) -> String {
-    String::new()
+pub fn layout_result_line(f: &PageFacts) -> String {
+    let fit = fit_of(f.measure.as_ref());
+    let target = f.target.pages;
+    match fit {
+        Fit::Fit(pages) | Fit::Tolerance(pages) => match target {
+            Some(t) => format!("实测 {pages:.2} 页，没有溢出（目标 {t} 页，达标）。"),
+            // 未设目标时不能编达标结论，也不编新措辞：两句都取自 §4.4 的定稿句子。
+            None => NO_TARGET_JUDGEMENT.replace("{}", &format!("实测 {pages:.2} 页，没有溢出。")),
+        },
+        Fit::Overflow { pages, over, .. } => match target {
+            Some(t) => format!(
+                "实测 {pages:.2} 页，超出 {over:.2} 页（目标 {t} 页，仍未达标）。继续压，或停在这一档并说清差多少。"
+            ),
+            None => NO_TARGET_JUDGEMENT
+                .replace("{}", &format!("实测 {pages:.2} 页，超出 {over:.2} 页。")),
+        },
+        Fit::Unknown(_) | Fit::Stale { .. } => format!(
+            "尚未实测（测量不可用：{}）。这一轮不能确认是否在一页内 —— 不要写「已压到一页」。",
+            why_unavailable(fit)
+        ),
+    }
 }
 
 /// 目标页数三态的推导（方案 §2.7）。
-pub fn target_of(_resume: &Value, _origin: Option<&Origin>, _turn: Option<u32>) -> Target {
-    Target::default()
+pub fn target_of(resume: &Value, origin: Option<&Origin>, turn: Option<u32>) -> Target {
+    let pages = resume
+        .get("targetPages")
+        .and_then(Value::as_u64)
+        .map(|n| n as u32);
+
+    if let Some(pages) = pages {
+        let written = resume
+            .get("targetPagesTurn")
+            .and_then(Value::as_u64)
+            .map(|n| n as u32);
+        // 差 1 算「这一轮」：用户说「压到一页」→ 工具写入 turn=n → 下一轮 turn=n+1，
+        // 那一轮正是用户看效果的时候。差 2 起降级为「之前要求过」。
+        let source = match (written, turn) {
+            (Some(written), Some(current)) if written + 1 >= current => TargetSource::UserThisTurn,
+            _ => TargetSource::UserBefore,
+        };
+        return Target { pages: Some(pages), source };
+    }
+
+    // 读不出（None）与 0 不是一回事：`n` 只在 1..=3 时才算「原件就这么短」。
+    match origin.and_then(|o| o.pages) {
+        Some(n) if (1..=3).contains(&n) => Target {
+            pages: Some(n),
+            source: TargetSource::FromOrigin,
+        },
+        _ => Target::default(),
+    }
 }
 
-/// 测量 → 判定。骨架阶段一律「量不到」。
-pub fn fit_of(_m: Option<&PageMeasure>) -> Fit {
-    Fit::Unknown(Reason::NoPreview)
+/// 测量 → 判定。
+pub fn fit_of(m: Option<&PageMeasure>) -> Fit {
+    let Some(m) = m else {
+        return Fit::Unknown(Reason::NoPreview);
+    };
+
+    if m.status == "stale" {
+        return match m.previous.as_ref().and_then(previous_pages) {
+            Some(pages) => Fit::Stale { pages },
+            // 过期却没带上一次的数：两个版本号都报不出来，只能老实说量不到
+            None => Fit::Unknown(Reason::NoPreview),
+        };
+    }
+
+    if m.status != "ok" {
+        return Fit::Unknown(Reason::parse(m.reason.as_deref()));
+    }
+
+    let Some(pages) = m.one_page.zip(m.content_px).and_then(|(base, px)| {
+        if base > 0.0 && px > 0.0 {
+            Some(px / base)
+        } else {
+            None
+        }
+    }) else {
+        return Fit::Unknown(Reason::parse(m.reason.as_deref()));
+    };
+
+    if pages <= FIT_MAX {
+        return Fit::Fit(pages);
+    }
+    if pages <= TOLERANCE_MAX {
+        return Fit::Tolerance(pages);
+    }
+
+    let over_px = m.content_px.unwrap_or(0.0) - m.one_page.unwrap_or(0.0);
+    let line_height = match m.line_height {
+        Some(lh) if lh > 0.0 => lh,
+        _ => DEFAULT_LINE_HEIGHT,
+    };
+    Fit::Overflow {
+        pages,
+        over: pages - FIT_MAX,
+        lines: (over_px / line_height).round() as u32,
+    }
+}
+
+const FILE_VERDICT: &str = "这一页是用户上传的整页原件，没有可排的空间，不做页数判定。";
+
+/// 未设目标时 layout_result_line 的句式：两句都是 §4.4 的定稿句子，这里只是拼接。
+const NO_TARGET_JUDGEMENT: &str = "{}没有目标页数，不讲达标与否。";
+
+/// 「实测 X 页，没有溢出／在 2% 容忍内…（口径）」——fit 与容忍带共用。
+/// `measure_line` 与 `measure_section` 都调它，两处措辞才不会漂。
+fn measured_sentence(pages: f64, tolerance: bool) -> String {
+    let qualifier = if tolerance {
+        "在 2% 容忍内，仍算没有溢出。"
+    } else {
+        "没有溢出"
+    };
+    format!("实测 {pages:.2} 页，{qualifier}（{MEASURE_RULER}）")
+}
+
+fn over_sentence(over: f64, lines: u32) -> String {
+    format!("超出 {over:.2} 页（{lines} 行正文）。")
+}
+
+/// 量不到 / 过期的首句（不含「测量版本」尾注）。
+fn unavailable_head(f: &PageFacts, fit: Fit) -> String {
+    match fit {
+        Fit::Stale { pages } => {
+            let previous = f.measure.as_ref().and_then(|m| m.previous.as_ref());
+            let old_content = previous.map(|p| p.content.as_str()).unwrap_or("");
+            let now_content = f.measure.as_ref().map(|m| m.content.as_str()).unwrap_or("");
+            format!(
+                "尚未实测（内容在上次测量之后改过，旧测量作废：上次 {pages:.2} 页 / 内容版本 {old_content}，现在 {now_content}）。"
+            )
+        }
+        Fit::Unknown(reason) => format!("尚未实测（{}）。", reason.text()),
+        _ => String::new(),
+    }
+}
+
+/// 量不到的那句「为什么」：unknown 四选一，过期说内容改过。
+fn why_unavailable(fit: Fit) -> &'static str {
+    match fit {
+        Fit::Unknown(reason) => reason.brief(),
+        _ => "内容在上次测量之后改过，旧测量作废",
+    }
+}
+
+fn previous_pages(previous: &Previous) -> Option<f64> {
+    if previous.one_page > 0.0 && previous.content_px > 0.0 {
+        Some(previous.content_px / previous.one_page)
+    } else {
+        None
+    }
+}
+
+fn version_line(f: &PageFacts) -> String {
+    match f.measure.as_ref() {
+        Some(m) => format!("测量版本 #{}，内容版本 {}", m.version, m.content),
+        None => "测量版本 无".to_string(),
+    }
+}
+
+fn origin_line(origin: Option<&Origin>) -> String {
+    match origin {
+        None => "原件：这一轮没有上传原件。".to_string(),
+        // 读不出与 0 页是两件事：写 0 会让模型以为「原件是空的」，那是它编出来的页数。
+        // 所以这里给「读不出」并明确禁止它按 1 页算。
+        Some(o) => match o.pages {
+            Some(n) => format!("原件：{}，页数 {n} 页（来源：PDF 页树）", o.name),
+            None => format!(
+                "原件：{}，页数读不出（文件损坏或不是 PDF）。不要按 1 页算，也不要猜。",
+                o.name
+            ),
+        },
+    }
+}
+
+/// `{target}` 槽位：用户明说 > 原件页数（仅当 ≤3）> 未设置。
+fn target_line(target: &Target, origin: Option<&Origin>) -> String {
+    match (target.pages, target.source) {
+        (Some(n), TargetSource::UserThisTurn) => {
+            if n <= 1 {
+                "1 页（用户这一轮明确要求：压到一页）".to_string()
+            } else {
+                format!("{n} 页（用户这一轮明确要求：压到 {n} 页）")
+            }
+        }
+        (Some(n), TargetSource::UserBefore) => {
+            if n <= 1 {
+                "1 页（用户之前要求过，仍然有效）".to_string()
+            } else {
+                format!("{n} 页（用户之前要求过，仍然有效：压到 {n} 页）")
+            }
+        }
+        // pages 有值但来源是 Unset 只可能来自不一致的存量数据：有目标就按「之前要求过」说，
+        // 不能声称是「这一轮」说的（那是在编时间线）。
+        (Some(n), TargetSource::Unset) => {
+            if n <= 1 {
+                "1 页（用户之前要求过，仍然有效）".to_string()
+            } else {
+                format!("{n} 页（用户之前要求过，仍然有效：压到 {n} 页）")
+            }
+        }
+        (Some(n), TargetSource::FromOrigin) => {
+            format!("{n} 页（沿用原件页数：原件只有 {n} 页，用户没有另说）")
+        }
+        // 未设置不许落成 1 页：模型会把「1」当成用户定的目标，然后为了压到一页
+        // 删掉用户没让它删的内容。宁可让它知道「没有目标」，也不给它一个假的默认值。
+        (None, _) => match origin {
+            Some(o) if o.pages.is_none() => {
+                "未设置（原件页数读不出，用户也没有说过要几页）".to_string()
+            }
+            _ => "未设置（用户没有说过要几页，任何页数都合规；不要自行假定一页）".to_string(),
+        },
+    }
+}
+
+/// `## 这一页的实测` 段里的目标行：比 `target_line` 短（不重复「压到 N 页」），
+/// 因为段里紧跟着就是实测页数。
+fn target_short(target: &Target) -> String {
+    match (target.pages, target.source) {
+        (Some(n), TargetSource::UserThisTurn) => format!("{n} 页（用户这一轮明确要求）"),
+        (Some(n), TargetSource::UserBefore) => format!("{n} 页（用户之前要求过）"),
+        (Some(n), TargetSource::Unset) => format!("{n} 页（用户之前要求过）"),
+        (Some(n), TargetSource::FromOrigin) => format!("{n} 页（沿用原件页数）"),
+        (None, _) => "未设置（用户没有说过要几页）".to_string(),
+    }
+}
+
+/// `{verdict}` 槽位：按状态取一条，不拼接不省略。
+fn verdict_line(f: &PageFacts) -> String {
+    let fit = fit_of(f.measure.as_ref());
+    let pages = match fit {
+        Fit::Fit(p) | Fit::Tolerance(p) => p,
+        Fit::Overflow { pages, .. } => pages,
+        Fit::Unknown(_) | Fit::Stale { .. } => 0.0,
+    };
+
+    match fit {
+        Fit::Unknown(_) | Fit::Stale { .. } => {
+            "不知道：这一页量不到。不要说「一页」「单页」「已经放得下」。".to_string()
+        }
+        _ => match f.target.pages {
+            Some(t) => match fit {
+                Fit::Overflow { .. } => format!(
+                    "未达标：超出 {t} 页。不要说「已经压到一页」，也不要说「差不多」。"
+                ),
+                _ => format!("达标：这一页在 {t} 页内。"),
+            },
+            // 没有目标时也要把实测值说准：overflow 时那句「已经排到第二页上」是定稿原句，
+            // fit 时不能沿用（那时并不成立），换成「仍然要照报」。
+            None => match fit {
+                Fit::Overflow { .. } => format!(
+                    "没有目标页数，不讲达标与否。实测 {pages:.2} 页这件事仍然要说准：它已经排到第二页上。"
+                ),
+                _ => format!("没有目标页数，不讲达标与否。实测 {pages:.2} 页，仍然要照报。"),
+            },
+        },
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn measure(
+        status: &str,
+        version: u32,
+        content: &str,
+        one_page: Option<f64>,
+        content_px: Option<f64>,
+        line_height: Option<f64>,
+    ) -> PageMeasure {
+        PageMeasure {
+            page_id: "p1".into(),
+            status: status.into(),
+            version,
+            content: content.into(),
+            one_page,
+            content_px,
+            line_height,
+            previous: None,
+            reason: None,
+        }
+    }
+
+    /// 实测 1.00 页（1000 / 1000）
+    fn ok_fit() -> PageMeasure {
+        measure("ok", 12, "v37", Some(1000.0), Some(1000.0), Some(17.0))
+    }
+
+    /// 实测 1.18 页、超出 0.18 页 → 180px / 17px ≈ 11 行正文
+    fn ok_overflow() -> PageMeasure {
+        measure("ok", 12, "v37", Some(1000.0), Some(1180.0), Some(17.0))
+    }
+
+    fn facts(measure: Option<PageMeasure>, target: Target, origin: Option<Origin>) -> PageFacts {
+        PageFacts {
+            origin,
+            target,
+            measure,
+            page_label: "第一页".into(),
+            page_kind: "native".into(),
+            turn: Some(12),
+        }
+    }
+
+    fn origin_pdf(pages: Option<u32>) -> Origin {
+        Origin {
+            name: "简历.pdf".into(),
+            pages,
+        }
+    }
+
+    fn target(pages: Option<u32>, source: TargetSource) -> Target {
+        Target { pages, source }
+    }
 
     #[test]
     fn ruler_is_frozen() {
@@ -247,5 +632,486 @@ mod tests {
             Reason::Timeout => "timeout",
             Reason::Empty => "empty",
         }
+    }
+
+    // ---------------------------------------------------------------- B2-1
+
+    #[test]
+    fn fit_boundaries_follow_the_two_thresholds() {
+        // 1.00 → fit；1.005 / 1.02 → 容忍带；1.021 → overflow
+        assert!(matches!(fit_of(Some(&ok_fit())), Fit::Fit(_)));
+        assert!(matches!(
+            fit_of(Some(&measure(
+                "ok",
+                12,
+                "v37",
+                Some(1000.0),
+                Some(1005.0),
+                Some(17.0)
+            ))),
+            Fit::Tolerance(_)
+        ));
+        assert!(matches!(
+            fit_of(Some(&measure(
+                "ok",
+                12,
+                "v37",
+                Some(1000.0),
+                Some(1020.0),
+                Some(17.0)
+            ))),
+            Fit::Tolerance(_)
+        ));
+        assert!(matches!(
+            fit_of(Some(&measure(
+                "ok",
+                12,
+                "v37",
+                Some(1000.0),
+                Some(1021.0),
+                Some(17.0)
+            ))),
+            Fit::Overflow { .. }
+        ));
+    }
+
+    #[test]
+    fn overflow_carries_two_digit_over_and_whole_lines() {
+        match fit_of(Some(&ok_overflow())) {
+            Fit::Overflow { pages, over, lines } => {
+                assert_eq!(format!("{pages:.2}"), "1.18");
+                assert_eq!(format!("{over:.2}"), "0.18");
+                assert_eq!(lines, 11);
+            }
+            other => panic!("应判为溢出，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn overflow_falls_back_to_default_line_height() {
+        // 没有行高就用 paper.css 默认 17px 折算，不许 panic、不许算出 0 行
+        let m = measure("ok", 12, "v37", Some(1000.0), Some(1187.0), None);
+        match fit_of(Some(&m)) {
+            Fit::Overflow { lines, .. } => assert_eq!(lines, 11),
+            other => panic!("应判为溢出，实际 {other:?}"),
+        }
+    }
+
+    /// 期望串里用 `MEASURE_RULER` 变量拼，不抄整句：口径串全仓只有一处定义，
+    /// 测试里再写一遍就成了第二个真相源（改了常量测试还会绿）。
+    fn ruler() -> &'static str {
+        MEASURE_RULER
+    }
+
+    #[test]
+    fn measure_line_fit_is_verbatim() {
+        let f = facts(
+            Some(ok_fit()),
+            target(Some(1), TargetSource::UserThisTurn),
+            Some(origin_pdf(Some(3))),
+        );
+        assert_eq!(
+            measure_line(&f),
+            format!("实测 1.00 页，没有溢出（{}）。测量版本 #12，内容版本 v37", ruler())
+        );
+        assert!(measure_line(&f).contains(MEASURE_RULER));
+        assert!(!measure_line(&f).contains("860"));
+        assert!(!measure_line(&f).contains("16mm"));
+    }
+
+    #[test]
+    fn measure_line_tolerance_is_verbatim() {
+        let f = facts(
+            Some(measure("ok", 12, "v37", Some(1000.0), Some(1010.0), Some(17.0))),
+            target(Some(1), TargetSource::UserThisTurn),
+            None,
+        );
+        assert_eq!(
+            measure_line(&f),
+            format!(
+                "实测 1.01 页，在 2% 容忍内，仍算没有溢出。（{}）测量版本 #12，内容版本 v37",
+                ruler()
+            )
+        );
+    }
+
+    #[test]
+    fn measure_line_overflow_is_verbatim() {
+        let f = facts(Some(ok_overflow()), target(Some(1), TargetSource::UserBefore), None);
+        assert_eq!(
+            measure_line(&f),
+            format!(
+                "实测 1.18 页，超出 0.18 页（11 行正文）。（{}）测量版本 #12，内容版本 v37",
+                ruler()
+            )
+        );
+    }
+
+    #[test]
+    fn measure_line_stale_is_verbatim() {
+        let mut m = measure("stale", 0, "v37", None, None, Some(17.0));
+        m.previous = Some(Previous {
+            content: "v36".into(),
+            one_page: 1000.0,
+            content_px: 1000.0,
+        });
+        let f = facts(Some(m), target(Some(1), TargetSource::UserThisTurn), None);
+        assert_eq!(
+            measure_line(&f),
+            "尚未实测（内容在上次测量之后改过，旧测量作废：上次 1.00 页 / 内容版本 v36，现在 v37）。测量版本 无"
+        );
+        assert!(!measure_line(&f).contains("没有溢出"));
+    }
+
+    #[test]
+    fn measure_line_unknown_never_says_no_overflow() {
+        let cases = [
+            (None, "预览没打开，量不到"),
+            (
+                Some(measure("unknown", 0, "v37", None, None, None)),
+                "预览没打开，量不到",
+            ),
+        ];
+        for (raw, why) in cases {
+            let f = facts(raw, target(Some(1), TargetSource::UserThisTurn), None);
+            let line = measure_line(&f);
+            assert_eq!(
+                line,
+                format!("尚未实测（{why}）。量不到就不能说这一页「在一页内」。测量版本 无")
+            );
+            // F-007 的核心：量不到时绝不能出现「没有溢出」
+            assert!(!line.contains("没有溢出"));
+        }
+
+        let mut m = measure("unknown", 0, "v37", None, None, None);
+        m.reason = Some("empty".into());
+        let f = facts(Some(m), target(None, TargetSource::Unset), None);
+        assert_eq!(
+            measure_line(&f),
+            "尚未实测（这一页是空的，没有可量的内容）。量不到就不能说这一页「在一页内」。测量版本 无"
+        );
+    }
+
+    // ---------------------------------------------------------------- B2-2
+
+    /// `Target` 没派生 `PartialEq`（B0-3 定死的形状），测试里比字段。
+    fn parts(target: Target) -> (Option<u32>, TargetSource) {
+        (target.pages, target.source)
+    }
+
+    #[test]
+    fn target_of_five_sources() {
+        let resume = json!({ "targetPages": 1, "targetPagesTurn": 11 });
+        // 用户这一轮明说：turn 差 1
+        assert_eq!(
+            parts(target_of(&resume, None, Some(12))),
+            (Some(1), TargetSource::UserThisTurn)
+        );
+        // 之前说过：turn 差 2
+        assert_eq!(
+            parts(target_of(&resume, None, Some(13))),
+            (Some(1), TargetSource::UserBefore)
+        );
+        // 排版侧没有 turn → 一律「之前要求过」
+        assert_eq!(
+            parts(target_of(&resume, None, None)),
+            (Some(1), TargetSource::UserBefore)
+        );
+        // 原件 3 页 → 沿用
+        assert_eq!(
+            parts(target_of(&json!({}), Some(&origin_pdf(Some(3))), Some(12))),
+            (Some(3), TargetSource::FromOrigin)
+        );
+        // 原件 4 页 → 不沿用，落成未设置（不是 4 页）
+        assert_eq!(
+            parts(target_of(&json!({}), Some(&origin_pdf(Some(4))), Some(12))),
+            (None, TargetSource::Unset)
+        );
+        // 原件读不出 + 用户没说 → 未设置
+        assert_eq!(
+            parts(target_of(&json!({}), Some(&origin_pdf(None)), Some(12))),
+            (None, TargetSource::Unset)
+        );
+    }
+
+    #[test]
+    fn target_slots_are_verbatim() {
+        let origin_readable = origin_pdf(Some(3));
+        let origin_unreadable = origin_pdf(None);
+        let cases: Vec<(Target, Option<&Origin>, &str)> = vec![
+            (
+                target(Some(1), TargetSource::UserThisTurn),
+                None,
+                "1 页（用户这一轮明确要求：压到一页）",
+            ),
+            (
+                target(Some(1), TargetSource::UserBefore),
+                None,
+                "1 页（用户之前要求过，仍然有效）",
+            ),
+            (
+                target(Some(3), TargetSource::FromOrigin),
+                Some(&origin_readable),
+                "3 页（沿用原件页数：原件只有 3 页，用户没有另说）",
+            ),
+            (
+                target(None, TargetSource::Unset),
+                Some(&origin_readable),
+                "未设置（用户没有说过要几页，任何页数都合规；不要自行假定一页）",
+            ),
+            (
+                target(None, TargetSource::Unset),
+                Some(&origin_unreadable),
+                "未设置（原件页数读不出，用户也没有说过要几页）",
+            ),
+        ];
+        for (t, origin, expected) in cases {
+            assert_eq!(target_line(&t, origin), expected);
+        }
+    }
+
+    #[test]
+    fn target_slot_spells_out_n_above_one() {
+        assert_eq!(
+            target_line(&target(Some(2), TargetSource::UserThisTurn), None),
+            "2 页（用户这一轮明确要求：压到 2 页）"
+        );
+        assert!(target_line(&target(Some(2), TargetSource::UserThisTurn), None)
+            .contains("压到 2 页"));
+        assert_eq!(
+            target_line(&target(Some(2), TargetSource::UserBefore), None),
+            "2 页（用户之前要求过，仍然有效：压到 2 页）"
+        );
+    }
+
+    #[test]
+    fn origin_slot_never_writes_zero_pages() {
+        let unreadable = facts(
+            Some(ok_fit()),
+            target(Some(1), TargetSource::UserThisTurn),
+            Some(origin_pdf(None)),
+        );
+        let text = block(&unreadable);
+        assert!(text.contains(
+            "原件：简历.pdf，页数读不出（文件损坏或不是 PDF）。不要按 1 页算，也不要猜。"
+        ));
+        assert!(!text.contains("页数 0"));
+
+        let no_attachment = facts(Some(ok_fit()), target(Some(1), TargetSource::UserThisTurn), None);
+        assert!(block(&no_attachment).contains("原件：这一轮没有上传原件。"));
+    }
+
+    #[test]
+    fn block_fit_is_verbatim() {
+        let f = facts(
+            Some(ok_fit()),
+            target(Some(1), TargetSource::UserThisTurn),
+            Some(origin_pdf(Some(3))),
+        );
+        assert_eq!(
+            block(&f),
+            format!(
+                "【页面事实】下面是程序实测的当前值。页数只能照抄这几个数：不要改写、不要四舍五入、不要按比例推算。\n\
+                 \n\
+                 原件：简历.pdf，页数 3 页（来源：PDF 页树）\n\
+                 目标页数：1 页（用户这一轮明确要求：压到一页）\n\
+                 这一页「第一页」：实测 1.00 页，没有溢出（{}）。测量版本 #12，内容版本 v37\n\
+                 结论：达标：这一页在 1 页内。",
+                ruler()
+            )
+        );
+        // 防回退：事实块里不许出现打印口径与早期错的容器宽
+        let text = block(&f);
+        assert!(!text.contains("16mm"));
+        assert!(!text.contains("860"));
+    }
+
+    #[test]
+    fn block_verdict_covers_the_five_states() {
+        let cases = [
+            (
+                "有目标 + fit",
+                facts(Some(ok_fit()), target(Some(1), TargetSource::UserBefore), None),
+                "结论：达标：这一页在 1 页内。",
+            ),
+            (
+                "有目标 + overflow",
+                facts(
+                    Some(ok_overflow()),
+                    target(Some(1), TargetSource::UserBefore),
+                    None,
+                ),
+                "结论：未达标：超出 1 页。不要说「已经压到一页」，也不要说「差不多」。",
+            ),
+            (
+                "未设目标 + overflow",
+                facts(Some(ok_overflow()), Target::default(), Some(origin_pdf(Some(3)))),
+                "结论：没有目标页数，不讲达标与否。实测 1.18 页这件事仍然要说准：它已经排到第二页上。",
+            ),
+            (
+                "未设目标 + fit",
+                facts(Some(ok_fit()), Target::default(), None),
+                "结论：没有目标页数，不讲达标与否。实测 1.00 页，仍然要照报。",
+            ),
+            (
+                "量不到",
+                facts(
+                    None,
+                    target(Some(1), TargetSource::UserThisTurn),
+                    Some(origin_pdf(Some(3))),
+                ),
+                "结论：不知道：这一页量不到。不要说「一页」「单页」「已经放得下」。",
+            ),
+        ];
+        for (name, f, expected) in cases {
+            let text = block(&f);
+            assert!(text.contains(expected), "{name} 的结论不对：{text}");
+        }
+    }
+
+    #[test]
+    fn block_unknown_does_not_claim_no_overflow() {
+        let f = facts(None, target(Some(1), TargetSource::UserThisTurn), None);
+        let text = block(&f);
+        assert!(text.contains("尚未实测"));
+        assert!(!text.contains("没有溢出"));
+    }
+
+    #[test]
+    fn block_file_page_injects_only_the_verdict() {
+        let mut f = facts(
+            Some(ok_fit()),
+            target(Some(1), TargetSource::UserThisTurn),
+            Some(origin_pdf(Some(3))),
+        );
+        f.page_kind = "file".into();
+        assert_eq!(
+            block(&f),
+            "结论：这一页是用户上传的整页原件，没有可排的空间，不做页数判定。"
+        );
+        let text = block(&f);
+        // 整块短路：不实测、不判目标，也不新造槽位
+        assert!(!text.contains("实测"));
+        assert!(!text.contains("目标页数"));
+        assert!(!text.contains("【页面事实】"));
+    }
+
+    // ---------------------------------------------------------------- B2-3
+
+    #[test]
+    fn measure_section_fit_is_verbatim() {
+        let f = facts(
+            Some(ok_fit()),
+            target(Some(1), TargetSource::UserThisTurn),
+            None,
+        );
+        assert_eq!(
+            measure_section(&f),
+            format!(
+                "## 这一页的实测\n\
+                 实测 1.00 页，没有溢出（{}）。\n\
+                 目标页数 1 页（用户这一轮明确要求）。达标。\n\
+                 测量版本 #12，内容版本 v37。内容一改，这些数字作废，要重新量。\n",
+                ruler()
+            )
+        );
+    }
+
+    #[test]
+    fn measure_section_overflow_inserts_the_over_line() {
+        let f = facts(
+            Some(ok_overflow()),
+            target(Some(1), TargetSource::UserThisTurn),
+            None,
+        );
+        assert_eq!(
+            measure_section(&f),
+            format!(
+                "## 这一页的实测\n\
+                 实测 1.18 页（{}）。\n\
+                 超出 0.18 页（11 行正文）。\n\
+                 目标页数 1 页（用户这一轮明确要求）。未达标。\n\
+                 测量版本 #12，内容版本 v37。内容一改，这些数字作废，要重新量。\n",
+                ruler()
+            )
+        );
+    }
+
+    #[test]
+    fn measure_section_unknown_is_not_fit() {
+        let f = facts(None, target(Some(1), TargetSource::UserThisTurn), None);
+        let text = measure_section(&f);
+        assert!(text.starts_with("## 这一页的实测"));
+        assert_eq!(
+            text,
+            "## 这一页的实测\n\
+             尚未实测（预览没打开，量不到）。\n\
+             不知道有没有达标。这一轮不要说「已经压到一页」「放在一页内」。\n"
+        );
+        assert!(!text.contains("没有溢出"));
+        assert_ne!(text, measure_section(&facts(Some(ok_fit()), Target::default(), None)));
+    }
+
+    #[test]
+    fn measure_section_without_target_replaces_the_last_two_lines() {
+        let f = facts(Some(ok_fit()), Target::default(), Some(origin_pdf(Some(3))));
+        let text = measure_section(&f);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "## 这一页的实测");
+        assert!(lines[1].contains("实测 1.00 页，没有溢出"));
+        assert!(lines[2].contains("未设置（用户没有说过要几页）"));
+        assert!(lines[3].contains("没有目标，不讲达标与否；实测值仍然要照报。"));
+        assert_eq!(lines.len(), 4);
+    }
+
+    #[test]
+    fn measure_section_shares_the_measured_sentence_with_measure_line() {
+        // 同一份 PageFacts：把 measure_line 的版本尾注切掉，剩下的必须原样出现在实测段里
+        let f = facts(Some(ok_fit()), target(Some(1), TargetSource::UserThisTurn), None);
+        let line = measure_line(&f);
+        let shared = &line[..line.find("测量版本").expect("fit 文案带版本号")];
+        assert_eq!(
+            shared,
+            format!("实测 1.00 页，没有溢出（{}）。", ruler())
+        );
+        assert!(measure_section(&f).contains(shared));
+    }
+
+    #[test]
+    fn layout_result_line_three_states_verbatim() {
+        let fit = facts(Some(ok_fit()), target(Some(1), TargetSource::UserBefore), None);
+        assert_eq!(
+            layout_result_line(&fit),
+            "实测 1.00 页，没有溢出（目标 1 页，达标）。"
+        );
+
+        let overflow = facts(
+            Some(measure("ok", 12, "v37", Some(1000.0), Some(1120.0), Some(17.0))),
+            target(Some(1), TargetSource::UserBefore),
+            None,
+        );
+        assert_eq!(
+            layout_result_line(&overflow),
+            "实测 1.12 页，超出 0.12 页（目标 1 页，仍未达标）。继续压，或停在这一档并说清差多少。"
+        );
+
+        let unknown = facts(None, target(Some(1), TargetSource::UserBefore), None);
+        assert_eq!(
+            layout_result_line(&unknown),
+            "尚未实测（测量不可用：预览没打开）。这一轮不能确认是否在一页内 —— 不要写「已压到一页」。"
+        );
+        // 量不到的措辞必须与达标明显不同，且不许出现「没有溢出」
+        assert_ne!(layout_result_line(&unknown), layout_result_line(&fit));
+        assert!(!layout_result_line(&unknown).contains("没有溢出"));
+    }
+
+    #[test]
+    fn layout_result_line_without_target_does_not_judge() {
+        let f = facts(Some(ok_fit()), Target::default(), None);
+        assert_eq!(
+            layout_result_line(&f),
+            "实测 1.00 页，没有溢出。没有目标页数，不讲达标与否。"
+        );
+        assert!(!layout_result_line(&f).contains("达标）"));
     }
 }
