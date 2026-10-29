@@ -123,8 +123,13 @@ id 必须由**工具侧**生成并写进 op，等前端生成就晚了。
 | 通道 | 字段 | 形状 |
 |---|---|---|
 | `chat_send` | `args.measure` | `PageMeasure?` |
+| `chat_send` | `result.origin` | `{ name: string, pages?: number }?` |
 | `layout_submit` | `args.measure` | `PageMeasure?` |
 | `layout_submit` | `args.origin` | `{ name, pages? }?` —— 原件页数，只在本轮有效 |
+
+`chat_send.result.origin` 来自本轮附件的解析结果（`attach::Materials.origin`），**不落库**：
+前端拿到后存内存，随下一次 `layout_submit` 的 `args.origin` 转交给排版侧。
+刷新或重启即丢失 —— 那时排版侧按「这一轮没有上传原件」处理，不假装知道。
 
 `PageMeasure.status` 只有三个：`ok`（量到了）/ `unknown`（量不到，带 `reason`）/
 `stale`（量到过，但内容之后改过 —— 旧值作废，带 `previous`）。

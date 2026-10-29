@@ -95,10 +95,6 @@ pub struct PageFacts {
     /// 当前页名与 kind（file 页不做页数判定）
     pub page_label: String,
     pub page_kind: String,
-    /// 第几条用户消息（排版侧为 None）。`target_of` 用它判「这一轮 / 之前」，
-    /// 结论落在 `target.source` 上，字段本身给排查留依据。
-    #[allow(dead_code)]
-    pub turn: Option<u32>,
 }
 
 impl PageFacts {
@@ -145,7 +141,9 @@ impl PageFacts {
         };
 
         // 找不到简历时也要给出一份「未设置」的目标：报错交给工具层，
-        // 事实块本身不该因为这个整块消失
+        // 事实块本身不该因为这个整块消失。
+        // `turn` 只在这一步有用（判「这一轮 / 之前」），结论落在 `target.source` 上，
+        // 所以不必留在结构体里给后续读者看。
         let target = match resume {
             Some(resume) => target_of(resume, origin.as_ref(), turn),
             None => target_of(&Value::Null, origin.as_ref(), turn),
@@ -164,7 +162,6 @@ impl PageFacts {
                 .and_then(|page| page["kind"].as_str())
                 .unwrap_or_default()
                 .to_string(),
-            turn,
         }
     }
 }
@@ -627,7 +624,6 @@ mod tests {
             measure,
             page_label: "第一页".into(),
             page_kind: "native".into(),
-            turn: Some(12),
         }
     }
 
@@ -1082,7 +1078,7 @@ mod tests {
         );
         assert_eq!(facts.page_label, "第一页");
         assert_eq!(facts.page_kind, "native");
-        assert_eq!(facts.turn, Some(12));
+        // turn（第几条用户消息）不进结构体，它的结论就是下面这个 source
         assert_eq!(
             parts(facts.target),
             (Some(1), TargetSource::UserThisTurn)
