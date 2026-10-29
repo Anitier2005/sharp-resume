@@ -15,7 +15,7 @@ import { skillsPrompt } from "@/lib/skills";
 import { AiSettingsSheet } from "./ai-settings";
 import { AssistantTurn, EmptyTurn, SystemTurn, TypingTurn, UserTurn } from "./message";
 import { aiReady, loadAi, saveAi, slotAi, streamChat, type AiSettings } from "@/lib/ai";
-import { findModel, listProfiles } from "@/lib/model-config";
+import { DEFAULT_RESERVE, findModel, listProfiles } from "@/lib/model-config";
 import { buildContext, buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
 import { isTauri } from "@/lib/storage";
 import { applyAgentActions, askSessionFromLayout, registerChatBridge, type AskQuestion } from "@/lib/agent-actions";
@@ -94,6 +94,8 @@ export function ChatPanel() {
   const baseRef = useRef<{ key: string; flat: Flat } | null>(null);
   /** 消息真相源在 Rust（chat_history 拉投影）；浏览器调试模式才退回工作区 */
   const [remote, setRemote] = useState<ChatMessage[]>([]);
+  /** 因为窗口装不下而被折叠掉的条数（消息还在库里，不是删除） */
+  const [folded, setFolded] = useState(0);
   const [reasoning, setReasoning] = useState("");
   const desktop = isTauri();
 
@@ -132,6 +134,7 @@ export function ChatPanel() {
       baseUrl: profile.baseUrl.trim() || spec.baseUrl,
       apiKey: profile.apiKey || ai.apiKey,
       contextWindow: profile.contextWindow ?? spec.contextWindow,
+      reserve: profile.reserve ?? DEFAULT_RESERVE,
       temperature: profile.temperature ?? spec.defaultTemperature,
       reasoning: profile.reasoning ?? spec.reasoning[0] ?? undefined,
     };
@@ -155,20 +158,34 @@ export function ChatPanel() {
 
   const personId = person?.id ?? null;
 
-  // 切人/启动时从 Rust 拉一次（只给要显示的那一段，Rust 已按 token 预算裁剪过）
+  // 切人/启动时从 Rust 拉一次（只给要显示的那一段，Rust 按「配置窗口 − 压缩预留」裁过）
+  // 窗口或预留变了也要重拉：换了小窗口的模型，看见的历史本来就该变短
   useEffect(() => {
     if (!desktop || !personId) {
       setRemote([]);
+      setFolded(0);
       return;
     }
     let alive = true;
-    void invoke<ChatMessage[]>("chat_history", { key: personId })
-      .then((list) => alive && setRemote(list))
-      .catch(() => alive && setRemote([]));
+    void invoke<{ messages: ChatMessage[]; dropped: number }>("chat_history", {
+      key: personId,
+      window: ai.contextWindow ?? null,
+      reserve: ai.reserve ?? null,
+    })
+      .then((slice) => {
+        if (!alive) return;
+        setRemote(slice.messages);
+        setFolded(slice.dropped);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setRemote([]);
+        setFolded(0);
+      });
     return () => {
       alive = false;
     };
-  }, [desktop, personId]);
+  }, [desktop, personId, ai.contextWindow, ai.reserve]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -435,6 +452,8 @@ export function ChatPanel() {
               temperature: ai.temperature,
               reasoning: ai.reasoning ?? null,
               contextWindow: ai.contextWindow ?? null,
+              // 压缩预留：窗口减掉它才是历史能占的部分（模型配置里可调）
+              reserve: ai.reserve ?? null,
               // 压缩摘要用「压缩」用途的模型；没配时后端自动沿用主模型
               compact: compactFor(),
               resumeId: resume.id,
@@ -472,7 +491,18 @@ export function ChatPanel() {
           });
 
           // 用 Rust 的历史覆盖本地投影：draft 换成正式消息，顺手拿到裁剪后的列表
-          setRemote(await invoke<ChatMessage[]>("chat_history", { key: person.id }));
+          {
+            const slice = await invoke<{ messages: ChatMessage[]; dropped: number }>(
+              "chat_history",
+              {
+                key: person.id,
+                window: ai.contextWindow ?? null,
+                reserve: ai.reserve ?? null,
+              },
+            );
+            setRemote(slice.messages);
+            setFolded(slice.dropped);
+          }
 
           // 答复必须回到排版 agent 手里，否则这一轮只是白白花掉一次调用
           answerBack(content);
@@ -727,6 +757,12 @@ export function ChatPanel() {
 
       <div className={styles.thread} ref={scrollRef}>
         <div className={styles.threadIn}>
+          {/* 折叠提示：消息本身没删，只是这次窗口装不下；模型仍可用检索翻回去 */}
+          {folded > 0 && (
+            <div className={styles.folded}>
+              更早的 {folded} 条消息超出当前上下文窗口，已折叠；模型需要时会自己检索
+            </div>
+          )}
           {messages.length === 0 && !busy && <EmptyTurn name={resume.title} onPick={setInput} />}
           {messages.map((message) =>
             message.system ? (

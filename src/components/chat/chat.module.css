@@ -74,6 +74,17 @@
   gap: 22px;
 }
 
+/* 折叠提示：一句话说清「没丢，只是超窗口了」，别做成可点的入口 */
+.folded {
+  align-self: center;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.625rem;
+  color: var(--fg-4);
+  background: var(--bg-elev);
+}
+
 /* 拖拽悬停提示 */
 /* 拖入文件的提示：只画一圈虚线和中间一个胶囊。
    以前是整块 86% 白遮罩，下面的消息会透上来，看着像文字重叠了两层。 */

@@ -245,6 +245,8 @@ export interface ModelProfile {
   reasoning?: string;
   /** 上下文窗口（token） */
   contextWindow?: number;
+  /** 预留给压缩提示词的 token：从窗口里扣掉它，剩下的才给历史 */
+  reserve?: number;
 }
 
 const PROFILE_KEY = "sharp-resume:profiles:v1";
@@ -302,6 +304,8 @@ function normalizeProfile(input: unknown): ModelProfile | null {
       typeof raw.contextWindow === "number" && raw.contextWindow > 0
         ? Math.round(raw.contextWindow)
         : undefined,
+    reserve:
+      typeof raw.reserve === "number" && raw.reserve >= 0 ? Math.round(raw.reserve) : undefined,
   };
 }
 
@@ -315,6 +319,7 @@ export function defaultProfile(model: ModelConfig): ModelProfile {
     temperature: model.defaultTemperature,
     reasoning: model.reasoning[0],
     contextWindow: model.contextWindow,
+    reserve: DEFAULT_RESERVE,
   };
 }
 
@@ -359,6 +364,18 @@ export const CONTEXT_PRESETS = [
   { value: 200_000, label: "200K" },
   { value: 1_000_000, label: "1M" },
 ] as const;
+
+/** 压缩预留的候选档位：窗口再大也就几段摘要，给太多等于白占 */
+export const RESERVE_PRESETS = [
+  { value: 1_000, label: "1K" },
+  { value: 2_000, label: "2K" },
+  { value: 4_000, label: "4K" },
+  { value: 8_000, label: "8K" },
+  { value: 16_000, label: "16K" },
+] as const;
+
+/** 没填时的压缩预留：够放一轮摘要提示词加被摘要的那几段 */
+export const DEFAULT_RESERVE = 2_000;
 
 /**
  * 开发期默认配置，两层合并：

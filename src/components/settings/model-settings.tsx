@@ -14,7 +14,9 @@ import {
 } from "@/lib/ai";
 import {
   CONTEXT_PRESETS,
+  DEFAULT_RESERVE,
   MODEL_KINDS,
+  RESERVE_PRESETS,
   defaultProfile,
   findModel,
   isCustomModel,
@@ -617,6 +619,17 @@ function ProfileFields({
             onChange={(value) => onPatch({ contextWindow: Number(value) })}
           />
         </Field>
+        <Field
+          label="压缩预留"
+          hint="从窗口里先扣掉，留给压缩提示词；剩下的才是历史能用的部分"
+        >
+          <Select
+            ariaLabel="压缩预留"
+            value={String(profile.reserve ?? DEFAULT_RESERVE)}
+            options={reserveOptions(profile.reserve ?? DEFAULT_RESERVE)}
+            onChange={(value) => onPatch({ reserve: Number(value) })}
+          />
+        </Field>
         <Field label="接口地址" wide>
           <Input
             value={profile.baseUrl}
@@ -694,6 +707,17 @@ function DraftProfile({ draft, onCommit }: { draft: ModelConfig; onCommit: () =>
               onChange={(value) => setProfile({ ...profile, contextWindow: Number(value) })}
             />
           </Field>
+          <Field
+            label="压缩预留"
+            hint="窗口减去它，才是历史能占的 token"
+          >
+            <Select
+              ariaLabel="压缩预留"
+              value={String(profile.reserve ?? DEFAULT_RESERVE)}
+              options={reserveOptions(profile.reserve ?? DEFAULT_RESERVE)}
+              onChange={(value) => setProfile({ ...profile, reserve: Number(value) })}
+            />
+          </Field>
           <Field label="接口地址" wide>
             <Input
               value={profile.baseUrl}
@@ -725,6 +749,18 @@ function DraftProfile({ draft, onCommit }: { draft: ModelConfig; onCommit: () =>
 /** 下拉档位：模型自带的值如果不在预设里，补一条进去，免得显示成空 */
 function contextOptions(value: number) {
   const options: { value: string; label: string }[] = CONTEXT_PRESETS.map((item) => ({
+    value: String(item.value),
+    label: String(item.label),
+  }));
+  if (!options.some((item) => item.value === String(value))) {
+    options.push({ value: String(value), label: `${Math.round(value / 1000)}K` });
+  }
+  return options;
+}
+
+/** 压缩预留的档位，同 contextOptions：存量值不在预设里就补一条 */
+function reserveOptions(value: number) {
+  const options: { value: string; label: string }[] = RESERVE_PRESETS.map((item) => ({
     value: String(item.value),
     label: String(item.label),
   }));

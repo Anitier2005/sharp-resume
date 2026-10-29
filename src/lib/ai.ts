@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import {
   LOCAL_AI,
   MODELS,
+  DEFAULT_RESERVE,
   findModel,
   listProfiles,
   type ModelConfig,
@@ -23,6 +24,8 @@ export interface AiSettings {
   reasoning?: string;
   /** 上下文窗口（token），缺省取模型配置 */
   contextWindow?: number;
+  /** 预留给压缩提示词的 token，缺省 2000；窗口减掉它才是历史能用的部分 */
+  reserve?: number;
   /** 用的是这个模型的哪一套配置（见 model-config 的 ModelProfile） */
   profileId?: string;
 }
@@ -37,6 +40,7 @@ export const DEFAULT_AI: AiSettings = {
   temperature: LOCAL_AI?.temperature ?? MODELS[0]?.defaultTemperature ?? 0.4,
   reasoning: LOCAL_AI?.reasoning ?? MODELS[0]?.reasoning[0],
   contextWindow: MODELS[0]?.contextWindow,
+  reserve: DEFAULT_RESERVE,
 };
 
 /** 兼容旧版设置弹窗里的快捷预设（设置页已经改成从模型清单选，这里留作兜底） */
@@ -75,6 +79,8 @@ export function aiFromModel(model: ModelConfig, prev: AiSettings = loadAi()): Ai
     temperature: model.defaultTemperature,
     reasoning: model.reasoning[0],
     contextWindow: model.contextWindow,
+    // 压缩预留跟模型无关，是用户对「历史压到多细」的选择，换模型不该重置
+    reserve: prev.reserve ?? DEFAULT_RESERVE,
   };
 }
 

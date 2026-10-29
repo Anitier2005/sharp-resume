@@ -25,9 +25,15 @@ use crate::net::{AiRequest, ChatMessage, StreamChunk};
 /// system 模板随包硬编码：改 `prompts/system.md` 重新打包即可生效
 const SYSTEM_TEMPLATE: &str = include_str!("../../prompts/system.md");
 
-/// 消息全部落盘（一条不丢）；这里只限制「一次渲染多少条」。
-/// 300 条足够覆盖正常的一次求职季，又不会让 DOM 大到滚动发涩。
-const DISPLAY_LIMIT: usize = 300;
+/// 历史能用多少 token，由「模型配置里的上下文 − 压缩预留」推出来，不再按条数拍。
+/// 下限/上限只是护栏：下限保证小窗口也能翻到上一轮，上限是 DOM 与滚动的保护，
+/// 正常配置（≤200K）碰不到它。真正的窗口永远是配置说了算。
+const HISTORY_FLOOR: usize = 30;
+const HISTORY_CEIL: usize = 400;
+/// 用户没在模型配置里填「压缩预留」时的默认值：够放一轮摘要提示词 + 被摘要的那几段
+pub(crate) const DEFAULT_RESERVE: usize = 2_000;
+/// 历史只占窗口的一部分，剩下的留给模型输出（prompt + completion 共享同一个窗口）
+const HISTORY_SHARE: usize = 60;
 
 /// 被挤出上下文的历史至少这么多 token 才值得生成一次摘要 ——
 /// 少了就生成，等于每轮都多一次模型调用，换来的信息却很有限。
@@ -214,6 +220,14 @@ pub(crate) fn trim_history(history: &[Value], budget: usize) -> Vec<Value> {
     picked
 }
 
+/// 历史预算：窗口减去预留给压缩提示词与 system 的那部分，再按 `HISTORY_SHARE` 折算。
+///
+/// 一个算式给发送与渲染共用 —— 界面显示的窗口和模型看到的窗口必须是同一个，
+/// 否则用户会看到「我明明说了」而模型说没收到。
+pub(crate) fn history_budget(window: usize, reserved: usize) -> usize {
+    window.saturating_sub(reserved) * HISTORY_SHARE / 100
+}
+
 /// 把被挤出窗口的历史压成要点。
 ///
 /// 为什么不是「直接丢掉」：聊到第 30 轮时，第 3 轮定下的口径（「QPS 只写 3000」）
@@ -329,13 +343,46 @@ fn snippet_chars(text: &str, max: usize) -> String {
 
 /* ---------- 命令 ---------- */
 
-/// 前端进来先拉一次当前会话（只给要显示的一段）
+/// 会话投影：显示用的那一段 + 折叠了多少条。
+/// 折叠不是删除 —— 消息仍在库里，模型能用 `search_history` 翻回去。
+#[derive(Serialize)]
+pub struct HistorySlice {
+    messages: Vec<Value>,
+    dropped: usize,
+}
+
+/// 前端进来先拉一次当前会话。
+///
+/// 返回「要显示的那一段」+ 折叠了多少条：窗口由调用方按当前模型的配置传进来，
+/// 这里不再有 300 条这种拍出来的数。
 #[tauri::command]
-pub fn chat_history(app: tauri::AppHandle, state: tauri::State<'_, Sessions>, key: String) -> Vec<Value> {
+pub fn chat_history(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Sessions>,
+    key: String,
+    window: Option<usize>,
+    reserve: Option<usize>,
+) -> HistorySlice {
     state.ensure_loaded(&app, &key);
     let all = state.list(&key);
-    let start = all.len().saturating_sub(DISPLAY_LIMIT);
-    all[start..].to_vec()
+    let budget = history_budget(
+        window.unwrap_or(64_000),
+        reserve.unwrap_or(DEFAULT_RESERVE),
+    );
+    let mut picked = trim_history(&all, budget);
+    // 护栏只在极端配置下起作用：窗口大到 1M 时别把整段历史都甩给 DOM，
+    // 窗口小到 8K 时也别只剩一句「好的」
+    if picked.len() > HISTORY_CEIL {
+        picked = picked.split_off(picked.len() - HISTORY_CEIL);
+    }
+    if picked.len() < HISTORY_FLOOR && all.len() > picked.len() {
+        let keep = HISTORY_FLOOR.min(all.len());
+        picked = all[all.len() - keep..].to_vec();
+    }
+    HistorySlice {
+        dropped: all.len().saturating_sub(picked.len()),
+        messages: picked,
+    }
 }
 
 /// 追加一条消息（前端负责构造完整结构：id/role/time/attachments…）
@@ -415,6 +462,10 @@ pub struct SendArgs {
     /// 「压缩」用途的模型（设置里单独配）。不给就沿用本轮主模型。
     #[serde(default)]
     pub compact: Option<CompactConfig>,
+    /// 预留给压缩提示词的 token：从窗口里先扣掉它，再算能放多少历史。
+    /// 用户可在模型配置里调，缺省 `DEFAULT_RESERVE`。
+    #[serde(default)]
+    pub reserve: Option<usize>,
 }
 
 /// 压缩历史摘要用的接入参数
@@ -456,7 +507,9 @@ pub async fn chat_send(
         system.push_str(args.extra.trim());
     }
     let window = args.context_window.unwrap_or(64_000);
-    let budget = window.saturating_sub(estimate_tokens(&system) + 2_000) * 6 / 10;
+    // 窗口 = 配置里的上下文；先扣 system 与「压缩提示词预留」，剩下的才是历史的
+    let reserved = estimate_tokens(&system) + args.reserve.unwrap_or(DEFAULT_RESERVE);
+    let budget = history_budget(window, reserved);
     let all = state.list(&args.key);
     let history = trim_history(&all, budget);
 
@@ -597,6 +650,14 @@ mod tests {
     fn trim_always_keeps_one() {
         let history = vec![json!({ "role": "user", "content": "y".repeat(4000) })];
         assert_eq!(trim_history(&history, 10).len(), 1);
+    }
+
+    /// 窗口按配置算：64K 减 2K 预留、六成给历史；预留比窗口还大时归零而不是下溢
+    #[test]
+    fn budget_follows_the_configured_window() {
+        assert_eq!(history_budget(64_000, 2_000), 62_000 * HISTORY_SHARE / 100);
+        assert_eq!(history_budget(1_000, 2_000), 0);
+        assert_eq!(history_budget(128_000, 8_000), 120_000 * HISTORY_SHARE / 100);
     }
     fn temp_db(tag: &str) -> PathBuf {
         let stamp = SystemTime::now()
