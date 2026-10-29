@@ -6,7 +6,15 @@ import { useToast } from "@/components/ui/toast-context";
 import { ChevronDown, ChevronRight } from "@/components/ui/icons";
 import { Composer } from "./composer";
 import { Disclosure } from "@/components/ui";
-import { toAttachment, stripPreview, attachmentText, attachmentImage, ensureOcrText, isImage } from "@/lib/attach";
+import {
+  toAttachment,
+  stripPreview,
+  attachmentBody,
+  attachmentText,
+  attachmentImage,
+  ensureOcrText,
+  isImage,
+} from "@/lib/attach";
 import { attachAtEnd } from "@/lib/inline-tokens";
 import { modelById } from "@/lib/model-config";
 import { diff, flatten, renderDelta, type Flat } from "@/lib/changes";
@@ -413,6 +421,28 @@ export function ChatPanel() {
         try {
           await invoke("chat_push", { key: person.id, message: userMessage });
 
+          /**
+           * 附件正文并进材料段。
+           *
+           * Rust 侧只接收 `context` 这一条字符串；会话里存的 attachments 只是
+           * 元数据（名字/大小/存储名），模型读不到内容 —— 于是拖进来的 PDF
+           * 在它眼里等于不存在，只会回一句「请把内容贴给我」。
+           * 图片走文字兜底（OCR），拿不到就明说，别让模型猜。
+           */
+          const attachBlocks = await Promise.all(
+            attachments.map(async (file) => {
+              const body =
+                (await attachmentBody(file.id)) ??
+                (isImage(file.ext) ? await ensureOcrText(file.id) : undefined);
+              return body
+                ? `──── ${file.name} ────\n${body.trim()}\n──── 文件结束 ────`
+                : `（附件 ${file.name}：读不到内容${isImage(file.ext) ? "，图片没能转成文字" : ""}）`;
+            }),
+          );
+          const fullContext = attachBlocks.length
+            ? `${context}\n\n【本次附件】\n${attachBlocks.join("\n\n")}`
+            : context;
+
           const channel = new Channel<{
             kind: string;
             delta?: string;
@@ -449,7 +479,7 @@ export function ChatPanel() {
           const sent = await invoke<{ id: string; actions: unknown[]; assets?: Asset[] }>("chat_send", {
             args: {
               key: person.id,
-              context,
+              context: fullContext,
               extra: skillsPrompt(),
               baseUrl: ai.baseUrl,
               apiKey: ai.apiKey,

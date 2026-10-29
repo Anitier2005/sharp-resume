@@ -26,6 +26,8 @@ const MAX_OCR_BYTES = 10 * 1024 * 1024;
 
 /** 选完文件就把正文读进内存，发送时不必再等 IO */
 const bodyCache = new Map<string, string>();
+/** 读取任务：选完文件就启动，发送时 await 它，抢在读取完成前发送也不会丢正文 */
+const pending = new Map<string, Promise<void>>();
 /** 原始 File：OCR 按「当前模型有没有视觉」决定跑不跑，跑的时候要字节 */
 const fileCache = new Map<string, File>();
 /** 图片的 data URL —— 模型支持视觉时 base64 直传，不再走 OCR */
@@ -147,13 +149,20 @@ export const stripPreview = (file: Attachment): Attachment => {
 /** 浏览器 File → 附件元数据（同时后台读取可读文本；图片附带缩略图） */
 export function toAttachment(file: File): Attachment {
   const id = `f-${crypto.randomUUID().slice(0, 8)}`;
-  void cacheBody(id, file);
   const ext = extOf(file.name);
   // PDF / 图片是「读不到正文」的重灾区，各自的通道见上面的函数注释。
   // fileCache 无条件存：OCR 懒执行，跑的时候才需要字节。
   fileCache.set(id, file);
-  if (ext === "pdf") void extractPdf(id, file);
-  if (isImage(ext)) void cacheImage(id, file);
+  pending.set(
+    id,
+    (async () => {
+      await cacheBody(id, file);
+      // PDF 的文字要等 Rust 解析，几百毫秒到几秒；把它记成任务，
+      // 用户拖进来立刻回车时发送侧能等它，而不是拿到 undefined 当「没内容」
+      if (ext === "pdf") await extractPdf(id, file);
+      if (isImage(ext)) await cacheImage(id, file);
+    })(),
+  );
   return {
     id,
     name: file.name,
@@ -165,6 +174,25 @@ export function toAttachment(file: File): Attachment {
 
 /** 取已缓存的正文；非文本类型或还没读完返回 undefined */
 export const attachmentText = (id: string): string | undefined => bodyCache.get(id);
+
+/**
+ * 等这份附件读完再取正文。
+ *
+ * 桌面端的材料段是一条字符串（发给 Rust），发送时必须拿到正文本身；
+ * 而 PDF 解析是异步的、可能还没回来。这里等任务收尾，读不出就返回 undefined，
+ * 由调用方写明「读不到」，别让模型以为用户什么都没传。
+ */
+export async function attachmentBody(id: string): Promise<string | undefined> {
+  const job = pending.get(id);
+  if (job) {
+    try {
+      await job;
+    } catch {
+      /* 失败已经写进 bodyCache 的错误文案里了 */
+    }
+  }
+  return bodyCache.get(id);
+}
 
 /** 取图片的 data URL；非图片、超大或浏览器调试模式返回 undefined */
 export const attachmentImage = (id: string): string | undefined => imageCache.get(id);
