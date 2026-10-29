@@ -604,6 +604,8 @@ pub async fn chat_send(
     let mut out = crate::tools::Outbox::default();
     // 模型能不能看图：决定工具渲染出来的页面图片要不要真的发过去
     out.vision = args.vision;
+    // 工具写目标页数时要落「第几条用户消息」：下一轮据此判「这一轮刚要求」还是「以前说过」
+    out.turn = turn;
     // 数据目录给图片转化这类要碰文件的工具用；拿不到就传 None，
     // 工具会明确告诉模型「当前环境不支持」，而不是静默失败
     let ctx = crate::tools::ToolCtx {

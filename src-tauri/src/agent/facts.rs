@@ -6,10 +6,6 @@
 //!
 //! 阈值也只有这一处：`FIT_MAX` / `TOLERANCE_MAX`。前端不复刻，渲染层不复刻。
 
-// Batch 2 接线（B2-4/5/6）还没全部落地，`block` / `measure_section` / `layout_result_line`
-// 目前只有单测在调。Batch 2 接线完成后请删掉这一行，让未使用的东西重新报警。
-#![allow(dead_code)]
-
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -99,7 +95,9 @@ pub struct PageFacts {
     /// 当前页名与 kind（file 页不做页数判定）
     pub page_label: String,
     pub page_kind: String,
-    /// 第几条用户消息（排版侧为 None）
+    /// 第几条用户消息（排版侧为 None）。`target_of` 用它判「这一轮 / 之前」，
+    /// 结论落在 `target.source` 上，字段本身给排查留依据。
+    #[allow(dead_code)]
     pub turn: Option<u32>,
 }
 
@@ -134,6 +132,17 @@ impl PageFacts {
             .and_then(|resume| resume.get("pages"))
             .and_then(Value::as_array)
             .and_then(|list| list.iter().find(|page| page["id"].as_str() == Some(page_id)));
+
+        // 量的不是这一页（用户切页那一瞬间的窗口期）：整份作废。
+        // 把上一页的页数当成这一页的实测报出去，比老实说「量不到」错得更远。
+        let measure = match measure {
+            Some(measure)
+                if !measure.page_id.is_empty() && !page_id.is_empty() && measure.page_id != page_id =>
+            {
+                None
+            }
+            other => other,
+        };
 
         // 找不到简历时也要给出一份「未设置」的目标：报错交给工具层，
         // 事实块本身不该因为这个整块消失
@@ -1036,6 +1045,20 @@ mod tests {
 
     // ---------------------------------------------------------------- B2-4
 
+    /// 指定页 id 的实测：1.00 页（传 1180.0 就是溢出）
+    fn measure_on(page_id: &str, content_px: f64) -> PageMeasure {
+        PageMeasure {
+            page_id: page_id.into(),
+            status: "ok".into(),
+            version: 12,
+            content: "v37".into(),
+            one_page: Some(1000.0),
+            content_px: Some(content_px),
+            line_height: Some(17.0),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn assemble_reads_label_kind_and_target_from_the_snapshot() {
         let ws = json!({ "people": [{ "id": "p1", "resumes": [{
@@ -1048,7 +1071,15 @@ mod tests {
             ]
         }]}] });
 
-        let facts = PageFacts::assemble(&ws, "p1", "r1", "pg1", Some(ok_fit()), None, Some(12));
+        let facts = PageFacts::assemble(
+            &ws,
+            "p1",
+            "r1",
+            "pg1",
+            Some(measure_on("pg1", 1000.0)),
+            None,
+            Some(12),
+        );
         assert_eq!(facts.page_label, "第一页");
         assert_eq!(facts.page_kind, "native");
         assert_eq!(facts.turn, Some(12));
@@ -1056,11 +1087,34 @@ mod tests {
             parts(facts.target),
             (Some(1), TargetSource::UserThisTurn)
         );
+        assert!(block(&facts).contains("实测 1.00 页"), "{}", block(&facts));
 
         let file_page = PageFacts::assemble(&ws, "p1", "r1", "pg2", None, None, None);
         assert_eq!(file_page.page_kind, "file");
         // 排版侧没有 turn：即使库里写着「这一轮」，也只能说「之前要求过」
         assert_eq!(parts(file_page.target), (Some(1), TargetSource::UserBefore));
+    }
+
+    /// 用户切页那一瞬间，测量值还是上一页的：宁可说量不到，也不能把别的页的页数报成这一页
+    #[test]
+    fn a_measure_from_another_page_is_dropped() {
+        let ws = json!({ "people": [{ "id": "p1", "resumes": [{
+            "id": "r1",
+            "pages": [{ "id": "pg1" }, { "id": "pg2" }]
+        }]}] });
+        let facts = PageFacts::assemble(
+            &ws,
+            "p1",
+            "r1",
+            "pg2",
+            Some(measure_on("pg1", 1000.0)),
+            None,
+            Some(1),
+        );
+        assert!(facts.measure.is_none());
+        let text = block(&facts);
+        assert!(text.contains("尚未实测"), "{text}");
+        assert!(!text.contains("实测 1.00 页"), "{text}");
     }
 
     #[test]

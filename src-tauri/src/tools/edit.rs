@@ -464,6 +464,14 @@ pub fn flush_all(out: &Outbox) -> Option<Value> {
     flush_state(&out.edits)
 }
 
+/// 参数已经算好的 op（页、简历、目标页数）走这里入暂存区。
+///
+/// 为什么要暴露它：这类 op 不需要「按容器合并」，但也必须跟同轮的内容改动
+/// 走同一条信封 —— 顺序即语义，两条通道会让「先设目标再改内容」变成猜谜。
+pub fn push_op(ctx: &ToolCtx, op: Value) {
+    with_state(ctx.out, |state| state.mark_op(op))
+}
+
 /// 从暂存区取一条信封（`flush_all` 与测试都走这里）
 pub fn flush_state(store: &Mutex<EditState>) -> Option<Value> {
     match store.lock() {

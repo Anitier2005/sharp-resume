@@ -15,6 +15,7 @@ pub mod image;
 pub mod layout;
 pub mod page;
 pub mod read;
+pub mod target;
 pub mod view;
 
 use std::path::Path;
@@ -58,6 +59,9 @@ pub struct Outbox {
     /// 当前模型能不能看图。放在出站口是为了不污染 `ToolCtx` 的构造点
     /// （工具与测试里有一堆），每轮由 `chat_send` 按模型能力写一次。
     pub vision: bool,
+    /// 这一轮是「第几条用户消息」。工具写目标页数时要把它落库
+    /// （`targetPagesTurn`），下一轮才能判出「这一轮刚要求」还是「以前要求过」。
+    pub turn: u32,
 }
 
 /// 工具执行时能看到的东西：只读快照 + 当前定位 + 出站口。
@@ -422,6 +426,17 @@ pub const TOOLS: &[Tool] = &[
         scopes: &[Scope::Session],
         writes: true,
     },
+    Tool {
+        name: "set_target_pages",
+        description: "记下用户要求的目标页数（「压到一页」「控制在一页内」）。\
+                      只带 pages，不带 resumeId —— 改的是当前这份简历。\
+                      只在用户**明确说过**页数时调；他没说过就别替他定目标。\
+                      他说「不要求页数了」就不传 pages（= 清除）。",
+        params: target::set_target_pages_params,
+        run: target::set_target_pages,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
     /* ---------- 页面控制（只影响「看到什么」，不改内容） ---------- */
     Tool {
         name: "open_page",
@@ -744,7 +759,7 @@ mod tests {
 
         // 工具数就是能力边界的快照：少一个说明注册时漏了，多一个说明有人偷偷
         // 给某个角色开了口子，两者都该在这里被看见
-        assert_eq!(session.len(), 39, "会话 agent 的工具数变了：{session:?}");
+        assert_eq!(session.len(), 40, "会话 agent 的工具数变了：{session:?}");
         assert_eq!(layout.len(), 9, "排版 agent 的工具数变了：{layout:?}");
 
         // 会话 agent：能读、能转交、能转图，但不能自己动版面
@@ -753,8 +768,9 @@ mod tests {
         // 抽图只给会话：排版 agent 不改内容，拿到一组图片 id 也无从下手
         assert!(session.contains(&"extract_images"));
         assert!(!layout.contains(&"extract_images"));
-        // 目标页数是 Batch 2 的卡，别在这一批偷偷开出来
-        assert!(!session.contains(&"set_target_pages"));
+        // 目标页数只给会话：排版 agent 不改内容，也不该动「压到几页」这个约定
+        assert!(session.contains(&"set_target_pages"));
+        assert!(!layout.contains(&"set_target_pages"));
         // PDF 渲染给自己看：只有会话需要，排版 agent 拿到的是结构化内容
         assert!(session.contains(&"view_asset"));
         assert!(!layout.contains(&"view_asset"));

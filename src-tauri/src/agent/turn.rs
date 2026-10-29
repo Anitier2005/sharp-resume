@@ -76,6 +76,10 @@ fn describe(name: &str, args: &Value) -> String {
             _ => "切到编辑".to_string(),
         },
         "extract_images" => "在原件里找内嵌图片".to_string(),
+        "set_target_pages" => match args["pages"].as_u64() {
+            Some(pages) => format!("把目标定成 {pages} 页"),
+            _ => "清掉目标页数".to_string(),
+        },
         "set_open_pages" => "调整快捷标签".to_string(),
         "set_ui" => "调整界面".to_string(),
         other => format!("调用 {other}"),
@@ -213,3 +217,19 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
 }
 
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn set_target_pages_is_described_in_words() {
+        // 状态栏要显示「把目标定成 1 页」，不是「调用 set_target_pages」
+        let text = describe("set_target_pages", &json!({ "pages": 1 }));
+        assert!(text.contains("1 页"), "{text}");
+        assert!(!text.contains("set_target_pages"), "{text}");
+
+        let cleared = describe("set_target_pages", &json!({}));
+        assert!(cleared.contains("清掉目标页数"), "{cleared}");
+    }
+}
