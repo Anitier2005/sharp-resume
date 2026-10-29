@@ -57,12 +57,15 @@
   display: flex;
 }
 
+/* 列底与主页面侧栏同一个颜色（--bg-side，亮色下就是纯白）：
+   之前用 --bg-canvas 的浅灰，只留一列时灰块旁边是一大片白，看着像两个界面拼在一起。
+   列与列之间靠 grip 的左边线分隔，不靠底色差 */
 .pane {
   flex: none;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-canvas);
+  background: var(--bg-side);
 }
 
 .paneHead {
