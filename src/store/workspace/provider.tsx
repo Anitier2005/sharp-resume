@@ -15,7 +15,7 @@ import { EMPTY_WORKSPACE } from "@/data/empty";
 import { loadWorkspace, saveWorkspace } from "@/lib/storage";
 import { describeChange, diff, flatten, type Flat } from "@/lib/changes";
 import { submitLayout } from "@/lib/layout";
-import { TOLERANCE_MAX, usePageMeasure } from "@/lib/measure";
+import { originOf, TOLERANCE_MAX, usePageMeasure } from "@/lib/measure";
 import {
   applyAgentActions,
   chatBridge,
@@ -634,6 +634,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         page,
         state,
         kind: "request",
+        // 实测值一起上送：不带的话排版 agent 看到的仍是「尚未实测」，
+        // 自动压版就成了闭眼开方子
+        measure,
+        origin: originOf(resume.id),
         text: `自动自查：这一页实测 ${pages.toFixed(2)} 页，超出 ${(pages - 1).toFixed(2)} 页，目标是 ${target} 页。请继续压到目标页数内；压不动就说清差多少，不要谎报。`,
       });
     }, AUTO_DEBOUNCE_MS);

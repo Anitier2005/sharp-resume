@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Asset, Attachment, ChatAction, ChatMessage } from "@/types";
+import type { Asset, Attachment, ChatAction, ChatMessage, Origin } from "@/types";
 import { useWorkspace } from "@/store/workspace";
 import { uid } from "@/lib/uid";
 import { useToast } from "@/components/ui/toast-context";
@@ -19,6 +19,7 @@ import { DEFAULT_RESERVE, findModel, listProfiles } from "@/lib/model-config";
 import { buildContext, splitReply } from "@/lib/prompt";
 import { applyAgentActions, askSessionFromLayout, registerChatBridge, type AskQuestion } from "@/lib/agent-actions";
 import { submitLayout } from "@/lib/layout";
+import { clearOrigin, putOrigin } from "@/lib/measure";
 import { AskForm } from "./ask-form";
 import { displayName } from "@/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -64,8 +65,18 @@ function ocrConf(ai: AiSettings) {
 }
 
 export function ChatPanel() {
-  const { state, person, resume, page, dispatch, setActivePageId, applyOps, openPerson, openResume } =
-    useWorkspace();
+  const {
+    state,
+    person,
+    resume,
+    page,
+    measure,
+    dispatch,
+    setActivePageId,
+    applyOps,
+    openPerson,
+    openResume,
+  } = useWorkspace();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   /**
@@ -216,6 +227,15 @@ export function ChatPanel() {
     setInput("");
   }, [resume?.id]);
 
+  /**
+   * 换人 / 换简历：上一轮那份原件的页数不再代表这一轮。
+   * 不清的话排版侧会拿别人那份 PDF 的页数去判「沿用原件页数」，
+   * 这正是「跨请求残留」那类错。
+   */
+  useEffect(() => {
+    if (resume?.id) clearOrigin(resume.id);
+  }, [resume?.id]);
+
   useEffect(() => () => abortRef.current?.abort(), []);
 
   /** 本地投影打补丁（Tauri 模式下消息真相在 Rust，这里只是显示） */
@@ -258,6 +278,15 @@ export function ChatPanel() {
       askSessionFromLayout({ pages: resume?.pages ?? [], pageId, question, blockId });
     },
     [resume],
+  );
+
+  /**
+   * 这一页的实测值；量的不是这一页就给 null。
+   * 不拿「1 页」去凑一个像样的对象 —— 假数比没有数更糟（F-007）。
+   */
+  const measureFor = useCallback(
+    (pageId: string) => (measure && measure.pageId === pageId ? measure : null),
+    [measure],
   );
 
   const send = useCallback(
@@ -386,7 +415,12 @@ export function ChatPanel() {
             }
           };
 
-          const sent = await invoke<{ id: string; actions: unknown[]; assets?: Asset[] }>("chat_send", {
+          const sent = await invoke<{
+            id: string;
+            actions: unknown[];
+            assets?: Asset[];
+            origin?: Origin | null;
+          }>("chat_send", {
             args: {
               key: person.id,
               context,
@@ -409,6 +443,9 @@ export function ChatPanel() {
               compact: compactFor(),
               resumeId: resume.id,
               pageId: targetPage.id,
+              // 实测值只对「量的那一页」成立：问的是别的页就传 null，
+              // 不能让模型拿甲页的页数去说乙页
+              measure: measureFor(targetPage.id),
               view: state.ui.view ?? "edit",
               // 工具层的只读镜像。剥掉 messages：工具不读会话，没必要每次搬全部历史
               workspace: {
@@ -420,6 +457,10 @@ export function ChatPanel() {
             onEvent: channel,
           });
           const id = sent.id;
+          // 本轮原件的页数只活到下一次排版提交：没有原件就清掉，
+          // 免得上一轮那份 PDF 的页数被当成本轮的
+          if (sent.origin) putOrigin(resume.id, sent.origin);
+          else clearOrigin(resume.id);
 
           const { content, changes } = splitReply(acc, person, targetPage);
           await invoke("chat_patch", {
@@ -510,6 +551,7 @@ export function ChatPanel() {
       person,
       resume,
       page,
+      measureFor,
       dispatch,
       setActivePageId,
       applyOps,

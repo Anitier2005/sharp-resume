@@ -191,10 +191,12 @@ export function ResumePanel() {
   const [pendingCut, setPendingCut] = useState<{ kind: "section" | "block"; blockId: string } | null>(
     null,
   );
-  /** 等用户点头「照这样导出」的那一次导出；放面板不放 provider：它是导出的局部状态 */
-  const [pendingExport, setPendingExport] = useState<{ run: () => void; items: string[] } | null>(
-    null,
-  );
+  /** 等用户点头「仍然导出」的那一次导出；放面板不放 provider：它是导出的局部状态 */
+  const [pendingExport, setPendingExport] = useState<{
+    run: () => void;
+    title: string;
+    description: string;
+  } | null>(null);
   /** 刚点了「+」，等 state 落地后把新页选中 */
   const wantNewPage = useRef(false);
   const preview = mode === "preview";
@@ -420,24 +422,45 @@ export function ResumePanel() {
   };
 
   /**
-   * 溢出的页：只有「量到了且真溢出」才算 —— 量不到的页不拦（F-011）。
-   * 离屏宿主一次只渲染当前页，所以这里天然只可能列出这一页。
+   * 这一页实测溢出多少页；没量到、或还在 2% 容忍内就给 null。
+   * 量不到的页不拦（F-011）：没有数就说没有数，不拿「1 页」替用户决定。
    */
-  const overflowedPages = () => {
-    if (pages === null || pages <= TOLERANCE_MAX) return [];
-    return [
-      `第 ${pageIndex(resume, page.id) + 1} 页「${page.label || "未命名页"}」实测 ${pages.toFixed(2)} 页`,
-    ];
-  };
+  const overflowBy = () => (pages !== null && pages > TOLERANCE_MAX ? pages : null);
 
-  /** 已设目标页数 + 实测溢出 → 先问一句，不硬拦；其余情况直接导出 */
-  const gate = (run: () => void) => {
-    const list = overflowedPages();
-    if (!resume.targetPages || !list.length) {
+  /** 单页导出的门：打印 / Word 当前页。已设目标页数且实测溢出才问一句 */
+  const gatePage = (run: () => void) => {
+    const by = overflowBy();
+    const target = resume.targetPages;
+    if (by === null || !target) {
       run();
       return;
     }
-    setPendingExport({ run, items: list });
+    setPendingExport({
+      run,
+      title: target > 1 ? `这一页还没排进 ${target} 页` : "这一页还没排进 1 页",
+      description: `实测 ${by.toFixed(2)} 页，多出来的部分会排到第二页。`,
+    });
+  };
+
+  /**
+   * 整份导出的门：离屏宿主只渲染当前页，所以这里最多列出一条。
+   * 只要有一条溢出就说「还有 N 页」—— 整份导出会把每一页都写出去。
+   */
+  const gateAll = (run: () => void) => {
+    const by = overflowBy();
+    const target = resume.targetPages;
+    if (by === null || !target) {
+      run();
+      return;
+    }
+    const rows = [
+      `第 ${pageIndex(resume, page.id) + 1} 页 实测 ${by.toFixed(2)} 页 / 目标 ${target} 页`,
+    ];
+    setPendingExport({
+      run,
+      title: `还有 ${rows.length} 页没排进目标页数`,
+      description: `${rows.join("；")}；导出的文件里，多出来的部分会排到下一页。`,
+    });
   };
 
   const pageMap = new Map(resume.pages.map((item) => [item.id, item]));
@@ -683,9 +706,13 @@ export function ResumePanel() {
             </button>
           }
         >
-          <MenuItem label="打印 / 存为 PDF" hint="当前页" onSelect={() => gate(handlePrint)} />
+          <MenuItem label="打印 / 存为 PDF" hint="当前页" onSelect={() => gatePage(handlePrint)} />
           <MenuSep />
-          <MenuItem label="Word · 当前页" hint=".docx" onSelect={() => gate(() => exportDocx(page))} />
+          <MenuItem
+            label="Word · 当前页"
+            hint=".docx"
+            onSelect={() => gatePage(() => exportDocx(page))}
+          />
           <MenuItem label="Markdown · 当前页" onSelect={() => exportMd(page)} />
           <MenuItem
             label="Markdown · 整份"
@@ -700,7 +727,7 @@ export function ResumePanel() {
           <MenuItem
             label="Word · 整份"
             hint="导出文件夹"
-            onSelect={() => gate(exportFolder)}
+            onSelect={() => gateAll(exportFolder)}
           />
         </Dropdown>
       </div>
@@ -817,17 +844,16 @@ export function ResumePanel() {
         </ContextMenu>
       )}
 
-      {/* 导出门：溢出 + 已设目标页数时先问一句。不硬拦 —— 用户可能是故意导一份
-          两页的稿子；拦死等于替用户决定「必须一页」。 */}
+      {/* 导出门：溢出 + 已设目标页数时先问一句。不硬拦 —— 用户可能就是要一份
+          两页的稿子；拦死等于替他决定「必须塞进一页」。 */}
       {pendingExport && (
         <Confirm
           open
           danger={false}
-          title={`这一页还没压到 ${resume.targetPages ?? "目标"} 页内`}
-          description="导出的文件和你在屏幕上看的一样，会排到第二页上。要不要先让排版继续压？"
-          items={pendingExport.items}
-          confirmLabel="照这样导出"
-          cancelLabel="先去压一页"
+          title={pendingExport.title}
+          description={pendingExport.description}
+          confirmLabel="仍然导出"
+          cancelLabel="取消"
           onConfirm={() => {
             const job = pendingExport;
             setPendingExport(null);

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Person, ResumePage, Workspace } from "@/types";
+import type { Origin, PageMeasure, Person, ResumePage, Workspace } from "@/types";
 import { aiReady, slotAi } from "@/lib/ai";
 
 /**
@@ -24,6 +24,13 @@ export async function submitLayout(input: {
   /** change = 内容刚变了；request = 用户或会话 agent 明确提出重排 */
   kind: "change" | "request";
   text: string;
+  /**
+   * 这一页此刻的实测值。只在本次提交里有效 —— 排版侧靠它判断「压到几页了」，
+   * 落库没有意义：下次启动时它已经是个会骗人的旧数。
+   */
+  measure?: PageMeasure | null;
+  /** 本轮原件页数（会话侧 `chat_send` 回传、存内存），排版侧据此决定要不要沿用 */
+  origin?: Origin | null;
 }): Promise<boolean> {
   // 排版是独立用途：它可以用一个便宜快模型，不必占着会话那把
   const ai = slotAi("layout");
@@ -46,6 +53,8 @@ export async function submitLayout(input: {
       temperature: ai.temperature,
       reasoning: ai.reasoning ?? null,
       contextWindow: ai.contextWindow ?? null,
+      measure: input.measure ?? null,
+      origin: input.origin ?? null,
     },
     note: { kind: input.kind, text: input.text },
   });
