@@ -278,8 +278,25 @@ pub fn measure_section(f: &PageFacts) -> String {
         }
     }
 
-    match f.target.pages {
-        Some(_) => {
+    match (f.target.pages, f.target.source) {
+        // 与 block 的 verdict 同一口径：原件页数默认值不盖「达标」章。
+        // 两侧说法不一致就等于又造了第二份判断。
+        (Some(t), TargetSource::FromOrigin) => {
+            let conclusion = if matches!(fit, Fit::Overflow { .. }) {
+                format!("超出原件页数 {t} 页。")
+            } else {
+                format!("{}，这一页在里面。", origin_target_ref(t))
+            };
+            out.push_str(&format!(
+                "目标页数 {}。{conclusion}\n",
+                target_short(&f.target)
+            ));
+            out.push_str(&format!(
+                "{}。内容一改，这些数字作废，要重新量。\n",
+                version_line(f)
+            ));
+        }
+        (Some(_), _) => {
             let verdict = match fit {
                 Fit::Overflow { .. } => "未达标。",
                 _ => "达标。",
@@ -294,7 +311,7 @@ pub fn measure_section(f: &PageFacts) -> String {
                 version_line(f)
             ));
         }
-        None => {
+        (None, _) => {
             out.push_str(&format!("目标页数 {}。\n", target_short(&f.target)));
             out.push_str("没有目标，不讲达标与否；实测值仍然要照报。\n");
         }
@@ -325,13 +342,23 @@ pub fn measure_line(f: &PageFacts) -> String {
 pub fn layout_result_line(f: &PageFacts) -> String {
     let fit = fit_of(f.measure.as_ref());
     let target = f.target.pages;
+    let from_origin = f.target.source == TargetSource::FromOrigin;
     match fit {
         Fit::Fit(pages) | Fit::Tolerance(pages) => match target {
+            // 原件页数是系统猜的默认值，不是用户的要求：不给「达标」章
+            Some(t) if from_origin => format!(
+                "实测 {pages:.2} 页，没有溢出（{}，这一页在里面）。",
+                origin_target_ref(t)
+            ),
             Some(t) => format!("实测 {pages:.2} 页，没有溢出（目标 {t} 页，达标）。"),
             // 未设目标时不能编达标结论，也不编新措辞：两句都取自 §4.4 的定稿句子。
             None => NO_TARGET_JUDGEMENT.replace("{}", &format!("实测 {pages:.2} 页，没有溢出。")),
         },
         Fit::Overflow { pages, over, .. } => match target {
+            Some(t) if from_origin => format!(
+                "实测 {pages:.2} 页，超出 {over:.2} 页（{}）。继续压，或停在这一档并说清差多少。",
+                origin_target_ref(t)
+            ),
             Some(t) => format!(
                 "实测 {pages:.2} 页，超出 {over:.2} 页（目标 {t} 页，仍未达标）。继续压，或停在这一档并说清差多少。"
             ),
@@ -441,6 +468,25 @@ fn measured_sentence(pages: f64, tolerance: bool) -> String {
 
 fn over_sentence(over: f64, lines: u32) -> String {
     format!("超出 {over:.2} 页（{lines} 行正文）。")
+}
+
+/// 目标来自原件页数（`FromOrigin`）时的参照口径。
+///
+/// 「达标」只能盖在**用户说过的**目标上。原件页数是系统按快照猜的默认值：
+/// 用户说了「压到一页」但没被记下来时，照原件 3 页说「达标」就是假绿灯 ——
+/// 文案全部合规、只有目标是错的，是最难被发现的一种谎报。
+fn origin_target_ref(pages: u32) -> String {
+    format!("按原件页数 {pages} 页算")
+}
+
+/// `FromOrigin` 的结论句（不出现「达标」二字），verdict 用。
+fn from_origin_verdict(pages: u32, overflow: bool) -> String {
+    let head = if overflow {
+        format!("超出原件页数 {pages} 页。")
+    } else {
+        format!("{}，这一页在里面。", origin_target_ref(pages))
+    };
+    format!("{head}用户没有说过要几页。")
 }
 
 /// 量不到 / 过期的首句（不含「测量版本」尾注）。
@@ -562,8 +608,13 @@ fn verdict_line(f: &PageFacts) -> String {
         Fit::Unknown(_) | Fit::Stale { .. } => {
             "不知道：这一页量不到。不要说「一页」「单页」「已经放得下」。".to_string()
         }
-        _ => match f.target.pages {
-            Some(t) => match fit {
+        _ => match (f.target.pages, f.target.source) {
+            // 原件页数是系统猜的默认值：可以说「这一页在里面」，但不能说「达标」。
+            // 「达标」这两个字一旦出现，模型就会转述成「已经压到你要的页数了」。
+            (Some(t), TargetSource::FromOrigin) => {
+                from_origin_verdict(t, matches!(fit, Fit::Overflow { .. }))
+            }
+            (Some(t), _) => match fit {
                 Fit::Overflow { .. } => format!(
                     "未达标：超出 {t} 页。不要说「已经压到一页」，也不要说「差不多」。"
                 ),
@@ -571,7 +622,7 @@ fn verdict_line(f: &PageFacts) -> String {
             },
             // 没有目标时也要把实测值说准：overflow 时那句「已经排到第二页上」是定稿原句，
             // fit 时不能沿用（那时并不成立），换成「仍然要照报」。
-            None => match fit {
+            (None, _) => match fit {
                 Fit::Overflow { .. } => format!(
                     "没有目标页数，不讲达标与否。实测 {pages:.2} 页这件事仍然要说准：它已经排到第二页上。"
                 ),
@@ -1031,9 +1082,73 @@ mod tests {
         }
     }
 
+    /// 原件页数是默认值，不是用户的要求：三处文案都不许盖「达标」章。
+    /// 三处必须同批（block / 实测段 / set_page_layout 结论），否则同一页两种说法。
     #[test]
-    fn block_unknown_does_not_claim_no_overflow() {
-        let f = facts(None, target(Some(1), TargetSource::UserThisTurn), None);
+    fn a_target_from_the_origin_never_claims_the_goal_was_met() {
+        let fit_case = facts(
+            Some(ok_fit()),
+            target(Some(3), TargetSource::FromOrigin),
+            Some(origin_pdf(Some(3))),
+        );
+        for (name, text) in [
+            ("block", block(&fit_case)),
+            ("measure_section", measure_section(&fit_case)),
+            ("layout_result_line", layout_result_line(&fit_case)),
+        ] {
+            assert!(!text.contains("达标"), "{name} 不该出现「达标」：{text}");
+            assert!(
+                text.contains("按原件页数 3 页算"),
+                "{name} 要用「按原件页数 3 页算」：{text}"
+            );
+        }
+        assert!(block(&fit_case).contains("用户没有说过要几页。"), "{}", block(&fit_case));
+
+        let overflow_case = facts(
+            Some(ok_overflow()),
+            target(Some(3), TargetSource::FromOrigin),
+            Some(origin_pdf(Some(3))),
+        );
+        // 结论句换成「超出原件页数」：说清超出的是原件页数，不是用户要求的页数
+        for (name, text) in [
+            ("block", block(&overflow_case)),
+            ("measure_section", measure_section(&overflow_case)),
+        ] {
+            assert!(!text.contains("达标"), "{name} 不该出现「达标」：{text}");
+            assert!(
+                text.contains("超出原件页数 3 页。"),
+                "{name} 要说清超出的是原件页数：{text}"
+            );
+        }
+        let layout = layout_result_line(&overflow_case);
+        assert!(!layout.contains("达标"), "{layout}");
+        assert!(layout.contains("按原件页数 3 页算"), "{layout}");
+    }
+
+    /// 与上一条成对：用户说过的目标才配「达标」，别把两档合并成一句
+    #[test]
+    fn a_target_the_user_stated_still_gets_the_pass_mark() {
+        let user_case = facts(
+            Some(ok_fit()),
+            target(Some(1), TargetSource::UserThisTurn),
+            Some(origin_pdf(Some(3))),
+        );
+        assert!(block(&user_case).contains("达标：这一页在 1 页内。"));
+        assert!(measure_section(&user_case).contains("达标。"));
+        assert!(layout_result_line(&user_case).contains("（目标 1 页，达标）"));
+
+        let before_case = facts(
+            Some(ok_fit()),
+            target(Some(1), TargetSource::UserBefore),
+            None,
+        );
+        assert!(block(&before_case).contains("达标：这一页在 1 页内。"));
+        assert!(measure_section(&before_case).contains("达标。"));
+        assert!(layout_result_line(&before_case).contains("（目标 1 页，达标）"));
+    }
+
+    #[test]
+    fn block_unknown_does_not_claim_no_overflow() {        let f = facts(None, target(Some(1), TargetSource::UserThisTurn), None);
         let text = block(&f);
         assert!(text.contains("尚未实测"));
         assert!(!text.contains("没有溢出"));
