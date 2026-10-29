@@ -208,6 +208,16 @@ enum Owner {
         entry: String,
         label: String,
     },
+    /// 页头：简历最上面那块字段组建不出来时用它。
+    ///
+    /// 页头 = 这一页的第一个 fields 块（前端 `withHeader` 认这个规则）。
+    /// 但新建的页是**零预设**的，一个块都没有 —— 于是模型看到的页头上没有 id，
+    /// 也就没有任何工具能把姓名写进简历。这个变体就是那个缺口：按「页 id」认领页头，
+    /// 落库时下发一条 `pageHeader`（前端会自己插入字段块）。
+    Header {
+        spot: Spot,
+        label: String,
+    },
 }
 
 impl Owner {
@@ -219,6 +229,7 @@ impl Owner {
                 format!("fields:b:{}:{}:{}", spot.resume, spot.page, block)
             }
             Owner::Entry { entry, .. } => format!("entry:{entry}"),
+            Owner::Header { spot, .. } => format!("fields:h:{}:{}", spot.resume, spot.page),
         }
     }
 
@@ -227,7 +238,8 @@ impl Owner {
             Owner::Person { label, .. }
             | Owner::Item { label, .. }
             | Owner::Block { label, .. }
-            | Owner::Entry { label, .. } => label,
+            | Owner::Entry { label, .. }
+            | Owner::Header { label, .. } => label,
         }
     }
 
@@ -236,7 +248,8 @@ impl Owner {
             Owner::Person { spot, .. }
             | Owner::Item { spot, .. }
             | Owner::Block { spot, .. }
-            | Owner::Entry { spot, .. } => spot,
+            | Owner::Entry { spot, .. }
+            | Owner::Header { spot, .. } => spot,
         }
     }
 }
@@ -386,6 +399,14 @@ impl EditState {
                     }),
                     // Entry 的字段改动永远走 entryPatch，不会走到这里
                     Owner::Entry { .. } => return None,
+                    // 前端 `withHeader` 认「第一个 fields 块」：整组替换，没有就插一个
+                    Owner::Header { .. } => json!({
+                        "type": "pageHeader",
+                        "personId": spot.person,
+                        "resumeId": spot.resume,
+                        "pageId": spot.page,
+                        "header": fields,
+                    }),
                 })
             }
             Dirty::Items(section) => {
@@ -600,6 +621,14 @@ fn find_owner_by_id(ctx: &ToolCtx, owner_id: &str) -> Result<Owner, String> {
     }
     for (spot, index, page) in pages_of(ctx)? {
         let name = page_name(index, page);
+        // 页 id 就是页头的「入口」：新建的页零预设，没有块也就没有块 id ——
+        // 不认页 id 的话，模型没有任何办法把姓名写进简历最上面那一行
+        if text(page, "id") == owner_id {
+            return Ok(Owner::Header {
+                spot,
+                label: format!("{name}的页头"),
+            });
+        }
         for block in list(page, "blocks") {
             let block_id = text(&block, "id");
             let is_block = block_id == owner_id;
@@ -758,12 +787,34 @@ fn items_slot<'a>(
     Ok(st.slots.get_mut(&key).expect("刚插入的容器"))
 }
 
+/// 页头字段：这一页第一个 `fields` 块的字段；还没有那个块就是空数组。
+///
+/// 与前端 `headerOf` 同一条规则 —— 两边各认一套「哪个才叫页头」的时候，
+/// 模型写进去的字就会出现在用户看不见的地方。
+fn header_fields(page: &Value) -> Vec<Value> {
+    for block in list(page, "blocks") {
+        if text(&block, "kind") == "fields" {
+            return list(&block, "fields");
+        }
+    }
+    Vec::new()
+}
+
 fn seed_fields(st: &EditState, ctx: &ToolCtx, owner: &Owner) -> Result<Vec<Value>, String> {
     match owner {
         Owner::Person { .. } => Ok(list(person_of(ctx)?, "fields")),
         Owner::Block { block, .. } => {
             let (_spot, block) = find_block(ctx, block)?;
             Ok(list(&block, "fields"))
+        }
+        Owner::Header { .. } => {
+            let page_id = owner.spot().page.clone();
+            let page = pages_of(ctx)?
+                .into_iter()
+                .find(|(spot, _, _)| spot.page == page_id)
+                .map(|(_, _, page)| page.clone())
+                .ok_or_else(|| format!("找不到页面 {page_id}"))?;
+            Ok(header_fields(&page))
         }
         Owner::Entry { entry, .. } => {
             let section = section_of_entry(st, ctx, entry)?;
@@ -930,7 +981,7 @@ pub fn add_field_params() -> Value {
         "properties": {
             "ownerId": {
                 "type": "string",
-                "description": "加到哪儿：候选人 id、字段块 id、条目 id、库条目 id。read_person / read_page 里都能看到"
+                "description": "加到哪儿：候选人 id（资料，不进简历）、页 id（= 页头，会自动建在最前面）、字段块 id、条目 id、库条目 id。read_person / read_page 里都能看到。简历上的姓名/电话要加到页 id 或页头的字段块上"
             },
             "label": { "type": "string", "description": "字段名（如「公司」）" },
             "value": { "type": "string", "description": "字段值" },
@@ -2370,6 +2421,39 @@ mod tests {
             .run("add_field", json!({ "ownerId": "nope", "label": "x" }))
             .unwrap_err();
         assert!(err.contains("既不是候选人"), "{err}");
+    }
+
+    /// 新建的页是零预设的：没有块，也就没有块 id 可给。
+    /// 页 id 必须能当页头的入口，否则模型没有任何办法把姓名写进简历最上面那一行。
+    #[test]
+    fn add_field_with_a_page_id_writes_the_page_header() {
+        let h = Harness::new();
+        let text = h
+            .run("add_field", json!({ "ownerId": "pg2", "label": "姓名", "value": "李四" }))
+            .unwrap();
+        assert!(text.contains("页头"), "{text}");
+
+        let ops = h.ops();
+        assert_eq!(ops[0]["type"], json!("pageHeader"));
+        assert_eq!(ops[0]["pageId"], json!("pg2"));
+        let header = ops[0]["header"].as_array().unwrap();
+        assert_eq!(header.len(), 1, "{header:?}");
+        assert_eq!(header[0]["label"], json!("姓名"));
+    }
+
+    /// 已经有页头字段块时，页 id 落到同一份数据上 —— 不能长出第二个页头
+    #[test]
+    fn page_id_targets_the_existing_header_block() {
+        let h = Harness::new();
+        h.run("add_field", json!({ "ownerId": "pg1", "label": "邮箱", "value": "a@b.c" }))
+            .unwrap();
+
+        let ops = h.ops();
+        assert_eq!(ops[0]["type"], json!("pageHeader"));
+        let header = ops[0]["header"].as_array().unwrap();
+        assert_eq!(header.len(), 2, "原有字段要保留：{header:?}");
+        assert_eq!(header[0]["label"], json!("城市"));
+        assert_eq!(header[1]["label"], json!("邮箱"));
     }
 
     #[test]

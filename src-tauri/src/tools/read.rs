@@ -177,9 +177,9 @@ pub fn read_person(_args: &Value, ctx: &ToolCtx) -> Result<String, String> {
 
     let fields = field_lines(&person["fields"]);
     if fields.is_empty() {
-        out.push_str("字段：（一个都没有，用户还没填）\n");
+        out.push_str("候选人资料：（一个都没有，用户还没填）\n");
     } else {
-        out.push_str("字段：\n");
+        out.push_str("候选人资料（**不进简历**，简历上的姓名/电话要写进页头的字段组）：\n");
         out.push_str(&fields);
         out.push('\n');
     }
@@ -291,8 +291,16 @@ pub fn read_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
     let blocks = items_of(&page["blocks"]);
     if blocks.is_empty() {
         out.push_str("\n（这一页还没有任何内容块）");
+        out.push_str(&header_hint(page));
         out.push_str(&notes_state(page));
         return Ok(out.trim_end().to_string());
+    }
+
+    // 有 fields 块时它自己会在下面被打印成「块 …（字段组｜页头）」；
+    // 没有的时候必须单独说一句 —— 否则模型只能看到「这一页只有分区」，
+    // 于是把姓名往「候选人资料」里塞（那份资料不进简历）
+    if !blocks.iter().any(|block| text_of(block, "kind") == "fields") {
+        out.push_str(&header_hint(page));
     }
 
     for (bi, block) in blocks.iter().enumerate() {
@@ -385,6 +393,19 @@ pub fn read_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
          改版面用 set_page_layout 的 parts）",
     );
     Ok(out.trim_end().to_string())
+}
+
+/// 没有页头字段块时的一句指引。
+///
+/// 页头在这套数据里就是「这一页的第一个 fields 块」，没有单独的对象；
+/// 新建的页是零预设的，那个块还不存在。这里把页 id 交出去当入口 ——
+/// `add_field` 认页 id，落库时由前端把块插到最前面。
+fn header_hint(page: &Value) -> String {
+    format!(
+        "\n页头：还没有（页头就是这一页最上面的字段组）。把姓名、电话这类信息写进简历，\
+就用 add_field，ownerId 传这一页的 id {} —— 会自动建出页头并放在最前面。\n",
+        text_of(page, "id")
+    )
 }
 
 /// 纸面上的批注：排版 agent 留的话就靠这一段传给会话 agent。
