@@ -1,9 +1,10 @@
-//! 把文件渲染成图片给自己看。
+//! 把材料变成「这一轮能看见的图片」。
 //!
-//! 为什么需要：PDF 的文字能提出来，版式提不出来。模型要判断「这一页挤不挤」
-//! 「原件怎么排的」，只能看图。图片附件本来就能直接看（前端会把它放进视觉段），
-//! 这个工具专门解决**文件**：把 PDF 逐页渲染成图片，附在下一轮消息里，
-//! 同时也写进材料池，用户在自己的材料清单里能看到。
+//! 两条来源：
+//!   - 图片：原件直接附上（材料池里的图，模型平时只有名字，看不到内容）；
+//!   - PDF：逐页渲染成图片，版式只有看图才知道。
+//! 附上去的方式是 `Outbox.views` —— 工具结果在协议里只能是字符串，
+//! 图片必须靠轮次里补一条用户消息带进去。
 //!
 //! 非视觉模型不能调：渲染出来它也看不见，白花一秒和多花的 token。
 //! 这条判断放在工具里而不是提示词里 —— 提示词挡不住模型的好奇心。
@@ -13,13 +14,16 @@ use serde_json::{json, Value};
 use super::{push_asset, ToolCtx};
 use crate::pdfimage;
 
+/// 能直接当视觉输入喂给模型的图片格式
+const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
+
 pub fn params() -> Value {
     json!({
         "type": "object",
         "properties": {
             "assetId": {
                 "type": "string",
-                "description": "要看的文件材料 id，从 read_person / read_page 的材料清单里取。只支持 PDF"
+                "description": "要看的材料 id，从 read_person / read_page 的材料清单里取。图片或 PDF"
             },
             "maxPages": {
                 "type": "integer",
@@ -49,11 +53,29 @@ pub fn render(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         .and_then(Value::as_str)
         .unwrap_or_default();
     let name = asset.get("name").and_then(Value::as_str).unwrap_or("文件");
-    if !name.to_ascii_lowercase().ends_with(".pdf") {
-        return Err(format!("{name} 不是 PDF —— 图片材料本身就能直接看，直接引用它即可"));
+    let lower = name.to_ascii_lowercase();
+    let bytes = crate::pool::read_at(root, stored)?;
+
+    // 图片：原件附上就行，不用渲染
+    let image_ext = IMAGE_EXTS
+        .iter()
+        .copied()
+        .find(|ext| lower.ends_with(&format!(".{ext}")));
+    if let Some(ext) = image_ext {
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err(format!(
+                "{name} 太大（{}MB），先让用户用 convert_image 压一版",
+                bytes.len() / 1024 / 1024
+            ));
+        }
+        let mime = if ext == "png" { "image/png" } else { "image/jpeg" };
+        super::push_view(ctx, &crate::pdfimage::data_url_of(mime, &bytes))?;
+        return Ok(format!("已把《{name}》附在下一轮消息里，直接看图回答。"));
+    }
+    if !lower.ends_with(".pdf") {
+        return Err(format!("{name} 既不是图片也不是 PDF —— 这类文件我打不开"));
     }
 
-    let bytes = crate::pool::read_at(root, stored)?;
     let pages = args
         .get("maxPages")
         .and_then(Value::as_u64)

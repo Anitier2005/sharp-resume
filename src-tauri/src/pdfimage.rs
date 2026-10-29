@@ -112,12 +112,17 @@ pub fn pdf_pages(_bytes: &[u8], _max_pages: usize, _width: u32) -> Result<Vec<Pa
     Err("PDF 转图片目前只提供 Windows 构建".into())
 }
 
+/// 任意字节 → data URL。渲染出来的页面用 jpeg，材料里的原图各按自己的 mime。
+pub fn data_url_of(mime: &str, bytes: &[u8]) -> String {
+    format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+
 /// `PageImage` → data URL。前端直接把这一串塞进视觉消息。
 pub fn data_url(jpeg: &[u8]) -> String {
-    format!(
-        "data:image/jpeg;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(jpeg)
-    )
+    data_url_of("image/jpeg", jpeg)
 }
 
 #[derive(serde::Serialize)]

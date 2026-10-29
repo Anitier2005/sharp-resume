@@ -511,10 +511,10 @@ pub const TOOLS: &[Tool] = &[
         writes: true,
     },
     Tool {
-        name: "view_file_pages",
-        description: "把一份 PDF 逐页渲染成图片来「看」：原件怎么排的、留白多少、哪里挤。\
-                      用户让你照着某个 PDF 还原、或让你核对版式时用。\
-                      渲染出来的页会作为图片附在下一轮消息里，同时进材料清单；只对能看图的模型有效。",
+        name: "view_asset",
+        description: "把一份材料变成「这一轮你能看见的图片」：图片直接附原件，PDF 逐页渲染。\
+                      想确认证件照合不合格、想看 PDF 原件怎么排的、或用户问「你看得到吗」时用它。\
+                      附上的图片在下一轮消息里；PDF 渲染出的页也会进材料清单。只对能看图的模型有效。",
         params: view::params,
         run: view::render,
         scopes: &[Scope::Session],
@@ -722,8 +722,8 @@ mod tests {
         assert!(session.contains(&"request_layout"));
         assert!(session.contains(&"convert_image"));
         // PDF 渲染给自己看：只有会话需要，排版 agent 拿到的是结构化内容
-        assert!(session.contains(&"view_file_pages"));
-        assert!(!layout.contains(&"view_file_pages"));
+        assert!(session.contains(&"view_asset"));
+        assert!(!layout.contains(&"view_asset"));
         // 知识库是只读检索：会话能查、排版不能（排版不改内容，查事实没有落点）
         assert!(session.contains(&"search_knowledge"));
         assert!(session.contains(&"read_knowledge"));
