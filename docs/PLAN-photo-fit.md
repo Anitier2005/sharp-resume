@@ -41,7 +41,7 @@
 | `src-tauri/src/pdfembed.rs` | 新建：XObject 递归遍历 + 图像解码 + 显示尺寸 | 新增 | 抽图与渲染页解耦；纯 Rust，跨平台一致（不像 `pdfimage.rs` 要分 Windows/CLI 两条路） |
 | `src-tauri/src/lib.rs` | 注册 `mod pdfembed;` | 改 | 模块入口 |
 | `src-tauri/src/attach.rs` | `fn read` → `pub(crate) fn read`（:160）；`materials()` 返回结构化 `Materials`（含 `origin`）；`Parsed` 加 `pages: Option<u32>`；PDF 附件段补一行「附件标识」 | 改 | ① 工具拿不到 `AppHandle`，只能按数据目录读；② 原件页数（F-005）只有这里知道；③ 模型要能拿到 `stored` 才能调 `extract_images` |
-| `src-tauri/src/tools/extract.rs` | 新建：`extract_images` 工具（**源附件只读不登记**，实现口径见契约 §3.7；原计划的 `ensure_source_asset()` 幂等材料化本期不做） | 新增 | F-001 + F-002 + F-003 + F-013 |
+| `src-tauri/src/tools/extract.rs` | 新建：`extract_images` 工具（**源附件只读不登记**，实现口径见契约 §3.7；原计划的 `ensure_source_asset()` 幂等材料化本期不做） | 新增 | F-002 + F-003 + F-013 |
 | `src-tauri/src/tools/mod.rs` | `pub mod extract;`；`TOOLS` 注册 2 个工具（:167+）；`ToolCtx` 加 `facts` 字段 | 改 | 注册点唯一 |
 | `src-tauri/src/model.rs` | 不改 | — | `Asset.extra` / `Resume.extra` 已有 `#[serde(flatten)]`（:86-87、:295-296），新键天然不丢 |
 
