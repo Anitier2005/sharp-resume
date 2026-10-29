@@ -34,10 +34,9 @@ import {
 } from "@/lib/model-config";
 import { configureKnowledge } from "@/lib/knowledge";
 import { notifySettingsChanged } from "@/lib/settings-window";
-import { Button, Field, Input, ListEmpty, PasswordInput, Select, Tooltip } from "@/components/ui";
+import { Button, Field, Input, List, ListAdd, ListEmpty, ListRow, PasswordInput, Select, Tooltip } from "@/components/ui";
 import { Confirm } from "@/components/ui/confirm";
-import { Check, ChevronLeft, Gear, Plus, Trash } from "@/components/ui/icons";
-import { cx } from "@/lib/cx";
+import { Check, ChevronLeft, Gear, Trash } from "@/components/ui/icons";
 import styles from "./settings.module.css";
 
 /**
@@ -342,56 +341,43 @@ export function ModelSettings() {
               <div className={styles.groupHead}>
                 <span className={styles.groupTitle}>配置</span>
               </div>
-              <div className={styles.list}>
-                {/* 新建是列表首项，和知识库的库/条目列同一套范式 */}
-                <button
-                  type="button"
-                  className={cx(styles.row, styles.rowAdd)}
-                  onClick={addProfile}
-                >
-                  <Plus size={10} />
-                  <span className={styles.rowName}>添加配置</span>
-                </button>
+              <List>
+                <ListAdd label="添加配置" onClick={addProfile} />
                 {profiles.map((profile) => {
                   const used = profileUsedBy(editing.id, profile.id);
                   return (
-                    <div key={profile.id} className={cx(styles.row, styles.rowStatic)}>
-                      {/* 勾在最左：它是「这一行正在被用」的状态，不是内容 */}
-                      <span className={styles.rowCheck}>
-                        {used.length > 0 && <Check size={10} />}
-                      </span>
-                      <button
-                        type="button"
-                        className={styles.rowMain}
-                        onClick={() => {
-                          const first = used[0] ?? "chat";
-                          pickProfile(first, editing.id, profile.id);
-                        }}
-                      >
-                        <span className={styles.rowName}>{profile.label}</span>
-                        <span className={styles.rowMeta}>{profile.baseUrl || "沿用网关"}</span>
-                        {used.length > 0 && (
-                          <span className={styles.rowMeta}>
-                            {used.map(kindLabel).join(" · ")}
-                          </span>
-                        )}
-                      </button>
-                      <Tooltip label="删除这组配置">
-                        <Button
-                          variant="quiet"
-                          size="xs"
-                          icon
-                          aria-label={`删除配置 ${profile.label}`}
-                          onClick={() => setDropProfile(profile)}
-                        >
-                          <Trash size={10} />
-                        </Button>
-                      </Tooltip>
-                    </div>
+                    <ListRow
+                      key={profile.id}
+                      leading={used.length > 0 ? <Check size={10} /> : undefined}
+                      title={profile.label}
+                      meta={
+                        <>
+                          {profile.baseUrl || "沿用网关"}
+                          {used.length > 0 && ` · ${used.map(kindLabel).join(" / ")}`}
+                        </>
+                      }
+                      onSelect={() => {
+                        const first = used[0] ?? "chat";
+                        pickProfile(first, editing.id, profile.id);
+                      }}
+                      actions={
+                        <Tooltip label="删除这组配置">
+                          <Button
+                            variant="quiet"
+                            size="xs"
+                            icon
+                            aria-label={`删除配置 ${profile.label}`}
+                            onClick={() => setDropProfile(profile)}
+                          >
+                            <Trash size={10} />
+                          </Button>
+                        </Tooltip>
+                      }
+                    />
                   );
                 })}
                 {profiles.length === 0 && <ListEmpty>还没有配置，点上面那行「添加配置」</ListEmpty>}
-              </div>
+              </List>
             </section>
 
             {profiles.map((profile) => (
@@ -517,57 +503,53 @@ export function ModelSettings() {
         </button>
       </nav>
 
-      <div className={styles.list}>
-        {/* 添加是列表的第一项：新建是这个清单唯一的产出动作，放末尾要滚到底才看得见 */}
-        <button
-          type="button"
-          className={cx(styles.row, styles.rowAdd)}
+      <List>
+        <ListAdd
+          label="添加模型"
           onClick={() => {
             setOpenId(null);
             setDraft(blank("chat", ai.baseUrl));
           }}
-        >
-          <Plus size={10} />
-          <span className={styles.rowName}>添加模型</span>
-        </button>
+        />
         {models.map((model) => {
           const used = usedBy(model.id);
           return (
-            <div key={model.id} className={cx(styles.row, styles.rowStatic, used.length > 0 && styles.rowOn)}>
-              {/* 勾在最左：见本文件顶部说明 */}
-              <span className={styles.rowCheck}>{used.length > 0 && <Check size={10} />}</span>
-              <button
-                type="button"
-                className={styles.rowMain}
-                onClick={() => {
-                  setDraft(null);
-                  setOpenId(model.id);
-                }}
-              >
-                <span className={styles.rowName}>{model.label}</span>
-                <span className={styles.rowMeta}>{model.provider}</span>
-                <span className={styles.rowMeta}>
-                  {used.length > 0 ? used.map(kindLabel).join(" · ") : kindLabel(kindOf(model))}
-                </span>
-              </button>
-              <Tooltip label="设置">
-                <Button
-                  variant="quiet"
-                  size="xs"
-                  icon
-                  aria-label={`打开 ${model.label} 的设置`}
-                  onClick={() => {
-                    setDraft(null);
-                    setOpenId(model.id);
-                  }}
-                >
-                  <Gear size={11} />
-                </Button>
-              </Tooltip>
-            </div>
+            <ListRow
+              key={model.id}
+              active={used.length > 0}
+              /* 勾在最左：它是「这一行正在被用」的状态，不是内容 */
+              leading={used.length > 0 ? <Check size={10} /> : undefined}
+              title={model.label}
+              meta={
+                <>
+                  {model.provider} ·{" "}
+                  {used.length > 0 ? used.map(kindLabel).join(" / ") : kindLabel(kindOf(model))}
+                </>
+              }
+              onSelect={() => {
+                setDraft(null);
+                setOpenId(model.id);
+              }}
+              actions={
+                <Tooltip label="设置">
+                  <Button
+                    variant="quiet"
+                    size="xs"
+                    icon
+                    aria-label={`打开 ${model.label} 的设置`}
+                    onClick={() => {
+                      setDraft(null);
+                      setOpenId(model.id);
+                    }}
+                  >
+                    <Gear size={11} />
+                  </Button>
+                </Tooltip>
+              }
+            />
           );
         })}
-      </div>
+      </List>
     </div>
   );
 }

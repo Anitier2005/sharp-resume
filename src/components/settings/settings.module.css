@@ -57,55 +57,8 @@
 }
 
 /* ---------- 列表 ---------- */
-.list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.row {
-  height: 32px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  border-radius: 5px;
-  text-align: left;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
-.row:hover {
-  background: var(--bg-hover);
-}
-
-.rowOn {
-  background: var(--acc-soft);
-}
-
-.rowName {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.6875rem;
-  color: var(--fg-1);
-}
-
-.rowOn .rowName {
-  color: var(--acc-text);
-}
-
-.rowMeta {
-  flex: none;
-  font-size: 0.59375rem;
-  color: var(--fg-4);
-}
-
-/* 列表最后一项：添加。与普通行同样高，只靠文字颜色区分 —— 它不是数据 */
-.rowAdd .rowName {
-  color: var(--acc-text);
-}
+/* 行与「新建」行统一走 @/components/ui 的 List / ListRow / ListAdd，
+   这里不再保留 .row / .list —— 两套行样式正是行高不一致的来源 */
 
 /* ---------- 详情字段 ---------- */
 .fields {
@@ -255,27 +208,7 @@
   overflow: hidden;
 }
 
-/* ---------- 行内再分「主体 + 动作」 ---------- */
-/* .row 原本是按钮；这里当容器用：整行不再是一个点击目标，
-   主体负责「选中」、右侧的动作按钮负责「进设置」 */
-.rowStatic {
-  cursor: default;
-}
-
-.rowMain {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  text-align: left;
-  height: 100%;
-}
-
-.rowCheck {
-  flex: none;
-  color: var(--acc-text);
-}
+/* ---------- 行内再分「主体 + 动作」由 ListRow 负责，见 @/components/ui/list ---------- */
 
 /* ---------- 模型选择页 ---------- */
 /* 六类用途纵向排列：每一组是「模型 + 配置」两个下拉。

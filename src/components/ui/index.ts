@@ -18,7 +18,7 @@ export { Segmented, Chip, type SegmentedOption } from "./choice";
 export { Checkbox, Switch } from "./check";
 export { Disclosure } from "./disclosure";
 export { Tooltip } from "./tooltip";
-export { List, ListRow, ListEmpty, type ListRowProps } from "./list";
+export { List, ListRow, ListAdd, ListEmpty, type ListRowProps } from "./list";
 export { Modal, type ModalProps } from "./modal";
 export { Dropdown, MenuItem, MenuLabel, MenuSep } from "./menu";
 export { Confirm } from "./confirm";

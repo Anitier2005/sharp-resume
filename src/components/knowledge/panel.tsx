@@ -5,7 +5,6 @@ import {
   BookOpen,
   Close,
   Pencil,
-  Plus,
   Search,
   Sparkles,
   Trash,
@@ -45,7 +44,17 @@ import { extOf, resolveStored, saveAsset } from "@/lib/assets";
 import { ImageView } from "@/components/ui/image-view";
 import { cx } from "@/lib/cx";
 import shared from "@/components/ui/shared.module.css";
-import { Button, Field, Input, Textarea, Tooltip } from "@/components/ui";
+import {
+  Button,
+  Field,
+  Input,
+  List,
+  ListAdd,
+  ListEmpty,
+  ListRow,
+  Textarea,
+  Tooltip,
+} from "@/components/ui";
 import styles from "./panel.module.css";
 
 /**
@@ -640,67 +649,56 @@ export function KnowledgePanel({
 
       <div className={styles.cols}>
         {/* ---------- 第一列：库 ---------- */}
-        {/* 没选库时只该有这一列，铺满整块面板：留一条空荡荡的条目列只会让人以为数据没加载 */}
-        <section className={styles.pane} style={libId ? { width: widths[0] } : { flex: 1 }}>
+        {/* 没选库时只该有这一列，宽度和主页面侧栏一样是固定的：拉满整页
+            只会让「还没有库」这几个字飘在一大片空白中间 */}
+        <section className={styles.pane} style={{ width: widths[0] }}>
           <header className={styles.paneHead}>
             <span className={styles.paneTitle}>库</span>
           </header>
 
-          <div className={styles.list}>
-            {/* 新建就是列表的第一项：列头右上角那个 + 太容易被当成「展开更多」 */}
-            <button
-              type="button"
-              className={styles.rowNew}
-              onClick={() => setLibDraft({ name: "", note: "" })}
-            >
-              <Plus size={10} />
-              <span>新建库</span>
-            </button>
+          <List className={styles.list}>
+            <ListAdd label="新建库" onClick={() => setLibDraft({ name: "", note: "" })} />
             {libs.map((library) => (
-              <div
+              <ListRow
                 key={library.id}
-                className={cx(styles.row, library.id === libId && styles.rowOn)}
-              >
-                <button
-                  type="button"
-                  className={styles.rowMain}
-                  onClick={() => setLibId(library.id)}
-                >
-                  <span className={styles.rowName}>{library.name}</span>
-                  <span className={styles.rowMeta}>{library.entries}</span>
-                </button>
-                {!library.builtin && (
-                  <span className={styles.rowActions}>
-                    <Tooltip label="重命名">
-                      <button
-                        type="button"
-                        className={styles.iconBtn}
-                        aria-label={`重命名 ${library.name}`}
-                        onClick={() =>
-                          setLibDraft({ id: library.id, name: library.name, note: library.note })
-                        }
-                      >
-                        <Pencil size={10} />
-                      </button>
-                    </Tooltip>
-                    <Tooltip label="删除这个库">
-                      <button
-                        type="button"
-                        className={cx(styles.iconBtn, styles.iconDanger)}
-                        aria-label={`删除 ${library.name}`}
-                        onClick={() =>
-                          setRemoving({ kind: "lib", id: library.id, name: library.name })
-                        }
-                      >
-                        <Trash size={10} />
-                      </button>
-                    </Tooltip>
-                  </span>
-                )}
-              </div>
+                active={library.id === libId}
+                title={library.name}
+                meta={library.entries}
+                onSelect={() => setLibId(library.id)}
+                actions={
+                  !library.builtin && (
+                    <>
+                      <Tooltip label="重命名">
+                        <button
+                          type="button"
+                          className={styles.iconBtn}
+                          aria-label={`重命名 ${library.name}`}
+                          onClick={() =>
+                            setLibDraft({ id: library.id, name: library.name, note: library.note })
+                          }
+                        >
+                          <Pencil size={10} />
+                        </button>
+                      </Tooltip>
+                      <Tooltip label="删除这个库">
+                        <button
+                          type="button"
+                          className={cx(styles.iconBtn, styles.iconDanger)}
+                          aria-label={`删除 ${library.name}`}
+                          onClick={() =>
+                            setRemoving({ kind: "lib", id: library.id, name: library.name })
+                          }
+                        >
+                          <Trash size={10} />
+                        </button>
+                      </Tooltip>
+                    </>
+                  )
+                }
+              />
             ))}
-            {libs.length === 0 && <p className={styles.empty}>还没有库</p>}
-          </div>
+            {libs.length === 0 && <ListEmpty>还没有库</ListEmpty>}
+          </List>
 
           {/* 向量化是每库一个决策：模型换了就得重算，所以状态与按钮都挂在库上 */}
           <div className={styles.paneFoot}>
@@ -764,25 +762,21 @@ export function KnowledgePanel({
             </Tooltip>
           </header>
 
-          <div className={styles.list}>
-            {/* 同上：新建是列表首项。预置库只读，没有「新建」这回事 */}
+          <List className={styles.list}>
+            {/* 新建是列表首项。预置库只读，没有「新建」这回事 */}
             {libId && !activeLib?.builtin && (
-              <button
-                type="button"
-                className={styles.rowNew}
+              <ListAdd
+                label="新建条目"
                 onClick={() => {
                   setEntryId("");
                   setDoc(null);
                   setDraft({ title: "", tags: "", body: "" });
                 }}
-              >
-                <Plus size={10} />
-                <span>新建条目</span>
-              </button>
+              />
             )}
             {showHits ? (
               hits.length === 0 ? (
-                <p className={styles.empty}>没有命中</p>
+                <ListEmpty>没有命中</ListEmpty>
               ) : (
                 hits.map((hit) => (
                   <button
@@ -803,26 +797,22 @@ export function KnowledgePanel({
             ) : (
               <>
                 {entries.map((entry) => (
-                  <div
+                  <ListRow
                     key={entry.id}
-                    className={cx(styles.row, entry.id === entryId && styles.rowOn)}
-                  >
-                    <button
-                      type="button"
-                      className={styles.rowMain}
-                      onClick={() => {
-                        setEntryId(entry.id);
-                        setDraft(null);
-                      }}
-                    >
-                      <span className={styles.rowName}>{entry.title}</span>
-                      <span className={styles.rowMeta}>
+                    active={entry.id === entryId}
+                    title={entry.title}
+                    meta={
+                      <>
                         {entry.chunks}
                         {entry.enriched ? "" : " ·"}
-                      </span>
-                    </button>
-                    {!entry.preset && (
-                      <span className={styles.rowActions}>
+                      </>
+                    }
+                    onSelect={() => {
+                      setEntryId(entry.id);
+                      setDraft(null);
+                    }}
+                    actions={
+                      !entry.preset && (
                         <Tooltip label="删除这一条">
                           <button
                             type="button"
@@ -835,16 +825,16 @@ export function KnowledgePanel({
                             <Trash size={10} />
                           </button>
                         </Tooltip>
-                      </span>
-                    )}
-                  </div>
+                      )
+                    }
+                  />
                 ))}
                 {entries.length === 0 && (
-                  <p className={styles.empty}>{libId ? "这个库还没有条目" : "先建一个库"}</p>
+                  <ListEmpty>{libId ? "这个库还没有条目" : "先建一个库"}</ListEmpty>
                 )}
               </>
             )}
-          </div>
+          </List>
         </section>
 
         <div

@@ -1,34 +1,30 @@
 /* ==========================================================================
-   列表 / 列表行
+   列表 / 列表行 —— 全应用唯一一套
+   尺子对齐主页面侧栏：行高 26、左右 6px、圆角 4、无边框、无分隔线
    ========================================================================== */
 
 .list {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--line-soft);
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--bg-elev);
+  /* 行宽跟着列走，不自己撑满外层容器 */
+  min-width: 0;
 }
 
 .row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-top: 1px solid var(--line-soft);
-}
-
-/* 行与行之间只留发丝线，第一条不要 —— 否则和外框叠成双线 */
-.row:first-child {
-  border-top: 0;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 7px;
+  border-radius: 5px;
 }
 
 .row:hover {
-  background: var(--acc-softer);
+  background: var(--bg-hover);
 }
 
-.rowOn {
+.rowOn,
+.rowOn:hover {
   background: var(--acc-soft);
 }
 
@@ -37,12 +33,20 @@
   pointer-events: none;
 }
 
+.lead {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 10px;
+  color: var(--acc-text);
+}
+
 .main {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   text-align: left;
 }
 
@@ -57,23 +61,46 @@
 
 .meta {
   flex: none;
-  font-size: 0.59375rem;
+  font-size: 0.5625rem;
   color: var(--fg-4);
-}
-
-.check {
-  flex: none;
-  color: var(--acc-text);
+  font-variant-numeric: tabular-nums;
 }
 
 .acts {
   flex: none;
   display: flex;
+  align-items: center;
   gap: 2px;
 }
 
+/* 新建行：与普通行同高同缩进，只是字色淡一档 */
+.add {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-height: 26px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 0.6875rem;
+  color: var(--fg-3);
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.add:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+.add:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 .empty {
-  padding: 8px;
+  display: block;
+  margin: 6px 6px;
   font-size: 0.59375rem;
   line-height: 1.6;
   color: var(--fg-4);

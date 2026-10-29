@@ -124,91 +124,14 @@
 }
 
 /* ---------- 列表 ---------- */
+/* 列内滚动容器。行本身（高度/缩进/悬停/选中）统一由 @/components/ui/list 负责，
+   这里不再定义 .row —— 两套行样式正是行高对不齐的来源 */
 
 .list {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 4px;
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  border-radius: 4px;
-  min-height: 26px;
-}
-
-.row:hover {
-  background: var(--bg-hover);
-}
-
-.rowOn,
-.rowOn:hover {
-  background: var(--acc-soft);
-}
-
-/* 列表里的「新建」：做成首项而不是列头图标 —— 图标看不出是新建，
-   而新建是这个列表唯一的产出动作，值得占一行 */
-.rowNew {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  width: 100%;
-  min-height: 26px;
-  padding: 0 6px;
-  border-radius: 4px;
-  font-size: 0.6875rem;
-  color: var(--fg-3);
-  text-align: left;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
-.rowNew:hover {
-  background: var(--bg-hover);
-  color: var(--fg-1);
-}
-
-.rowMain {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 4px 6px;
-  text-align: left;
-}
-
-.rowName {
-  flex: 1;
-  min-width: 0;
-  font-size: 0.6875rem;
-  color: var(--fg-1);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rowMeta {
-  flex: none;
-  font-size: 0.5625rem;
-  color: var(--fg-4);
-  font-variant-numeric: tabular-nums;
-}
-
-/* 行内动作只在悬停/选中时出现：常态下不占视线，也不容易误点 */
-.rowActions {
-  display: none;
-  flex: none;
-  gap: 1px;
-  padding-right: 2px;
-}
-
-.row:hover .rowActions,
-.rowOn .rowActions {
-  display: flex;
 }
 
 .empty {
