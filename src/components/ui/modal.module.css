@@ -59,20 +59,16 @@
 
 /* 按钮区比卡片本体略深一档：让「可点的东西」和「读的东西」在视觉上分层，
    同时给「取消」一个明确的落脚处，而不是和正文抢注意力 */
+/* 按钮区：与正文同一块底、无分界、一律靠右。
+   小窗里只有几行字和两个按钮，一条横线加一块深色底会把 420 切成
+   「正文 + 工具条」两截，看着东西很多。所以这里不提供「带底栏」的变体 ——
+   统一模板，调用方不必再选。 */
 .foot {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--line);
-  background: var(--bg-canvas);
-}
-
-/* 无分界的按钮区：与正文同一块底，按钮一律靠右。
-   确认窗只有一句话 + 两个按钮，切成上下两截反而显得东西很多 */
-.footBare {
   justify-content: flex-end;
+  gap: 6px;
   padding: 2px 16px 16px;
   border-top: 0;
   background: transparent;

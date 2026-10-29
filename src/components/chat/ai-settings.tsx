@@ -44,7 +44,6 @@ export function AiSettingsSheet({ settings, onClose, onSave }: Props) {
       footer={
         <>
           <Button onClick={onClose}>取消</Button>
-          <span className={styles.sp} />
           <Button
             disabled={testing || !draft.baseUrl.trim() || !draft.model.trim()}
             onClick={() => void runTest()}

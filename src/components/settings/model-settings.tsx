@@ -341,11 +341,17 @@ export function ModelSettings() {
             <section className={styles.group}>
               <div className={styles.groupHead}>
                 <span className={styles.groupTitle}>配置</span>
-                <Button size="sm" leading={<Plus size={10} />} onClick={addProfile}>
-                  添加配置
-                </Button>
               </div>
               <div className={styles.list}>
+                {/* 新建是列表首项，和知识库的库/条目列同一套范式 */}
+                <button
+                  type="button"
+                  className={cx(styles.row, styles.rowAdd)}
+                  onClick={addProfile}
+                >
+                  <Plus size={10} />
+                  <span className={styles.rowName}>添加配置</span>
+                </button>
                 {profiles.map((profile) => {
                   const used = profileUsedBy(editing.id, profile.id);
                   return (
@@ -384,7 +390,7 @@ export function ModelSettings() {
                     </div>
                   );
                 })}
-                {profiles.length === 0 && <ListEmpty>还没有配置，点右上「添加配置」</ListEmpty>}
+                {profiles.length === 0 && <ListEmpty>还没有配置，点上面那行「添加配置」</ListEmpty>}
               </div>
             </section>
 
@@ -512,6 +518,18 @@ export function ModelSettings() {
       </nav>
 
       <div className={styles.list}>
+        {/* 添加是列表的第一项：新建是这个清单唯一的产出动作，放末尾要滚到底才看得见 */}
+        <button
+          type="button"
+          className={cx(styles.row, styles.rowAdd)}
+          onClick={() => {
+            setOpenId(null);
+            setDraft(blank("chat", ai.baseUrl));
+          }}
+        >
+          <Plus size={10} />
+          <span className={styles.rowName}>添加模型</span>
+        </button>
         {models.map((model) => {
           const used = usedBy(model.id);
           return (
@@ -549,18 +567,6 @@ export function ModelSettings() {
             </div>
           );
         })}
-
-        {/* 添加是列表的最后一项：这一页就是「模型清单」 */}
-        <button
-          type="button"
-          className={`${styles.row} ${styles.rowAdd}`}
-          onClick={() => {
-            setOpenId(null);
-            setDraft(blank("chat", ai.baseUrl));
-          }}
-        >
-          <span className={styles.rowName}>添加模型</span>
-        </button>
       </div>
     </div>
   );

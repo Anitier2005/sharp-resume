@@ -180,6 +180,16 @@ export function Sidebar() {
 
               {open && (
                 <ul className={styles.subs}>
+                  {/* 新建是列表首项：放末尾要滚到底才看得见，而它是这一列唯一的产出动作 */}
+                  <li>
+                    <button
+                      type="button"
+                      className={styles.newRes}
+                      onClick={() => dispatch({ type: "createResume", personId: item.id })}
+                    >
+                      + 新建简历
+                    </button>
+                  </li>
                   {/* 经历与作品挂在「人」这一级，入口就放在人下面，不放简历工具条 */}
                   <li>
                     <button
@@ -282,16 +292,6 @@ export function Sidebar() {
                       </li>
                     );
                   })}
-
-                  <li>
-                    <button
-                      type="button"
-                      className={styles.newRes}
-                      onClick={() => dispatch({ type: "createResume", personId: item.id })}
-                    >
-                      + 新建简历
-                    </button>
-                  </li>
                 </ul>
               )}
             </div>

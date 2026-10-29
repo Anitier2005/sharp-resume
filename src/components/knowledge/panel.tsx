@@ -644,19 +644,18 @@ export function KnowledgePanel({
         <section className={styles.pane} style={libId ? { width: widths[0] } : { flex: 1 }}>
           <header className={styles.paneHead}>
             <span className={styles.paneTitle}>库</span>
-            <Tooltip label="新建库">
-              <button
-                type="button"
-                className={styles.iconBtn}
-                aria-label="新建库"
-                onClick={() => setLibDraft({ name: "", note: "" })}
-              >
-                <Plus size={11} />
-              </button>
-            </Tooltip>
           </header>
 
           <div className={styles.list}>
+            {/* 新建就是列表的第一项：列头右上角那个 + 太容易被当成「展开更多」 */}
+            <button
+              type="button"
+              className={styles.rowNew}
+              onClick={() => setLibDraft({ name: "", note: "" })}
+            >
+              <Plus size={10} />
+              <span>新建库</span>
+            </button>
             {libs.map((library) => (
               <div
                 key={library.id}
@@ -763,24 +762,24 @@ export function KnowledgePanel({
                 <Upload size={11} />
               </button>
             </Tooltip>
-            <Tooltip label="新建条目">
+          </header>
+
+          <div className={styles.list}>
+            {/* 同上：新建是列表首项。预置库只读，没有「新建」这回事 */}
+            {libId && !activeLib?.builtin && (
               <button
                 type="button"
-                className={styles.iconBtn}
-                aria-label="新建条目"
-                disabled={!libId || activeLib?.builtin}
+                className={styles.rowNew}
                 onClick={() => {
                   setEntryId("");
                   setDoc(null);
                   setDraft({ title: "", tags: "", body: "" });
                 }}
               >
-                <Plus size={11} />
+                <Plus size={10} />
+                <span>新建条目</span>
               </button>
-            </Tooltip>
-          </header>
-
-          <div className={styles.list}>
+            )}
             {showHits ? (
               hits.length === 0 ? (
                 <p className={styles.empty}>没有命中</p>

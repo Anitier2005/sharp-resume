@@ -149,6 +149,28 @@
   background: var(--acc-soft);
 }
 
+/* 列表里的「新建」：做成首项而不是列头图标 —— 图标看不出是新建，
+   而新建是这个列表唯一的产出动作，值得占一行 */
+.rowNew {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-height: 26px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  color: var(--fg-3);
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.rowNew:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
 .rowMain {
   flex: 1;
   min-width: 0;

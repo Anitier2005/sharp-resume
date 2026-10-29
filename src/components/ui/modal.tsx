@@ -39,13 +39,8 @@ export interface ModalProps {
   onCancel?: () => void;
   /** 只有「知道了」这类单向窗才用它 —— 那类窗没有取消，需要一个纯关闭出口 */
   onClose?: () => void;
-  /** 底部按钮区。不传则整条底栏不渲染 */
+  /** 底部按钮区。不传则整条底栏不渲染；按钮一律靠右、无分界 */
   footer?: ReactNode;
-  /**
-   * 按钮区不带分界：确认类小窗用它 —— 一条横线加一块深色底会把 420 的小窗
-   * 切成「正文 + 工具条」两截，而这窗里只有一句话和两个按钮。
-   */
-  footerBare?: boolean;
   /** 中间段的额外类：调用方自己决定内部是 flex 列表还是普通段落 */
   bodyClassName?: string;
   children?: ReactNode;
@@ -72,7 +67,6 @@ export function Modal({
   onCancel,
   onClose,
   footer,
-  footerBare,
   bodyClassName,
   children,
 }: ModalProps) {
@@ -170,9 +164,7 @@ export function Modal({
           </div>
         ) : null}
 
-        {footer ? (
-          <footer className={cx(styles.foot, footerBare && styles.footBare)}>{footer}</footer>
-        ) : null}
+        {footer ? <footer className={styles.foot}>{footer}</footer> : null}
       </div>
     </div>
   );
