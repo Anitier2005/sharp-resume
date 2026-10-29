@@ -472,7 +472,7 @@ fn over_sentence(over: f64, lines: u32) -> String {
 
 /// 目标来自原件页数（`FromOrigin`）时的参照口径。
 ///
-/// 「达标」只能盖在**用户说过的**目标上。原件页数是系统按快照猜的默认值：
+/// 「达标」只能盖在用户说过的目标上。原件页数是系统按快照给的默认值，不是要求：
 /// 用户说了「压到一页」但没被记下来时，照原件 3 页说「达标」就是假绿灯 ——
 /// 文案全部合规、只有目标是错的，是最难被发现的一种谎报。
 fn origin_target_ref(pages: u32) -> String {
@@ -486,7 +486,10 @@ fn from_origin_verdict(pages: u32, overflow: bool) -> String {
     } else {
         format!("{}，这一页在里面。", origin_target_ref(pages))
     };
-    format!("{head}用户没有说过要几页。")
+    // 只能陈述「系统记了什么」，不能说「用户没说过什么」：本模块看不到用户那句话，
+    // 一旦模型漏调 set_target_pages，替用户作证就成了伪证 —— 而这比「目标猜错」更危险，
+    // 因为用户与模型都会信它。
+    format!("{head}系统里没有记下目标页数。")
 }
 
 /// 量不到 / 过期的首句（不含「测量版本」尾注）。
@@ -570,15 +573,18 @@ fn target_line(target: &Target, origin: Option<&Origin>) -> String {
             }
         }
         (Some(n), TargetSource::FromOrigin) => {
-            format!("{n} 页（沿用原件页数：原件只有 {n} 页，用户没有另说）")
+            format!("{n} 页（沿用原件页数：原件只有 {n} 页；系统里没有记下目标页数）")
         }
         // 未设置不许落成 1 页：模型会把「1」当成用户定的目标，然后为了压到一页
         // 删掉用户没让它删的内容。宁可让它知道「没有目标」，也不给它一个假的默认值。
+        //
+        // 措辞只说「系统里没有记下」，不说「用户没有说过」：本模块看不到用户那句话，
+        // 替用户作证是它没有能力核实的事（模型漏调工具时就是伪证）。
         (None, _) => match origin {
             Some(o) if o.pages.is_none() => {
-                "未设置（原件页数读不出，用户也没有说过要几页）".to_string()
+                "未设置（原件页数读不出，系统里也没有记下目标页数）".to_string()
             }
-            _ => "未设置（用户没有说过要几页，任何页数都合规；不要自行假定一页）".to_string(),
+            _ => "未设置（系统里没有记下目标页数；任何页数都合规，不要自行假定一页）".to_string(),
         },
     }
 }
@@ -591,7 +597,7 @@ fn target_short(target: &Target) -> String {
         (Some(n), TargetSource::UserBefore) => format!("{n} 页（用户之前要求过）"),
         (Some(n), TargetSource::Unset) => format!("{n} 页（用户之前要求过）"),
         (Some(n), TargetSource::FromOrigin) => format!("{n} 页（沿用原件页数）"),
-        (None, _) => "未设置（用户没有说过要几页）".to_string(),
+        (None, _) => "未设置（系统里没有记下目标页数）".to_string(),
     }
 }
 
@@ -965,17 +971,17 @@ mod tests {
             (
                 target(Some(3), TargetSource::FromOrigin),
                 Some(&origin_readable),
-                "3 页（沿用原件页数：原件只有 3 页，用户没有另说）",
+                "3 页（沿用原件页数：原件只有 3 页；系统里没有记下目标页数）",
             ),
             (
                 target(None, TargetSource::Unset),
                 Some(&origin_readable),
-                "未设置（用户没有说过要几页，任何页数都合规；不要自行假定一页）",
+                "未设置（系统里没有记下目标页数；任何页数都合规，不要自行假定一页）",
             ),
             (
                 target(None, TargetSource::Unset),
                 Some(&origin_unreadable),
-                "未设置（原件页数读不出，用户也没有说过要几页）",
+                "未设置（原件页数读不出，系统里也没有记下目标页数）",
             ),
         ];
         for (t, origin, expected) in cases {
@@ -1102,7 +1108,11 @@ mod tests {
                 "{name} 要用「按原件页数 3 页算」：{text}"
             );
         }
-        assert!(block(&fit_case).contains("用户没有说过要几页。"), "{}", block(&fit_case));
+        assert!(
+            block(&fit_case).contains("系统里没有记下目标页数。"),
+            "{}",
+            block(&fit_case)
+        );
 
         let overflow_case = facts(
             Some(ok_overflow()),
@@ -1337,7 +1347,7 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[0], "## 这一页的实测");
         assert!(lines[1].contains("实测 1.00 页，没有溢出"));
-        assert!(lines[2].contains("未设置（用户没有说过要几页）"));
+        assert!(lines[2].contains("未设置（系统里没有记下目标页数）"));
         assert!(lines[3].contains("没有目标，不讲达标与否；实测值仍然要照报。"));
         assert_eq!(lines.len(), 4);
     }
