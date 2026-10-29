@@ -1,6 +1,7 @@
 import type {
   AccentKey,
   Asset,
+  Block,
   BlockRole,
   ChatMessage,
   Field,
@@ -14,6 +15,9 @@ import type {
   SectionEntry,
   Workspace,
 } from "@/types";
+
+/** `resumeNotice` 只认这几个 key（白名单）：加一个就要在 reducer 里想清楚它不碰内容 */
+export type ResumeNoticeKey = "targetPagesNotice";
 
 export type Action =
   | { type: "hydrate"; workspace: Workspace }
@@ -40,6 +44,29 @@ export type Action =
       targetPages?: number;
       /** 写入时对应「第几条用户消息」；缺省 0 */
       turn?: number;
+    }
+  /**
+   * 页级 blocks 全量替换。之前只有容器级替换（`sectionItems` 等），
+   * `split_page` 这种「把一页切成两页」的操作需要「整页」这个粒度。
+   */
+  | { type: "pageBlocks"; personId: string; resumeId: string; pageId: string; blocks: Block[] }
+  /**
+   * 删空页。**不进确认门**：判据是「不可撤销才问」，空页没有内容可丢。
+   * reducer 里会再判一次空（防旧版本 agent 重放、防确认窗重放）。
+   */
+  | { type: "removeEmptyPage"; personId: string; resumeId: string; pageId: string }
+  /**
+   * 记一个「已看过」的标记。
+   *
+   * 为什么不塞进 `resumeTargetPages`：那个 op 的 `targetPages` 缺省 = **清除目标**，
+   * 用它 ack 一条提示会顺手把用户的目标页数清掉 —— 确认动作不许带副作用。
+   */
+  | {
+      type: "resumeNotice";
+      personId: string;
+      resumeId: string;
+      key: ResumeNoticeKey;
+      value: boolean;
     }
   /* ---------- 人的字段与库 ---------- */
   | { type: "personFields"; personId: string; fields: Field[] }

@@ -280,6 +280,121 @@ impl ResumePage {
     }
 }
 
+/* ---------- 文档形态与纸张 ---------- */
+
+/// 简历形态的取值。**存 String、不存 enum**：
+/// enum 遇到未知值会让整份 Workspace 反序列化失败，用户看到的是「简历全没了」；
+/// 存 String 则只在这一个字段上「不认识 → 按推断走」，页与正文一个字都不会丢。
+pub const KIND_STANDARD: &str = "standard";
+pub const KIND_FREEFORM: &str = "freeform";
+pub const KIND_FILE: &str = "file";
+
+pub const A4_W_MM: f64 = 210.0;
+pub const A4_H_MM: f64 = 297.0;
+pub const LETTER_W_MM: f64 = 215.9;
+pub const LETTER_H_MM: f64 = 279.4;
+/// 页边距的合法区间（毫米）
+pub const MARGIN_MIN_MM: f64 = 5.0;
+pub const MARGIN_MAX_MM: f64 = 50.0;
+/// 升级时补的默认边距。与「正文至少留 20mm」是同一把尺子，读起来才不别扭
+pub const DEFAULT_MARGIN_MM: f64 = 20.0;
+/// 正文至少要留出这么宽/这么高：边距缩到它为止
+const MIN_CONTENT_MM: f64 = 20.0;
+
+/// 纸张与页边距。**毫米**，顺序 `[上, 右, 下, 左]`（与 CSS `margin` 简写同序）。
+///
+/// 为什么单独一个结构而不是塞 4 个 extra 键：页边距要三处同源（预览 `--pad-*` /
+/// 打印 `@page` / docx twips），必须有**一处**能拿到完整四值，而不是三个地方
+/// 各自 `resume.marginTop ?? 16`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Paper {
+    /// `A4` | `Letter` | `custom`。未知值按 A4 处理 —— 与 `kind` 同理，
+    /// 一个认不出的字符串不该让整库读不出。
+    #[serde(default = "default_paper_size")]
+    pub size: String,
+    /// 只有 `size == "custom"` 才看它们；缺一边就退回 A4 的那一边
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_mm: Option<f64>,
+    /// `[上, 右, 下, 左]`
+    #[serde(default = "default_margin")]
+    pub margin: [f64; 4],
+}
+
+fn default_paper_size() -> String {
+    "A4".into()
+}
+
+fn default_margin() -> [f64; 4] {
+    [DEFAULT_MARGIN_MM; 4]
+}
+
+impl Default for Paper {
+    fn default() -> Self {
+        Self {
+            size: default_paper_size(),
+            width_mm: None,
+            height_mm: None,
+            margin: default_margin(),
+        }
+    }
+}
+
+impl Paper {
+    /// 纸上真正可用的尺寸（毫米）
+    pub fn size_mm(&self) -> (f64, f64) {
+        match self.size.as_str() {
+            "Letter" => (LETTER_W_MM, LETTER_H_MM),
+            "custom" => (
+                self.width_mm.filter(|value| value.is_finite() && *value > 0.0).unwrap_or(A4_W_MM),
+                self.height_mm.filter(|value| value.is_finite() && *value > 0.0).unwrap_or(A4_H_MM),
+            ),
+            _ => (A4_W_MM, A4_H_MM),
+        }
+    }
+
+    /// 归一：尺寸名规范成三种之一、边距 clamp、四值之和超过可用区就**等比**缩。
+    ///
+    /// 等比而不是截断：截断会把 60/60 变成 50/50 还好，但 60/10 会被截成 50/10
+    /// 这种「左右不对称」的边距 —— 用户看到的是一页歪的。等比缩保持原来的比例关系。
+    /// 第二次调用不再变化（缩完正好等于上限），所以是幂等的。
+    fn normalize(&mut self) {
+        self.size = match self.size.trim().to_ascii_lowercase().as_str() {
+            "letter" => "Letter".into(),
+            "custom" => "custom".into(),
+            _ => "A4".into(),
+        };
+        for value in self.margin.iter_mut() {
+            // NaN / 负数没有「合理的意图」可猜，回到默认值；0 是有意图的（贴边），
+            // clamp 到下限就行 —— 把它当脏数据抹成 20mm，用户会发现页边距自己变宽了
+            *value = if value.is_finite() && *value >= 0.0 {
+                value.clamp(MARGIN_MIN_MM, MARGIN_MAX_MM)
+            } else {
+                DEFAULT_MARGIN_MM
+            };
+        }
+        let (width, height) = self.size_mm();
+        // 上限至少留出「两边各 MARGIN_MIN」，否则小纸（custom 30mm）会算出负边距
+        let cap_w = (width - MIN_CONTENT_MM).max(MARGIN_MIN_MM * 2.0);
+        let cap_h = (height - MIN_CONTENT_MM).max(MARGIN_MIN_MM * 2.0);
+        shrink_pair(&mut self.margin, 0, 2, cap_h);
+        shrink_pair(&mut self.margin, 1, 3, cap_w);
+    }
+}
+
+fn shrink_pair(margin: &mut [f64; 4], first: usize, second: usize, limit: f64) {
+    let total = margin[first] + margin[second];
+    // 容差而不是严格 `>`：缩完的总和正好落在上限上，浮点会差最后几位；
+    // 不留容差的话第二次调用会再缩一次，幂等就没了
+    if total > limit + 1e-6 {
+        let scale = limit / total;
+        margin[first] *= scale;
+        margin[second] *= scale;
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Resume {
@@ -288,12 +403,76 @@ pub struct Resume {
     pub person_id: String,
     #[serde(default)]
     pub title: String,
+    /// `standard` / `freeform` / `file`。**三选一，不许混用**（`normalize` 会纠正）。
+    ///
+    ///   standard —— 参照 Word 排：段落/表格，导出 .docx 可继续编辑
+    ///   freeform —— 自由版面：正常 HTML+CSS，只出打印/PDF，Word 置灰
+    ///   file     —— 单份只读原件（1 个 file 页），不改内容不排版
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub paper: Paper,
     #[serde(default)]
     pub updated_at: u64,
     #[serde(default)]
     pub pages: Vec<ResumePage>,
     #[serde(flatten, default, skip_serializing_if = "is_empty")]
     pub extra: Map<String, Value>,
+}
+
+impl Resume {
+    /// 简历级归一：补形态、补纸张、纠正混用。**只补默认值与推断，不改任何页的内容。**
+    fn normalize(&mut self) {
+        self.paper.normalize();
+        // 已有的合法值一律尊重（含 freeform）；缺失或不认识才推断
+        let mut kind = match self.kind.trim().to_ascii_lowercase().as_str() {
+            KIND_STANDARD => KIND_STANDARD,
+            KIND_FREEFORM => KIND_FREEFORM,
+            KIND_FILE => KIND_FILE,
+            _ => infer_kind(&self.pages),
+        };
+        // 纠正混用：只降级 kind、不删页。
+        // 删页是不可逆的：用户可能只是切错了档，回来的路上不该发现内容没了。
+        // 反过来也不行 —— 不能因为发现一个 file 页就把整份升成 freeform，
+        // 那会顺手关掉用户的 Word 导出。
+        let has_file = self.pages.iter().any(|page| page.kind == KIND_FILE);
+        let all_file = !self.pages.is_empty() && self.pages.iter().all(|page| page.kind == KIND_FILE);
+        if kind == KIND_FILE && !all_file {
+            kind = KIND_STANDARD;
+        } else if kind != KIND_FILE && has_file {
+            kind = KIND_STANDARD;
+        }
+        self.kind = kind.to_string();
+    }
+
+    /// `extra.targetPagesNotice`：一次性提示「这条建议已经看过了」的标记。
+    /// 不做成一等字段：它只是界面的一次性状态，每加一条提示都改 struct 太贵。
+    /// （B5 才接 UI，本批先留着读数口）
+    #[allow(dead_code)]
+    pub fn target_pages_notice(&self) -> bool {
+        self.extra
+            .get("targetPagesNotice")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+}
+
+/// 形态推断：只在「没有值 / 值不认识」时用。
+fn infer_kind(pages: &[ResumePage]) -> &'static str {
+    if pages.is_empty() {
+        return KIND_STANDARD;
+    }
+    // 单页原件是显式规则，不是推论：用户上传一整页扫描件当简历（addFilePage）时，
+    // 那份简历只有一页且就是 file 页 —— 它是 file 档，不是 standard 档
+    if pages.len() == 1 && pages[0].kind == KIND_FILE {
+        return KIND_FILE;
+    }
+    // 多页原件：逐页可看、不可编辑
+    if pages.iter().all(|page| page.kind == KIND_FILE) {
+        return KIND_FILE;
+    }
+    KIND_STANDARD
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -408,6 +587,8 @@ impl Workspace {
         self.version = VERSION;
         for person in &mut self.people {
             for resume in &mut person.resumes {
+                // 简历级先归一再归页：kind 的推断要看页的 kind，而页的归一不依赖简历
+                resume.normalize();
                 for page in &mut resume.pages {
                     page.normalize();
                 }
@@ -870,6 +1051,117 @@ pub fn page_ids(workspace: &Workspace) -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 一份最小简历：`pages` 直接给 JSON 数组，省得每次手写整个 Resume
+    fn resume_with(pages: serde_json::Value, extra: serde_json::Value) -> Resume {
+        let mut raw = serde_json::json!({
+            "id": "r1",
+            "personId": "p1",
+            "title": "简历",
+            "pages": pages,
+        });
+        if let (Some(target), Some(add)) = (raw.as_object_mut(), extra.as_object()) {
+            for (key, value) in add {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        let mut resume: Resume = serde_json::from_value(raw).expect("简历要能解析");
+        resume.normalize();
+        resume
+    }
+
+    fn native_page(id: &str) -> serde_json::Value {
+        serde_json::json!({ "id": id, "kind": "native", "label": "", "blocks": [] })
+    }
+
+    fn file_page(id: &str) -> serde_json::Value {
+        serde_json::json!({ "id": id, "kind": "file", "label": "", "assetId": "a-cert", "blocks": [] })
+    }
+
+    /// 老数据（没有 kind / paper）：补成 standard + A4 + 20mm，页一个不动
+    #[test]
+    fn old_data_gets_standard_kind_and_a4_paper() {
+        let resume = resume_with(serde_json::json!([native_page("pg1")]), serde_json::json!({}));
+        assert_eq!(resume.kind, KIND_STANDARD);
+        assert_eq!(resume.paper.size, "A4");
+        assert_eq!(resume.paper.margin, [DEFAULT_MARGIN_MM; 4]);
+        assert_eq!(resume.pages.len(), 1);
+        assert_eq!(resume.pages[0].id, "pg1");
+    }
+
+    /// 恰 1 个 file 页 = file 档；再归一一次字节完全相同（幂等）
+    #[test]
+    fn a_single_file_page_makes_a_file_resume_and_stays_put() {
+        let mut resume = resume_with(serde_json::json!([file_page("pg1")]), serde_json::json!({}));
+        assert_eq!(resume.kind, KIND_FILE);
+
+        let once = serde_json::to_string(&resume).expect("序列化");
+        resume.normalize();
+        let twice = serde_json::to_string(&resume).expect("再序列化");
+        assert_eq!(once, twice, "归一必须幂等：第二次不许再变形");
+    }
+
+    /// 混用只降级 kind、不删页：file 页的 assetId 必须原样在
+    #[test]
+    fn mixing_a_file_page_degrades_the_kind_but_keeps_every_page() {
+        let resume = resume_with(
+            serde_json::json!([native_page("pg1"), file_page("pg2")]),
+            serde_json::json!({ "kind": "freeform" }),
+        );
+        assert_eq!(resume.kind, KIND_STANDARD, "混用一律降级到 standard");
+        assert_eq!(resume.pages.len(), 2, "一页都不许删");
+        let file = resume.pages.iter().find(|page| page.id == "pg2").expect("原件页还在");
+        assert_eq!(file.asset_id.as_deref(), Some("a-cert"));
+    }
+
+    /// 不认识的 kind 回落 standard：不 panic、不丢页
+    #[test]
+    fn an_unknown_kind_falls_back_to_standard() {
+        let resume = resume_with(
+            serde_json::json!([native_page("pg1")]),
+            serde_json::json!({ "kind": "weird" }),
+        );
+        assert_eq!(resume.kind, KIND_STANDARD);
+        assert_eq!(resume.pages.len(), 1);
+    }
+
+    /// 边距：脏值 clamp 到 5，超限等比缩（左右比例不变）
+    #[test]
+    fn margins_are_clamped_and_scaled_proportionally() {
+        let zero = resume_with(
+            serde_json::json!([native_page("pg1")]),
+            serde_json::json!({ "paper": { "margin": [0, 0, 0, 0] } }),
+        );
+        assert_eq!(zero.paper.margin, [MARGIN_MIN_MM; 4], "0 贴边 → clamp 到下限 5mm");
+
+        let mut wide = resume_with(
+            serde_json::json!([native_page("pg1")]),
+            serde_json::json!({ "paper": { "margin": [60, 30, 60, 30] } }),
+        );
+        let top_bottom = wide.paper.margin[0] + wide.paper.margin[2];
+        let left_right = wide.paper.margin[1] + wide.paper.margin[3];
+        assert!(top_bottom <= A4_H_MM - MIN_CONTENT_MM + 1e-6, "{:?}", wide.paper.margin);
+        assert!(left_right <= A4_W_MM - MIN_CONTENT_MM + 1e-6, "{:?}", wide.paper.margin);
+        // 等比：上下原本 1:1、左右原本 1:1，缩完仍是 1:1
+        assert!((wide.paper.margin[0] - wide.paper.margin[2]).abs() < 1e-6);
+        assert!((wide.paper.margin[1] - wide.paper.margin[3]).abs() < 1e-6);
+
+        // 再归一一次不许再缩（幂等）
+        let before = wide.paper.margin;
+        wide.normalize();
+        assert_eq!(before, wide.paper.margin);
+    }
+
+    /// `targetPagesNotice` 在 extra 里：读得出来，且不影响 targetPages
+    #[test]
+    fn target_pages_notice_is_a_readable_extra_flag() {
+        let resume = resume_with(
+            serde_json::json!([native_page("pg1")]),
+            serde_json::json!({ "targetPages": 1, "targetPagesNotice": true }),
+        );
+        assert!(resume.target_pages_notice());
+        assert_eq!(resume.extra.get("targetPages").and_then(Value::as_u64), Some(1));
+    }
 
     #[test]
     fn unknown_fields_survive_a_roundtrip() {

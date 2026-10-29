@@ -84,6 +84,31 @@ export interface LibraryItem {
   notes: string;
 }
 
+/**
+ * 这份简历是哪一种文档。三选一，不许混用（Rust 侧 `normalize` 会纠正，只降级不删页）。
+ *
+ *   standard —— 参照 Word 排：导出 .docx 可继续编辑
+ *   freeform —— 自由版面：只出打印/PDF，Word 置灰
+ *   file     —— 单份只读原件（1 个 file 页），不改内容不排版
+ */
+export type ResumeKind = "standard" | "freeform" | "file";
+
+/** 纸张尺寸名。`custom` 才看 `widthMm` / `heightMm` */
+export type PaperSize = "A4" | "Letter" | "custom";
+
+/**
+ * 纸张与页边距。**毫米**，`margin` 顺序 `[上, 右, 下, 左]`（与 CSS margin 简写同序）。
+ *
+ * 为什么用元组不用具名对象：四值在打印 `@page`、预览 `--pad-*`、docx twips 三处
+ * 都要按顺序用；具名字段会诱使人写 `paper.margin.left`（不存在）而运行时拿到 undefined。
+ */
+export interface Paper {
+  size: PaperSize;
+  widthMm?: number;
+  heightMm?: number;
+  margin: [number, number, number, number];
+}
+
 /** 二级：一份简历 */
 export interface Resume {
   id: string;
@@ -91,6 +116,10 @@ export interface Resume {
   title: string;
   updatedAt: number;
   pages: ResumePage[];
+  /** 文档形态。老数据没有这个键 = standard（Rust normalize 会补上） */
+  kind?: ResumeKind;
+  /** 纸张与页边距。老数据没有 = A4 + 20mm（Rust normalize 会补上） */
+  paper?: Paper;
   /**
    * 用户明确说过的目标页数。没有 = 未设置（不要自行假定一页）。
    * `Resume` 没有索引签名，新键必须显式声明，否则从 Rust 侧读回来会被 TS 挡掉。
@@ -98,6 +127,8 @@ export interface Resume {
   targetPages?: number;
   /** 写入时对应「第几条用户消息」，用来区分「这一轮」与「之前」 */
   targetPagesTurn?: number;
+  /** 「旧的多页简历带着整份 1 页老目标」那条一次性提示已经看过 */
+  targetPagesNotice?: boolean;
 }
 
 /** 简历页：一串块，按顺序排下去 */

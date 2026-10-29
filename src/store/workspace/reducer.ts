@@ -2,7 +2,17 @@ import type { Block, BlockRole, Person, Resume, Workspace } from "@/types";
 import { mapSections, newSectionBlock, withEntry, withHeader, withoutBlock } from "@/lib/blocks";
 import { uid } from "@/lib/uid";
 import type { Action } from "./types";
-import { mapPage, mapPerson, mapResume, newPerson, newPage, newResume, touch, withExpanded } from "./helpers";
+import {
+  isEmptyPage,
+  mapPage,
+  mapPerson,
+  mapResume,
+  newPerson,
+  newPage,
+  newResume,
+  touch,
+  withExpanded,
+} from "./helpers";
 
 const patchPerson = (state: Workspace, personId: string, fn: (person: Person) => Person): Workspace => ({
   ...state,
@@ -180,6 +190,36 @@ export function reducer(state: Workspace, action: Action): Workspace {
         }
         return next;
       });
+
+    case "pageBlocks":
+      // 整页全量替换：顺序与 id 由调用方（工具侧）算好，这里只换数组。
+      // 不做「按 id 合并」—— 合并要猜谁的顺序对，而调用方已经知道答案。
+      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) => ({
+        ...page,
+        blocks: action.blocks,
+      }));
+
+    case "removeEmptyPage": {
+      let removed = false;
+      const next = mapResume(state, action.personId, action.resumeId, (resume) => {
+        const page = resume.pages.find((item) => item.id === action.pageId);
+        // 双保险：工具侧已经判过空，这里再判一次。
+        // 旧版本 agent 重放、或者确认窗里的旧批次，都可能带来一条「其实非空」的删除。
+        // 最后一页也不删：空简历比空页更难解释。
+        if (!page || !isEmptyPage(page) || resume.pages.length <= 1) return resume;
+        removed = true;
+        return { ...resume, pages: resume.pages.filter((item) => item.id !== action.pageId) };
+      });
+      // 被拒时原样返回：连 updatedAt 都不许动，否则「什么都没发生」也会让排版重跑
+      return removed ? withPageCursor(next) : state;
+    }
+
+    case "resumeNotice":
+      // 只写这一个标记，不碰 targetPages（那个 op 的缺省值是「清除」，混用就有副作用）
+      return mapResume(state, action.personId, action.resumeId, (resume) => ({
+        ...resume,
+        [action.key]: action.value,
+      }));
 
     /* ---------- 人的字段与库 ---------- */
 

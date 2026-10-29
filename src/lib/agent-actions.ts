@@ -212,7 +212,16 @@ const OP_SPEC: Record<string, OpSpec> = {
   // 目标页数是数字，进不了 ids/optionalIds（那两个是「非空字符串」的判据）——
   // 它的校验在 cleanOp 里单独写，因为「省略」是一个合法值（= 清除）
   resumeTargetPages: { ids: ["personId", "resumeId"] },
+  // 页级 blocks 全量替换（split_page 用）
+  pageBlocks: { ids: ["personId", "resumeId", "pageId"], arrays: ["blocks"] },
+  // 删空页：不进确认门，判空在工具侧与 reducer 侧各一次
+  removeEmptyPage: { ids: ["personId", "resumeId", "pageId"] },
+  // 状态标记：key 走白名单（见 cleanOp），value 必须是布尔
+  resumeNotice: { ids: ["personId", "resumeId", "key"] },
 };
+
+/** `resumeNotice` 的白名单：一个新 key 进来，先想清楚它会不会和内容语义打架 */
+const RESUME_NOTICE_KEYS = new Set(["targetPagesNotice"]);
 
 const BLOCK_ROLES = new Set<BlockRole>([
   "plain",
@@ -265,6 +274,12 @@ function cleanOp(raw: unknown): Action | null {
   // split 前端也不放行：render 已经把它撤了，放进来只会出现「前端过、渲染层警告」的分裂
   if (type === "blockRole" && raw.role !== undefined && !BLOCK_ROLES.has(raw.role as BlockRole)) {
     return null;
+  }
+  // 状态标记只认白名单 key、value 必须是布尔：这个 op 给模型写「任意键」的口子，
+  // 等于让它可以往 Resume 上塞任何东西（包括 targetPages 这类有语义的键）
+  if (type === "resumeNotice") {
+    if (!RESUME_NOTICE_KEYS.has(raw.key as string)) return null;
+    if (typeof raw.value !== "boolean") return null;
   }
   // 目标页数：省略 = 清除（合法）；给了就必须是正整数。0 / 负数 / 小数一律丢这一条 ——
   // 丢一条脏数据不该炸掉同一批里其它合法写入，所以这里返回 null 而不是抛错

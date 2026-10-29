@@ -50,6 +50,7 @@ addPage  removePage  pageLabel  pageHeader  pageStyle  pageLayout  blockRole
 addSection  removeSection  blockFields  removeBlock  sectionTitle  sectionItems  entryPatch
 createResume  renameResume  deleteResume  deletePerson
 resumeTargetPages
+pageBlocks  removeEmptyPage  resumeNotice
 ```
 
 | op | 载荷 |
@@ -71,6 +72,9 @@ resumeTargetPages
 | `renameResume` | `resumeId, title` |
 | `deleteResume` | `resumeId` |
 | `resumeTargetPages` | `targetPages?, turn?` —— `targetPages` **省略 = 清除**（回到「未设置」），不要传 `null`；`turn` 是写入时对应的用户消息序号，前端缺省 0 |
+| `pageBlocks` | `personId, resumeId, pageId, blocks: Block[]` —— **整页全量替换**。之前只有容器级替换（`sectionItems` 等），没有页级；`split_page` 需要这个粒度 |
+| `removeEmptyPage` | `personId, resumeId, pageId` —— **不进确认门**（空页没有内容可丢）；reducer 必须**再判一次空**，非空则整条丢弃 |
+| `resumeNotice` | `personId, resumeId, key, value` —— `key` 白名单：`targetPagesNotice`；`value` 必须是布尔。**不改内容，不进确认门** |
 
 所有 op 都要带 `personId` / `resumeId`（除纯人级：`personFields` / `libraryItems` / `createResume` / `deletePerson`）。
 `id?` 的两个（`addPage` / `addSection`）是「同轮内要引用刚建的东西」用的：
@@ -83,6 +87,10 @@ id 必须由**工具侧**生成并写进 op，等前端生成就晚了。
 `resumeTargetPages` 不进确认门：它不改内容，改的是「这一份简历要压到几页」这个约定。
 两个键落进 `Resume.extra`（`targetPages` / `targetPagesTurn`）：reducer 里必须 `{...resume}`
 展开再改，手写重建对象会把它们丢掉。
+
+`resumeNotice` 为什么不塞进 `resumeTargetPages` 当一个 `notice` 字段：后者的 `targetPages`
+**缺省就是清除**，用它 ack 一条「提示已看过」，会顺手把用户的目标页数清掉。
+**宁多一个 op，不要让确认动作带副作用。**
 
 ### 1.3 确认门
 
@@ -104,6 +112,10 @@ id 必须由**工具侧**生成并写进 op，等前端生成就晚了。
   `libraryItems`），op 上看不出「少了一项」，**拦不了**。所以文案必须写「已删除…立即生效」——
   说「待确认」就是空头承诺，模型会照着去告诉用户。
   要让条目删除可拦，得新增 `entryRemove` op；当前判断是不值得为它加一种 reducer 类型。
+
+**新增不进确认门的两个**：`removeEmptyPage`、`resumeNotice`。
+理由：`removeEmptyPage` 的判据是「不可撤销才问」—— 空页没有内容可丢，问一次只是噪音。
+双保险：工具侧校验 + reducer 侧再校验（防旧版本 agent、防确认窗重放）。
 
 ### 1.4 三个实现事实（写代码时会撞上）
 
@@ -173,6 +185,24 @@ pub struct ResumePage {
 
 `role` 只能由 `set_block_role` 工具写（agent 用），UI 暂不暴露。旧数据没有该字段 = `plain`。
 
+`Resume` 新增两个一等字段（不再是 extra 里的未知键）：
+
+```rust
+/// standard / freeform / file。**存储用 String**（未知值走推断，不整库读不出），
+/// 渲染层内部才换成 enum。三选一，不许混用（normalize 会纠正，只降级不删页）。
+pub kind: String,
+
+/// 纸张与页边距。毫米，顺序 `[上,右,下,左]`，与 CSS margin 简写同序。
+/// 三处同源的唯一来源：预览 --pad-*、打印 @page、docx twips。
+/// size 值域 A4 / Letter / custom（未知按 A4）；custom 才看 widthMm / heightMm。
+pub paper: Paper,          // 默认 A4 + margin [20.0; 4]
+```
+
+前端同形（`src/types/index.ts` 的 `Resume` 没有索引签名，必须显式声明）：
+`kind?: ResumeKind`、`paper?: { size: PaperSize; widthMm?: number; heightMm?: number; margin: [number, number, number, number] }`。
+`margin` 用**元组**不用具名对象：四值在打印 / `--pad-*` / twips 三处都按顺序用，
+具名字段会诱使人写 `paper.margin.left`（不存在）而运行时拿到 `undefined`。
+
 `Resume.extra` 上新增两个键（走 `#[serde(flatten)]`，不改 struct 形状）：
 
 ```rust
@@ -181,6 +211,21 @@ pub struct ResumePage {
 pub target_pages: Option<u32>,       // JSON: targetPages
 pub target_pages_turn: Option<u32>,  // JSON: targetPagesTurn —— 第几条用户消息写入的
 ```
+
+`Resume.extra` 上再记一个「已看过」标记：
+
+```rust
+pub target_pages_notice: Option<bool>,   // JSON: targetPagesNotice —— 旧值语义债的一次性提示
+```
+
+**`{target}` 槽位文案改写**（路线二：`targetPages` = **每段**上限，取代 photo-fit 那版）：
+
+| 来源 | 文案 |
+|---|---|
+| `UserThisTurn` | `{n} 页（用户这一轮明确要求：这一段最多 {n} 页）` |
+| `UserBefore` | `{n} 页（用户之前要求过，仍然有效：这一段最多 {n} 页）` |
+| `FromOrigin` | `{n} 页（沿用原件页数：原件只有 {n} 页，用户没有另说，整份只有这一段）` —— **只在 `pages.len()==1` 时出现** |
+| `Unset` | 不变 |
 
 `Asset.extra` 上新增三个键，用于「从 PDF 抽出来的候选图」：
 
@@ -238,6 +283,10 @@ pub page_index: Option<u32>,    // 在来源 PDF 里的页序（1 基）
 | `delete_resume` | `resumeId` | `deleteResume` ⚠️ 确认门 |
 | `set_target_pages` | `pages?` | `resumeTargetPages`（省略 = 清除） |
 
+`set_target_pages` 的语义修正：`targetPages` 约束的是**当前这一段**，不是整份。
+工具描述与返回文案里的「这份简历压到 N 页」全部改为「这一段最多 N 页」。
+`split_page` / `delete_empty_page` **不给**会话侧（会话的 `add_page` / `delete_page` 保持现状）。
+
 ### 3.4 经历库
 
 | 工具 | 参数 | 产物 |
@@ -291,6 +340,19 @@ pub page_index: Option<u32>,    // 在来源 PDF 里的页序（1 基）
   「问的是哪一块」，否则只能再调一次 `read_page` 猜。
   前端收到后**追加一条来自「排版」的会话消息**，并**自动让会话 agent 跑一轮**。
   **每轮最多 1 次**（同计数方式），防止两个 agent 互相呼叫打转。
+
+| 工具 | 参数 | 产物 |
+|---|---|---|
+| `split_page` | `pageId?, afterBlockId` | `addPage` + `pageBlocks`×2 + `pageLayout`×2 |
+| `delete_empty_page` | `pageId` | `removeEmptyPage` |
+
+`split_page` 的语义（10 条）见技术方案 §4.1：新页插在源页后、最后一块报错、`parts` 随块走、
+`preset` 继承、`layout.html` 存在则报错、`notes` 留源页、一轮 1 次、总页数上限 12、
+返回值带新页 id。**一次 turn 只许 1 次**（`Outbox.splits` 计数，超了报错不是静默丢弃）。
+
+`set_page_layout` 的返回在 freeform 档要追加（检测到绝对定位时）：
+
+`注意：这一版有绝对定位（position:absolute / fixed）的内容，它不参与页高计算，实测页数可能比实际偏小。给根容器一个 min-height 能改善。`
 
 排版 agent **不能**调内容写入工具 —— 它的职责边界是「不改内容」。`Scope` 表照旧：
 `set_page_layout` / `read_layout_guide` 只有 `Layout`；内容工具只有 `Session`。
@@ -361,6 +423,31 @@ pub page_index: Option<u32>,    // 在来源 PDF 里的页序（1 基）
 **canvas 不支持**：`TAGS` 里没有、也不加。`GUIDE` 末尾补一句「矢量图、图表一律用
 `<svg>`，canvas 会被清洗掉」。
 
+### 5.2 三条不变量（跨两档）
+
+**I1 禁清单只有一份**（`render::sanitize::FORBIDDEN_ALWAYS`，两档共用，只增不减）：
+`script` / `on*` / `javascript:` / `vbscript:` / `iframe` `frame` `frameset` `object` `embed`
+/ `base` / `data:text/html` / `@page` / `@import`。
+**standard 档也不例外** —— 它现在走 schema 受限的白名单，但 `parts` 已允许局部 HTML，
+将来放宽时必须已经受到同一份禁清单保护。
+
+**I2 `@page` 只有生成器能写**：纸张与页边距只来自 `Resume.paper`；模型写的 `@page` 一律剥掉，
+并与「`@page` 从静态 CSS 变注入」共用一个注入点（`src/styles/page-setup.ts`）。
+
+**I3 入口唯一、管线可分歧**：`compile()` 是唯一分流点（按 `Resume.kind`）；
+`sanitize()` 是唯一清洗入口但按 kind 取策略。**不许出现第二个 `sanitize` 调用点。**
+
+### 5.3 freeform 档
+
+`kind == "freeform"` 时，文档本体是 `layout.html`，按**黑名单**清洗（只剥 I1 与 I2），
+不套 preset 白名单、不产结构化块；`preset` 恒为 `custom`；页边距仍由 `--pad-*` 给。
+Word 导出禁用（`kind == "freeform"` 时按钮置灰并说明）。
+
+### 5.4 file 档
+
+`kind == "file"` 时允许**逐页预览全部页**、全部只读、导出逐页原样拷贝。
+UI 常驻提示：`这是一份由 {n} 个原件组成的简历，不可编辑`。
+
 ---
 
 ## 6. 文件所有权（不许跨列改）
@@ -375,3 +462,43 @@ pub page_index: Option<u32>,    // 在来源 PDF 里的页序（1 基）
 | **Render** | `src-tauri/src/render/mod.rs`、`src-tauri/src/render/paper.css` |
 
 `src-tauri/src/tools/edit.rs` 只被 BE-domain 在 `mod.rs` 里 `mod` + 注册，两边都别动对方的文件。
+
+---
+
+## 7. 模型能力（看图）
+
+### 7.1 三态
+
+`supported` / `unsupported` / `unknown`。**只有 `unknown` 与 `unsupported` 的区别是本质的**：
+前者是「没测出来」，后者是「确认不行」。任何地方都不许把 unknown 当 unsupported 用。
+
+### 7.2 存储
+
+`settings` 表，key = `capability:v1`：
+
+```json
+{ "version": 1,
+  "items": { "<fp>": { "state": "supported|unsupported|unknown",
+                       "reason": ""|"protocol-reject"|"bad-request"|"offline"|"timeout"|"no-probe",
+                       "checkedAt": 1765000000, "model": "…", "baseUrl": "…" } } }
+```
+
+指纹：`hex(sha256("{baseUrl}\n{model}\n{apiKey}"))[..16]`。**不存密钥本体**。
+换 key / 模型 / baseUrl → 不命中 → `unknown`（天然失效，无需清理）。
+
+### 7.3 唯一入口
+
+Rust：`capability::resolve(base_url, model, api_key) -> Capability`。
+`attach::materials` / `tools::view` / UI 徽标三处**都只能调它**。
+`SendArgs.vision` 字段**删除**；`Outbox.vision` 改为 `resolve(...) == Supported` 的派生值。
+
+### 7.4 探测判定
+
+全对 → `supported`；答错 / 半对 / 拒答 → **`unknown`**（不许判 unsupported）；
+只有协议层明确拒图（`classify_error == ImageRejected`）→ `unsupported(protocol-reject)`。
+
+### 7.5 改判必须可逆
+
+`unsupported(protocol-reject)` 由 `net.rs` 在收到 ImageRejected 时就地写入；
+同指纹探测得 `supported` → **无条件覆盖**（后写胜）。
+400 但与图像无关、429 / 5xx / 超时 / 连接失败 → **不得改判**。

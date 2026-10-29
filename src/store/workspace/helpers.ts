@@ -43,6 +43,20 @@ export function mapResume(
   };
 }
 
+/**
+ * 空页 = 没有任何内容可丢。
+ *
+ * `assetId` / `layout` / `note` 都算内容：file 页只有 `assetId`、没有 block，
+ * 只看「blocks 为空」会把它当空页删掉 —— 那是用户的原件。
+ */
+export function isEmptyPage(page: ResumePage): boolean {
+  const hasBlocks = (page.blocks ?? []).length > 0;
+  const hasHeader = (page.header ?? []).length > 0;
+  const hasSections = (page.sections ?? []).length > 0;
+  const hasNote = !!page.note?.trim();
+  return !hasBlocks && !hasHeader && !hasSections && !hasNote && !page.assetId && !page.layout;
+}
+
 /** 对某一页做变换 */
 export function mapPage(
   state: Workspace,
