@@ -194,6 +194,39 @@ export async function attachmentBody(id: string): Promise<string | undefined> {
   return bodyCache.get(id);
 }
 
+/** 等这份附件读完（正文 / 图片 data URL 都好了）再往下走 */
+export async function attachmentReady(id: string): Promise<void> {
+  const job = pending.get(id);
+  if (!job) return;
+  try {
+    await job;
+  } catch {
+    /* 同上：错误已经落在文案里 */
+  }
+}
+
+/** 原始 File：PDF 渲染成图片、OCR 兜底都要原始字节 */
+export const attachmentFile = (id: string): File | undefined => fileCache.get(id);
+
+/**
+ * PDF 前几页 → 图片 data URL。
+ *
+ * 文字版 PDF 的正文已经能提出来，但版式全丢；视觉模型要「看原件长什么样」
+ * 只能给它图片。渲染在 Rust 侧走系统自带的 Windows.Data.Pdf（零体积代价）。
+ * 失败返回空数组：调用方按「只有文字」继续，不要让一次渲染失败毁掉整轮对话。
+ */
+export async function pdfPageImages(id: string, maxPages = 3): Promise<string[]> {
+  const file = fileCache.get(id);
+  if (!file || !isTauri() || file.size > MAX_PDF_BYTES) return [];
+  try {
+    const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+    const pages = await invoke<{ dataUrl: string }[]>("pdf_page_images", { bytes, maxPages });
+    return pages.map((page) => page.dataUrl);
+  } catch {
+    return [];
+  }
+}
+
 /** 取图片的 data URL；非图片、超大或浏览器调试模式返回 undefined */
 export const attachmentImage = (id: string): string | undefined => imageCache.get(id);
 

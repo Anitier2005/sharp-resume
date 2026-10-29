@@ -80,6 +80,16 @@ base64 = "0.22"
 # 读取 Windows「辅助功能 → 文本大小」的实际缩放值，供 UI 字号跟随。
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# Windows.Data.Pdf：把 PDF 页面渲染成图片（视觉模型看图用）。
+# 为什么用系统自带而不是 pdfium / mupdf：那两个要额外带 10MB+ 二进制或 cmake 整包编译，
+# 而 Win10+ 本来就有 PDF 渲染器 —— 这是我们唯一不增体积的选择。
+windows = { version = "0.62", features = [
+  "Foundation",
+  "Storage_Streams",
+  "Data_Pdf",
+  # RoInitialize：聊天跑在 tokio 工作线程上，那里没人替我们初始化 COM/WinRT
+  "Win32_System_WinRT",
+] }
 
 # 测试里用 #[tokio::test] 真连一次模型：tokio 本来就在树里，加 feature 不增编译量。
 [dev-dependencies]

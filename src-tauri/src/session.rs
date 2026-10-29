@@ -457,6 +457,14 @@ pub struct SendArgs {
     /// 用户可在模型配置里调，缺省 `DEFAULT_RESERVE`。
     #[serde(default)]
     pub reserve: Option<usize>,
+    /// 本轮的图片（附件截图、PDF 渲染出来的页面），data URL。
+    /// 只挂在本轮用户消息上，历史不重放 —— 图片只服务「这轮要我看着什么」。
+    #[serde(default)]
+    pub images: Vec<String>,
+    /// 当前模型能不能看图。决定「PDF 转图片」这类工具能不能给出图，
+    /// 也决定工具层要不要白跑一趟渲染。
+    #[serde(default)]
+    pub vision: bool,
 }
 
 /// 压缩历史摘要用的接入参数
@@ -526,6 +534,12 @@ pub async fn chat_send(
         });
     }
 
+    if !args.images.is_empty() {
+        if let Some(last) = messages.iter_mut().rev().find(|item| item.role == "user") {
+            *last = ChatMessage::user_with_images(last.text(), &args.images);
+        }
+    }
+
     let template = AiRequest {
         base_url: args.base_url,
         api_key: args.api_key,
@@ -538,7 +552,9 @@ pub async fn chat_send(
     };
 
     // 工具出站：界面指令与新产出的材料，本轮结束后随返回值交给前端
-    let out = crate::tools::Outbox::default();
+    let mut out = crate::tools::Outbox::default();
+    // 模型能不能看图：决定工具渲染出来的页面图片要不要真的发过去
+    out.vision = args.vision;
     // 数据目录给图片转化这类要碰文件的工具用；拿不到就传 None，
     // 工具会明确告诉模型「当前环境不支持」，而不是静默失败
     let root = crate::data_dir(&app).ok();

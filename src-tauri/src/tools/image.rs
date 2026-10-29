@@ -56,7 +56,7 @@ pub fn params() -> Value {
 }
 
 /// 从工作区里找一份材料：人的、库条目的、顶层池的都要找
-fn find_asset<'a>(workspace: &'a Value, id: &str) -> Option<&'a Value> {
+pub(crate) fn find_asset<'a>(workspace: &'a Value, id: &str) -> Option<&'a Value> {
     let people = workspace.get("people")?.as_array()?;
     for person in people {
         if let Some(list) = person.get("assets").and_then(Value::as_array) {

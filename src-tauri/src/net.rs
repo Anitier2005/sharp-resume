@@ -51,6 +51,23 @@ impl ChatMessage {
     pub fn user(text: impl Into<String>) -> Self {
         Self { role: "user".into(), content: Some(serde_json::Value::String(text.into())), tool_calls: None, tool_call_id: None }
     }
+    /// 带图片的用户消息。`content` 走协议的多模态数组：
+    /// 一个 text 段 + 若干 image_url 段（`data:` 开头的 base64）。
+    ///
+    /// 为什么图片不拼进字符串：一张 A4 页面渲染成 JPEG 也就 90KB，
+    /// 但 base64 之后塞进正文会让 token 计数失真到没法估算预算。
+    pub fn user_with_images(text: impl Into<String>, images: &[String]) -> Self {
+        let mut parts = vec![serde_json::json!({ "type": "text", "text": text.into() })];
+        for url in images {
+            parts.push(serde_json::json!({ "type": "image_url", "image_url": { "url": url } }));
+        }
+        Self {
+            role: "user".into(),
+            content: Some(serde_json::Value::Array(parts)),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
     pub fn assistant(text: impl Into<String>) -> Self {
         Self { role: "assistant".into(), content: Some(serde_json::Value::String(text.into())), tool_calls: None, tool_call_id: None }
     }

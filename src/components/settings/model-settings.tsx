@@ -36,6 +36,7 @@ import { configureKnowledge } from "@/lib/knowledge";
 import { notifySettingsChanged } from "@/lib/settings-window";
 import {
   Button,
+  Checkbox,
   Columns,
   Field,
   Grip,
@@ -397,6 +398,17 @@ export function ModelSettings() {
           options={MODEL_KINDS.map((item) => ({ value: item.kind, label: item.label }))}
           onChange={(value) => patchModel({ kind: value as ModelKind })}
         />
+      </Field>
+      {/* 能不能看图是模型的客观能力，不是配置项，所以放在「模型」这栏而不是配置里。
+          它直接决定附件怎么走：能看图就直传图片，看不了就先 OCR 成文字 */}
+      <Field label="能看图 · 多模态">
+        <Checkbox
+          checked={editing.vision}
+          disabled={!custom}
+          onChange={(checked) => patchModel({ vision: checked })}
+        >
+          {editing.vision ? "模型支持图像输入，图片会直接发给它" : "看不了图，图片先走 OCR 转文字"}
+        </Checkbox>
       </Field>
       {kindOf(editing) !== "ocr" && custom && (
         <Field label="思维强度档位 · 逗号分隔">

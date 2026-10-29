@@ -14,6 +14,7 @@ pub mod image;
 pub mod layout;
 pub mod page;
 pub mod read;
+pub mod view;
 
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
@@ -49,6 +50,13 @@ pub struct Outbox {
     pub notes: AtomicUsize,
     /// 本轮已经向会话 agent 提了几个问题。上限 1：两个 agent 互相追着问会打成乒乓。
     pub asks: AtomicUsize,
+    /// 工具渲染出来、要喂给视觉模型看的图片（data URL）。
+    /// 由 `agent::turn` 在工具结果之后作为一条用户消息附上 —— 工具结果本身
+    /// 只能是字符串，图片没法塞在里面。
+    pub views: Mutex<Vec<String>>,
+    /// 当前模型能不能看图。放在出站口是为了不污染 `ToolCtx` 的构造点
+    /// （工具与测试里有一堆），每轮由 `chat_send` 按模型能力写一次。
+    pub vision: bool,
 }
 
 /// 工具执行时能看到的东西：只读快照 + 当前定位 + 出站口。
@@ -102,6 +110,15 @@ pub fn push_action(ctx: &ToolCtx, action: Value) -> Result<(), String> {
 }
 
 /// 把一份新材料放进出站队列。
+/// 渲染出来的图片交给「下一轮消息」。上限 4：再多也不会有模型认真看。
+pub fn push_view(ctx: &ToolCtx, data_url: &str) -> Result<(), String> {
+    let mut list = ctx.out.views.lock().map_err(|_| "图片队列不可用".to_string())?;
+    if list.len() < 4 {
+        list.push(data_url.to_string());
+    }
+    Ok(())
+}
+
 pub fn push_asset(ctx: &ToolCtx, asset: Asset) -> Result<(), String> {
     let mut list = ctx
         .out
@@ -494,6 +511,16 @@ pub const TOOLS: &[Tool] = &[
         writes: true,
     },
     Tool {
+        name: "view_file_pages",
+        description: "把一份 PDF 逐页渲染成图片来「看」：原件怎么排的、留白多少、哪里挤。\
+                      用户让你照着某个 PDF 还原、或让你核对版式时用。\
+                      渲染出来的页会作为图片附在下一轮消息里，同时进材料清单；只对能看图的模型有效。",
+        params: view::params,
+        run: view::render,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
+    Tool {
         name: "set_page_layout",
         description: "改这一页的成品版面。三档力度，按需选最轻的那档：\
                       preset 换整体疏密；parts 只重写某几个块（块 id 从 read_page 取）；\
@@ -688,12 +715,15 @@ mod tests {
 
         // 工具数就是能力边界的快照：少一个说明注册时漏了，多一个说明有人偷偷
         // 给某个角色开了口子，两者都该在这里被看见
-        assert_eq!(session.len(), 37, "会话 agent 的工具数变了：{session:?}");
+        assert_eq!(session.len(), 38, "会话 agent 的工具数变了：{session:?}");
         assert_eq!(layout.len(), 9, "排版 agent 的工具数变了：{layout:?}");
 
         // 会话 agent：能读、能转交、能转图，但不能自己动版面
         assert!(session.contains(&"request_layout"));
         assert!(session.contains(&"convert_image"));
+        // PDF 渲染给自己看：只有会话需要，排版 agent 拿到的是结构化内容
+        assert!(session.contains(&"view_file_pages"));
+        assert!(!layout.contains(&"view_file_pages"));
         // 知识库是只读检索：会话能查、排版不能（排版不改内容，查事实没有落点）
         assert!(session.contains(&"search_knowledge"));
         assert!(session.contains(&"read_knowledge"));

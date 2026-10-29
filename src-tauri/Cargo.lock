@@ -3364,6 +3364,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tokio",
+ "windows",
  "winreg 0.55.0",
 ]
 

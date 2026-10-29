@@ -186,6 +186,22 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
             used.push(name);
             messages.push(ChatMessage::tool_result(call.id.clone(), result));
         }
+
+        // 工具渲染出来的图片（PDF 页面）只能靠一条新的用户消息带进去：
+        // 工具结果在协议里是纯字符串，塞不进 image_url 段。
+        // 模型看不了图时直接丢弃 —— 发过去只会换一个 400。
+        let views = ctx
+            .out
+            .views
+            .lock()
+            .map(|mut list| std::mem::take(&mut *list))
+            .unwrap_or_default();
+        if ctx.out.vision && !views.is_empty() {
+            messages.push(ChatMessage::user_with_images(
+                "以下是刚刚渲染出来的页面图片，看图回答；不用再重复描述图片里已有的文字。",
+                &views,
+            ));
+        }
     }
 
     if speech.is_empty() {

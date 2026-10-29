@@ -8,6 +8,7 @@ mod history;
 mod knowledge;
 mod model;
 mod net;
+mod pdfimage;
 mod pool;
 mod render;
 mod session;
@@ -645,6 +646,7 @@ pub fn run() {
             pool::pool_get,
             pool::pool_list,
             extract::extract_pdf,
+            pdfimage::pdf_page_images,
             extract::ocr_image,
             extract::ocr_api,
             knowledge::knowledge_libraries,

@@ -9,14 +9,14 @@ import { Disclosure } from "@/components/ui";
 import {
   toAttachment,
   stripPreview,
-  attachmentBody,
+  attachmentReady,
   attachmentText,
   attachmentImage,
   ensureOcrText,
   isImage,
+  pdfPageImages,
 } from "@/lib/attach";
 import { attachAtEnd } from "@/lib/inline-tokens";
-import { modelById } from "@/lib/model-config";
 import { diff, flatten, renderDelta, type Flat } from "@/lib/changes";
 import { entriesOf } from "@/lib/blocks";
 import { skillsPrompt } from "@/lib/skills";
@@ -349,7 +349,7 @@ export function ChatPanel() {
             // 图片的两条通道在这里分流：
             //   模型有视觉 → data URL 直传（走协议的 image_url 段）
             //   没有视觉   → OCR 转文字混进附件正文（慢几秒，只对图片跑）
-            const modelHasVision = modelById(ai.model)?.vision === true;
+            const modelHasVision = findModel(ai.model)?.vision === true;
             const imageUrls = modelHasVision
               ? attachments
                   .filter((file) => isImage(file.ext))
@@ -422,25 +422,54 @@ export function ChatPanel() {
           await invoke("chat_push", { key: person.id, message: userMessage });
 
           /**
-           * 附件正文并进材料段。
+           * 附件 → 材料段 + 图片。
            *
            * Rust 侧只接收 `context` 这一条字符串；会话里存的 attachments 只是
            * 元数据（名字/大小/存储名），模型读不到内容 —— 于是拖进来的 PDF
            * 在它眼里等于不存在，只会回一句「请把内容贴给我」。
-           * 图片走文字兜底（OCR），拿不到就明说，别让模型猜。
+           *
+           * 三条通道按「模型能不能看图」分流：
+           *   能看图 → 图片与 PDF 页面直接作为视觉段附上（PDF 的文字也一起给）
+           *   看不了 → 图片走 OCR 转文字；PDF 用提取出来的正文
+           *   都拿不到 → 明写读不到，别让模型猜用户传了什么
            */
-          const attachBlocks = await Promise.all(
-            attachments.map(async (file) => {
-              const body =
-                (await attachmentBody(file.id)) ??
-                (isImage(file.ext) ? await ensureOcrText(file.id) : undefined);
-              return body
-                ? `──── ${file.name} ────\n${body.trim()}\n──── 文件结束 ────`
-                : `（附件 ${file.name}：读不到内容${isImage(file.ext) ? "，图片没能转成文字" : ""}）`;
-            }),
-          );
-          const fullContext = attachBlocks.length
-            ? `${context}\n\n【本次附件】\n${attachBlocks.join("\n\n")}`
+          // 用 findModel 而不是 modelById：后者只查内置清单，用户自建的模型会被当成「看不了图」
+          const vision = findModel(ai.model)?.vision === true;
+          await Promise.all(attachments.map((file) => attachmentReady(file.id)));
+
+          const blocks: string[] = [];
+          const images: string[] = [];
+          for (const file of attachments) {
+            const body = attachmentText(file.id);
+            if (isImage(file.ext)) {
+              const url = vision ? attachmentImage(file.id) : undefined;
+              if (url) {
+                images.push(url);
+                blocks.push(`──── ${file.name} ────\n（图片已作为视觉输入附上，说明文字只描述版式，不要复述画面内容）\n──── 文件结束 ────`);
+                continue;
+              }
+              const ocr = await ensureOcrText(file.id);
+              blocks.push(
+                ocr
+                  ? `──── ${file.name} ────\n${ocr.trim()}\n──── 文件结束 ────`
+                  : `（附件 ${file.name}：图片没能转成文字 —— 当前模型看不了图，也没配 OCR）`,
+              );
+              continue;
+            }
+            // PDF：文字照给，能看图的模型再补上前几页的版面
+            const pages = file.ext === "pdf" && vision ? await pdfPageImages(file.id) : [];
+            images.push(...pages);
+            const note = pages.length ? `\n（另附前 ${pages.length} 页的图片，版式看图片）` : "";
+            blocks.push(
+              body
+                ? `──── ${file.name} ────\n${body.trim()}${note}\n──── 文件结束 ────`
+                : `（附件 ${file.name}：读不到内容${isImage(file.ext) ? "，图片没能转成文字" : ""}）`,
+            );
+          }
+          // 视觉段有上限：一次塞十几张图，token 和请求体都会炸
+          const picked = images.slice(0, 4);
+          const fullContext = blocks.length
+            ? `${context}\n\n【本次附件】\n${blocks.join("\n\n")}`
             : context;
 
           const channel = new Channel<{
@@ -480,6 +509,10 @@ export function ChatPanel() {
             args: {
               key: person.id,
               context: fullContext,
+              // 视觉输入：本轮的图片（附件截图、PDF 页面）。Rust 侧挂到本轮用户消息上
+              images: picked,
+              // 工具层据此判断「PDF 转图片给自己看」做不做、发不发
+              vision,
               extra: skillsPrompt(),
               baseUrl: ai.baseUrl,
               apiKey: ai.apiKey,
