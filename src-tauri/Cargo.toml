@@ -73,6 +73,13 @@ image = { version = "0.25", default-features = false, features = [
 # 附件 PDF 的文本提取。纯 Rust（lopdf 系），无 C 依赖。
 pdf-extract = "0.7"
 
+# PDF 里的内嵌位图抽取（XObject 遍历、流解码）。显式声明只是为了能 use lopdf::：
+# 它本来就在树里（pdf-extract 的传递依赖，lock 里已锁 0.34.0），所以不动版本。
+# 必须关默认特性：lopdf 的 default = chrono_time + nom_parser + rayon，
+# 而 pdf-extract 只开 nom_parser —— 打开默认特性会额外拉进 rayon / crossbeam / chrono
+# 六个包（lock 多 48 行），白增编译量。这里与 pdf-extract 的声明保持同一份口径。
+lopdf = { version = "0.34", default-features = false }
+
 # OCR 接口通道要把图片拼成 data URL，需要 base64。纯 Rust，无 C 依赖。
 base64 = "0.22"
 

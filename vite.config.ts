@@ -1,6 +1,7 @@
 import path from "path"
 import react from "@vitejs/plugin-react"
-import { defineConfig } from "vite"
+// vitest/config 的 defineConfig 才认 test 字段（用 vite 那个会被 tsc 拒）
+import { defineConfig } from "vitest/config"
 
 // https://vite.dev/config/
 export default defineConfig(() => {
@@ -18,6 +19,12 @@ export default defineConfig(() => {
     },
     resolve: {
       alias: { "@": path.resolve(__dirname, "./src") },
+    },
+    // 只测纯函数（contentVersion / measureTip）：不需要 DOM，也不许拿 jsdom 的假布局
+    // 去「证明」测量逻辑 —— 那部分是真实渲染冒烟的事。
+    test: {
+      environment: "node",
+      include: ["src/**/*.test.ts"],
     },
   }
 });

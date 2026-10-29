@@ -49,6 +49,7 @@ personFields  libraryItems  personAssets  itemAssets
 addPage  removePage  pageLabel  pageHeader  pageStyle  pageLayout  blockRole
 addSection  removeSection  blockFields  removeBlock  sectionTitle  sectionItems  entryPatch
 createResume  renameResume  deleteResume  deletePerson
+resumeTargetPages
 ```
 
 | op | 载荷 |
@@ -69,6 +70,7 @@ createResume  renameResume  deleteResume  deletePerson
 | `createResume` | `personId, resumeId, title?` —— `resumeId` 是**新简历** id，工具预生成 |
 | `renameResume` | `resumeId, title` |
 | `deleteResume` | `resumeId` |
+| `resumeTargetPages` | `targetPages?, turn?` —— `targetPages` **省略 = 清除**（回到「未设置」），不要传 `null`；`turn` 是写入时对应的用户消息序号，前端缺省 0 |
 
 所有 op 都要带 `personId` / `resumeId`（除纯人级：`personFields` / `libraryItems` / `createResume` / `deletePerson`）。
 `id?` 的两个（`addPage` / `addSection`）是「同轮内要引用刚建的东西」用的：
@@ -77,6 +79,10 @@ id 必须由**工具侧**生成并写进 op，等前端生成就晚了。
 
 > `entryAdd`/`entryRemove` **不新增** reducer 类型：条目增删由 Rust 在 `EditState`
 > 里算好新的 `items` 数组，走 `sectionItems`。少一处前后端形状同步。
+
+`resumeTargetPages` 不进确认门：它不改内容，改的是「这一份简历要压到几页」这个约定。
+两个键落进 `Resume.extra`（`targetPages` / `targetPagesTurn`）：reducer 里必须 `{...resume}`
+展开再改，手写重建对象会把它们丢掉。
 
 ### 1.3 确认门
 
@@ -108,6 +114,23 @@ id 必须由**工具侧**生成并写进 op，等前端生成就晚了。
 3. **`mutate` 的 ops 是「容器全量替换」**。确认窗挂起期间如果 agent 又写一轮，
    旧 ops 会盖掉新值。当前靠「遮罩挡住交互 + 排版 agent 不写内容」兜住；
    真要并发写再上向量时钟，不要提前做。
+
+### 1.5 实测上送（不落库）
+
+页面实测值只有一个来源：前端。它随请求上送，**不进 workspace、不进数据库** ——
+落库的测量值下次启动会变成假数据。
+
+| 通道 | 字段 | 形状 |
+|---|---|---|
+| `chat_send` | `args.measure` | `PageMeasure?` |
+| `layout_submit` | `args.measure` | `PageMeasure?` |
+| `layout_submit` | `args.origin` | `{ name, pages? }?` —— 原件页数，只在本轮有效 |
+
+`PageMeasure.status` 只有三个：`ok`（量到了）/ `unknown`（量不到，带 `reason`）/
+`stale`（量到过，但内容之后改过 —— 旧值作废，带 `previous`）。
+
+阈值（达标 / 容忍 / 溢出三档）与全部文案只在
+`src-tauri/src/agent/facts.rs` 实现，前端与渲染层不许复刻。
 
 ---
 
@@ -144,6 +167,23 @@ pub struct ResumePage {
 前端 `src/types/index.ts` 同形：`Block.role?: BlockRole`、`PageNote`、`ResumePage.notes?: PageNote[]`。
 
 `role` 只能由 `set_block_role` 工具写（agent 用），UI 暂不暴露。旧数据没有该字段 = `plain`。
+
+`Resume.extra` 上新增两个键（走 `#[serde(flatten)]`，不改 struct 形状）：
+
+```rust
+/// 用户明确说过的目标页数。没有 = 未设置。
+/// 前端 `src/types/index.ts` 必须显式声明 `targetPages?: number`（`Resume` 没有索引签名）。
+pub target_pages: Option<u32>,       // JSON: targetPages
+pub target_pages_turn: Option<u32>,  // JSON: targetPagesTurn —— 第几条用户消息写入的
+```
+
+`Asset.extra` 上新增三个键，用于「从 PDF 抽出来的候选图」：
+
+```rust
+pub role: Option<String>,       // "candidate" —— 渲染层不会拿它当页头照片
+pub source: Option<String>,     // 来源 PDF 的 assetId
+pub page_index: Option<u32>,    // 在来源 PDF 里的页序（1 基）
+```
 
 ---
 
@@ -191,6 +231,7 @@ pub struct ResumePage {
 | `add_resume` | `title` | `createResume` |
 | `rename_resume` | `resumeId, title` | `renameResume` |
 | `delete_resume` | `resumeId` | `deleteResume` ⚠️ 确认门 |
+| `set_target_pages` | `pages?` | `resumeTargetPages`（省略 = 清除） |
 
 ### 3.4 经历库
 
@@ -211,6 +252,19 @@ pub struct ResumePage {
 - 新增工具 `open_person(personId)`（UI）与 `open_resume(resumeId)`（UI），
   `open_page` 已有。切人/切简历**不写内容**，只切界面焦点。
 
+### 3.7 附件与抽图
+
+| 工具 | 参数 | 产物 |
+|---|---|---|
+| `extract_images` | `stored, name?` | 落池的 candidate 资产 + 候选清单文本 |
+
+- `stored` 是附件在 `inbox/` 里的存储名，从会话材料段的「附件标识」行取，**不是文件名**。
+- 幂等：同一份内容只登记一次源资产，同一张图只落一份、id 恒等于池内存储名（`<sha16>.<ext>`），
+  所以「每行开头反引号里的 assetId」可以直接交给 `set_field`。
+- 只对 PDF 生效，非 PDF 直接报「这不是 PDF」。
+- 抽出的图**进 `person.assets`** 并带 `role:"candidate"`：模型能用它，渲染层不会拿它当页头照片。
+- 系统**不判断**哪张是证件照 —— 只给尺寸与占比，选哪张由模型定。
+
 ---
 
 ## 4. 排版 agent 的新工具（Scope::Layout）
@@ -229,6 +283,17 @@ pub struct ResumePage {
 
 排版 agent **不能**调内容写入工具 —— 它的职责边界是「不改内容」。`Scope` 表照旧：
 `set_page_layout` / `read_layout_guide` 只有 `Layout`；内容工具只有 `Session`。
+
+### 4.1 返回文案里的实测结论
+
+`set_page_layout` 的返回值**必须**带一行实测结论，三态各一句（见 `agent/facts.rs`）：
+
+- 达标：`实测 1.00 页，没有溢出（目标 1 页，达标）。`
+- 未达标：`实测 1.12 页，超出 0.12 页（目标 1 页，仍未达标）。继续压，或停在这一档并说清差多少。`
+- 量不到：`尚未实测（测量不可用：预览没打开）。这一轮不能确认是否在一页内 —— 不要写「已压到一页」。`
+
+量不到时的措辞**必须**与「达标」明显不同：测量不可用时写「尚未实测」，不许写「没有溢出」。
+`describe_page` 的正文末尾追加 `## 这一页的实测` 一段，与上面同源（`facts::measure_section()`）。
 
 ---
 
@@ -253,6 +318,16 @@ pub struct ResumePage {
 未知 role → `warnings` 加一条 + 回落默认档。`role` 缺失 = 默认档。
 `fields` 块只认 `grid-2` / `grid-3` / `cols-2` / `cols-3`，其余 role 记 warning。
 
+### 5.0 页头照片的候选豁免
+
+`photo_of()` 选页头照片时**跳过** `asset.extra.role == "candidate"` 的资产。
+
+原因：`extract_images` 把 PDF 里的位图全部登记进 `person.assets`，而 `photo_of` 取的是
+「第一张 `kind == "image"`」—— 不跳的话，PDF 里的第一个 logo / 水印 / 装饰条会立刻
+变成页头的证件照，用户会看到一张完全无关的图被当成照片。
+
+老数据没有 `role` 键 → 行为不变（仍然取第一张），升级后用户原有证件照不会消失。
+
 ### 5.1 块锚点
 
 生成的 HTML 里，**每一个块的根元素**必须带 `data-block="<blockId>"`（手写 `parts` 无法保证，
@@ -274,6 +349,7 @@ pub struct ResumePage {
 | **lead（我）** | `docs/CONTRACT.md`、最终集成与验证 |
 | **BE-content** | `src-tauri/src/tools/edit.rs`(新)、`src-tauri/src/model.rs`、`src-tauri/src/agent/turn.rs`、`src-tauri/src/tools/read.rs` |
 | **BE-domain** | `src-tauri/src/tools/mod.rs`、`src-tauri/src/tools/page.rs`、`src-tauri/src/tools/layout.rs`、`src-tauri/src/agent/layout.rs`、`prompts/*.md` |
+| **BE-domain** | `src-tauri/src/pdfembed.rs`(新)、`src-tauri/src/agent/facts.rs`(新)、`src-tauri/src/tools/extract.rs`(新) |
 | **FE** | `src/types/index.ts`、`src/store/workspace/*`、`src/lib/agent-actions.ts`、`src/components/ui/confirm*`、`src/components/chat/*`、`src/components/resume/paper.tsx`、`src/components/resume/panel.tsx` |
 | **Render** | `src-tauri/src/render/mod.rs`、`src-tauri/src/render/paper.css` |
 

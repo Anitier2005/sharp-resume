@@ -29,6 +29,18 @@ export type Action =
   | { type: "renameResume"; personId: string; resumeId: string; title: string }
   | { type: "deleteResume"; personId: string; resumeId: string }
   | { type: "deletePerson"; personId: string }
+  /**
+   * 目标页数：用户说「压到一页」时由 `set_target_pages` 写进来。
+   * `targetPages` 省略 = 清除（回到「未设置」）—— 不是 0，也不是 null。
+   */
+  | {
+      type: "resumeTargetPages";
+      personId: string;
+      resumeId: string;
+      targetPages?: number;
+      /** 写入时对应「第几条用户消息」；缺省 0 */
+      turn?: number;
+    }
   /* ---------- 人的字段与库 ---------- */
   | { type: "personFields"; personId: string; fields: Field[] }
   | { type: "libraryItems"; personId: string; items: LibraryItem[] }

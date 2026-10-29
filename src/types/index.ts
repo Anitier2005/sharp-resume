@@ -27,6 +27,16 @@ export interface Asset {
   stored: string;
   /** 可选备注，比如「2024 年 6 月取得」 */
   note?: string;
+  /**
+   * candidate = 从 PDF 里抽出来、等着被选中的图。渲染层不会拿它当页头照片 ——
+   * 不跳过的话，PDF 里第一个 logo / 水印会立刻变成用户的证件照。
+   * 老数据没有这个键 = 普通材料。
+   */
+  role?: "candidate";
+  /** candidate 的来源 PDF 资产 id */
+  source?: string;
+  /** candidate 在来源 PDF 里的页序（1 基） */
+  pageIndex?: number;
 }
 
 /** 字段：用户自己的键值对 */
@@ -81,6 +91,13 @@ export interface Resume {
   title: string;
   updatedAt: number;
   pages: ResumePage[];
+  /**
+   * 用户明确说过的目标页数。没有 = 未设置（不要自行假定一页）。
+   * `Resume` 没有索引签名，新键必须显式声明，否则从 Rust 侧读回来会被 TS 挡掉。
+   */
+  targetPages?: number;
+  /** 写入时对应「第几条用户消息」，用来区分「这一轮」与「之前」 */
+  targetPagesTurn?: number;
 }
 
 /** 简历页：一串块，按顺序排下去 */
@@ -194,6 +211,38 @@ export interface ResumePage {
   header?: Field[];
   /** v4 遗留：同上 */
   sections?: Section[];
+}
+
+/**
+ * 页面实测：**只有一个来源**（前端 DOM），随 `chat_send` / `layout_submit` 上送。
+ *
+ * 它不落库 —— 落库的测量值下次启动就变成假数据。判定阈值与文案在 Rust 的
+ * `agent/facts.rs`，这里只负责把量到的数照实带过去。
+ */
+export interface PageMeasure {
+  pageId: string;
+  /** ok = 量到了；unknown = 量不到（看 reason）；stale = 内容改过，旧值作废（看 previous） */
+  status: "ok" | "stale" | "unknown";
+  /** 测量版本号，每次成功测量 +1 */
+  version: number;
+  /** 内容版本（8 位 hex） */
+  content: string;
+  /** A4 一页在这个容器里的高度（px）= 纸宽 × 297/210 */
+  onePage?: number;
+  /** 纸面实际高度（px） */
+  contentPx?: number;
+  /** 正文行高（px），把溢出量折成「多少行正文」 */
+  lineHeight?: number;
+  /** stale 时带上一次的数 */
+  previous?: { content: string; onePage: number; contentPx: number };
+  /** unknown 的原因 */
+  reason?: "no-preview" | "fonts" | "timeout" | "empty";
+}
+
+/** 本轮原件。`pages` 缺失 = 读不出（文件损坏或不是 PDF），**绝不是 0** */
+export interface Origin {
+  name: string;
+  pages?: number;
 }
 
 /** 分区：标题由用户起（"工作经历" / "Awards" / "开源项目"…） */

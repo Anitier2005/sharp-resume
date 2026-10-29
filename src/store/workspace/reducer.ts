@@ -167,6 +167,20 @@ export function reducer(state: Workspace, action: Action): Workspace {
       });
     }
 
+    case "resumeTargetPages":
+      return mapResume(state, action.personId, action.resumeId, (resume) => {
+        // 必须整份展开：这两个键落在 Resume.extra 里，手写重建对象会把未知键一起丢掉
+        const next = { ...resume };
+        if (action.targetPages === undefined) {
+          delete next.targetPages;
+          delete next.targetPagesTurn;
+        } else {
+          next.targetPages = action.targetPages;
+          next.targetPagesTurn = action.turn ?? 0;
+        }
+        return next;
+      });
+
     /* ---------- 人的字段与库 ---------- */
 
     case "personFields":

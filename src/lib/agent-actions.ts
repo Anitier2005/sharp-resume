@@ -209,6 +209,9 @@ const OP_SPEC: Record<string, OpSpec> = {
   renameResume: { ids: ["personId", "resumeId"] },
   deleteResume: { ids: ["personId", "resumeId"] },
   deletePerson: { ids: ["personId"] },
+  // 目标页数是数字，进不了 ids/optionalIds（那两个是「非空字符串」的判据）——
+  // 它的校验在 cleanOp 里单独写，因为「省略」是一个合法值（= 清除）
+  resumeTargetPages: { ids: ["personId", "resumeId"] },
 };
 
 const BLOCK_ROLES = new Set<BlockRole>([
@@ -262,6 +265,12 @@ function cleanOp(raw: unknown): Action | null {
   // split 前端也不放行：render 已经把它撤了，放进来只会出现「前端过、渲染层警告」的分裂
   if (type === "blockRole" && raw.role !== undefined && !BLOCK_ROLES.has(raw.role as BlockRole)) {
     return null;
+  }
+  // 目标页数：省略 = 清除（合法）；给了就必须是正整数。0 / 负数 / 小数一律丢这一条 ——
+  // 丢一条脏数据不该炸掉同一批里其它合法写入，所以这里返回 null 而不是抛错
+  if (type === "resumeTargetPages" && raw.targetPages !== undefined) {
+    const pages = raw.targetPages;
+    if (typeof pages !== "number" || !Number.isInteger(pages) || pages < 1) return null;
   }
   return raw as Action;
 }
