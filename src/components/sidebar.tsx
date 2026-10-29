@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/icons";
 import { LibraryDrawer } from "@/components/library/drawer";
 import { KnowledgePanel } from "@/components/knowledge/panel";
-import { openSettingsWindow, type SettingsView } from "@/lib/settings-window";
+import { openSettingsWindow, themeParams, type SettingsView } from "@/lib/settings-window";
 import { ModelSettings } from "@/components/settings/model-settings";
 import { LookSettings } from "@/components/settings/look-settings";
 import { Modal } from "@/components/ui/modal";
@@ -78,17 +78,8 @@ export function Sidebar() {
 
   const openSettings = async (view: SettingsView) => {
     setKbOpen(false);
-    // 外观窗要把当前值带过去：它不读工作区，只负责改
-    const params: Record<string, string> =
-      view === "look"
-        ? {
-            accent: state.ui.accent,
-            hex: state.ui.accentHex ?? "",
-            mode: state.ui.mode,
-            scale: state.ui.textScale == null ? "" : String(state.ui.textScale),
-            sys: String(systemTextScale),
-          }
-        : {};
+    // 三个子窗口都要带上主题：它们独立成窗、不读工作区，只靠这份查询串定色
+    const params = themeParams(state.ui, systemTextScale);
     const opened = await openSettingsWindow(view, params);
     // 知识库有现成的抽屉，浏览器调试就退回它；模型/外观退回浮层
     if (!opened) {

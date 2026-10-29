@@ -91,7 +91,8 @@
   flex: none;
   width: 7px;
   cursor: col-resize;
-  border-left: 1px solid var(--line-soft);
+  /* 用 --line 而不是 --line-soft：列底现在是白的，发丝线在白底上等于没有 */
+  border-left: 1px solid var(--line);
   transition: background 0.12s ease;
 }
 

@@ -24,7 +24,7 @@ import { AskForm } from "./ask-form";
 import { displayName } from "@/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { openSettingsWindow, type SettingsChanged } from "@/lib/settings-window";
+import { openSettingsWindow, themeParams, type SettingsChanged } from "@/lib/settings-window";
 import styles from "./chat.module.css";
 
 /**
@@ -71,7 +71,8 @@ export function ChatPanel() {
    * 浏览器调试开不了窗口，退回老的小窗（只服务开发）。
    */
   const openModelSettings = async () => {
-    if (!(await openSettingsWindow("model"))) setAiOpen(true);
+    // 带上主题：模型窗不读工作区，空参数会开出默认浅色的窗
+    if (!(await openSettingsWindow("model", themeParams(state.ui)))) setAiOpen(true);
   };
 
   useEffect(() => {

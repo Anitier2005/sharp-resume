@@ -1,6 +1,7 @@
 /* ==========================================================================
    列表 / 列表行 —— 全应用唯一一套
-   尺子对齐主页面侧栏：行高 26、左右 6px、圆角 4、无边框、无分隔线
+   尺子对齐主页面侧栏：行高 26、左右 7px、圆角 5
+   行与行之间一条发丝线：一列十几项挨在一起、只有 hover 才分得清，太容易看串行
    ========================================================================== */
 
 .list {
@@ -17,6 +18,24 @@
   min-height: 26px;
   padding: 0 7px;
   border-radius: 5px;
+}
+
+/* 除第一行外都带一条上边线。用 ::before 画而不是 border-top：
+   border 会把行高顶开 1px，滚动时行会一跳一跳 */
+.row + .row,
+.add + .row,
+.row + .add {
+  position: relative;
+}
+
+.row + .row::before,
+.add + .row::before,
+.row + .add::before {
+  content: "";
+  position: absolute;
+  inset: 0 5px auto 5px;
+  height: 1px;
+  background: var(--line-soft);
 }
 
 .row:hover {

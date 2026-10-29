@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { emitTo } from "@tauri-apps/api/event";
+import { emit, emitTo } from "@tauri-apps/api/event";
 import { isTauri } from "@/lib/storage";
 
 /**
@@ -61,7 +61,39 @@ async function toMain(event: string, payload: unknown) {
   }
 }
 
+/** 广播给所有窗口（含发出者自己，重复应用同一份主题是幂等的） */
+async function toAll(event: string, payload: unknown) {
+  if (!isTauri()) return;
+  try {
+    await emit(event, payload);
+  } catch {
+    // 没有接收方不是错误
+  }
+}
+
 export const notifySettingsChanged = (kind: SettingsChanged["kind"]) =>
   toMain("settings:changed", { kind } satisfies SettingsChanged);
 
-export const notifyUiPatch = (patch: UiPatch) => toMain("ui:patch", patch);
+/**
+ * 窗口初值的主题参数。
+ *
+ * 每个子窗口都只靠自己这一份查询串定色：它不挂工作区 store，也不读 localState。
+ * 早先只有外观窗带这组参数，模型窗与知识库窗拿空参数 → 于是永远是默认浅色，
+ * 用户换了强调色、切了深色，那两个窗口纹丝不动。
+ */
+export function themeParams(
+  ui: { accent: string; accentHex?: string | null; mode: "light" | "dark"; textScale?: number | null },
+  systemScale?: number,
+): Record<string, string> {
+  return {
+    accent: ui.accent,
+    hex: ui.accentHex ?? "",
+    mode: ui.mode,
+    scale: ui.textScale == null ? "" : String(ui.textScale),
+    sys: String(systemScale ?? 1.2),
+  };
+}
+
+/** 所有窗口一起收：主窗口落 store，已经开着的设置窗也把自己那身颜色换掉 */
+export const notifyUiPatch = (patch: UiPatch) => toAll("ui:patch", patch);
+

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import type { AccentKey } from "@/types";
 import { readableOn } from "@/lib/color";
-import { notifyUiPatch } from "@/lib/settings-window";
+import { notifyUiPatch, type UiPatch } from "@/lib/settings-window";
 import { ToastProvider } from "@/components/ui/toast";
 import { Close } from "@/components/ui/icons";
 import { LookSettings } from "@/components/settings/look-settings";
@@ -42,6 +43,30 @@ export function SettingsRoot() {
     const effective = scale ? Number(scale) : systemScale;
     document.documentElement.style.setProperty("--text-scale", String(effective));
   }, [accent, scale, systemScale]);
+
+  /**
+   * 别的窗口改了外观：已经开着的设置窗也要跟着换色。
+   *
+   * 早先 `ui:patch` 只发给主窗口，所以开着模型窗去改强调色，模型窗是动都不动的
+   * ——「同步主题」这件事必须在所有窗口之间成立，而不是主窗口的特权。
+   */
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    void listen<UiPatch>("ui:patch", (event) => {
+      const patch = event.payload;
+      if (patch.accent !== undefined) {
+        setAccent(patch.accent as AccentKey);
+        setHex(patch.accentHex ?? "");
+      }
+      if (patch.mode) setMode(patch.mode);
+      if (patch.textScale !== undefined) {
+        setScale(patch.textScale == null ? "" : String(patch.textScale));
+      }
+    }).then((fn) => {
+      off = fn;
+    });
+    return () => off?.();
+  }, []);
 
   const pickAccent = (key: AccentKey) => {
     setAccent(key);
