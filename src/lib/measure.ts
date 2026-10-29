@@ -1,3 +1,5 @@
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import type { Origin, PageMeasure, Person, ResumePage } from "@/types";
 
 /**
@@ -103,6 +105,151 @@ export function measureTip(measure: PageMeasure | null | undefined, targetPages?
   return targetPages
     ? `实测 ${shown} 页（目标 ${targetPages} 页，达标）。`
     : `实测 ${shown} 页。没有目标页数，不讲达标与否。`;
+}
+
+/* ==========================================================================
+   离屏测量 hook
+   ========================================================================== */
+
+/** 每次成功测量 +1。放模块级：两个组件同时用不会互相盖掉对方的计数 */
+let okVersion = 0;
+
+/** 一次测量最多等这么久；到点还没有一次 ok 就明说量不到，不让状态栏挂着旧数 */
+const MEASURE_TIMEOUT_MS = 1500;
+
+/** 内容改短到和上一版一样高时观察器不会响，靠这一下补读 */
+const STALE_RETRY_MS = 300;
+
+/** 上一次成功测量的快照：降级成 stale 时要把它原样交出去 */
+interface Snapshot {
+  content: string;
+  onePage: number;
+  contentPx: number;
+  lineHeight: number;
+}
+
+/**
+ * 从离屏宿主量这一页有几页。
+ *
+ * 为什么不量预览那份：默认视图是编辑，预览根本不在 DOM 里；而两份各算一次必然
+ * 漂移。宿主常驻，这里只认它一份。
+ *
+ * 字体没就绪时宁可给 `unknown("fonts")` —— 字形宽度不同会改变换行与总行数，
+ * 那一刻量到的数是会变的数，而「会变的数」正是 F-007 要防的东西。
+ */
+export function usePageMeasure(input: {
+  /** 离屏宿主的 `.wrap` 元素；它的第一个子元素才是 `.paper` */
+  hostRef: RefObject<HTMLDivElement | null>;
+  person: Person | null;
+  page: ResumePage | null;
+}): PageMeasure | null {
+  const { hostRef, person, page } = input;
+  const content = useMemo(() => contentVersion(person, page), [person, page]);
+  const pageId = page?.id ?? "";
+  const [result, setResult] = useState<PageMeasure | null>(null);
+
+  const last = useRef<Snapshot | null>(null);
+  const fontsReady = useRef(false);
+  const timeout = useRef<number | null>(null);
+  /** 延时补读要用「最新那一份」read：闭包里的旧 read 会拿旧 content 去比，永远比不中 */
+  const readRef = useRef<() => void>(() => undefined);
+
+  const stopTimeout = useCallback(() => {
+    if (timeout.current !== null) window.clearTimeout(timeout.current);
+    timeout.current = null;
+  }, []);
+
+  /**
+   * 量一次。四道拒绝的顺序有讲究：宽为 0 = 纸还没挂上；高 ≤0 = 这一页是空的；
+   * 字体没就绪 = 数还会变；内容版本对不上 = 旧数不能当新数报。
+   */
+  const read = useCallback(() => {
+    const paper = hostRef.current?.firstElementChild as HTMLElement | null;
+    const failed = (reason: NonNullable<PageMeasure["reason"]>) =>
+      setResult({ pageId, status: "unknown", version: okVersion, content, reason });
+
+    if (!paper || !paper.offsetWidth) return failed("no-preview");
+    const contentPx = paper.offsetHeight;
+    if (contentPx <= 0) return failed("empty");
+    if (!fontsReady.current) return failed("fonts");
+
+    if (last.current && last.current.content !== content) {
+      // 内容改过了（F-014）：旧测量作废，但把旧数带上，界面上才说得出「改之前是几页」
+      const previous = last.current;
+      last.current = null;
+      setResult({
+        pageId,
+        status: "stale",
+        version: okVersion,
+        content,
+        previous: {
+          content: previous.content,
+          onePage: previous.onePage,
+          contentPx: previous.contentPx,
+        },
+      });
+      window.setTimeout(() => readRef.current(), STALE_RETRY_MS);
+      return;
+    }
+
+    const onePage = paper.offsetWidth * A4_RATIO;
+    // 行高读实测值：把溢出量折成「多少行正文」比「超出 0.18 页」好懂
+    const lineHeight = parseFloat(getComputedStyle(paper).lineHeight) || LINE_HEIGHT_FALLBACK;
+    okVersion += 1;
+    last.current = { content, onePage, contentPx, lineHeight };
+    stopTimeout();
+    setResult({ pageId, status: "ok", version: okVersion, content, onePage, contentPx, lineHeight });
+  }, [content, hostRef, pageId, stopTimeout]);
+
+  // 延时补读要用「最新那一份」read：闭包里的旧 read 会拿旧 content 去比，永远比不中
+  useEffect(() => {
+    readRef.current = read;
+  }, [read]);
+
+  // 字体只等一次。ready 之后所有 read 都可以给 ok —— 之前给的数都算没量到
+  useEffect(() => {
+    const fonts = typeof document === "undefined" ? undefined : document.fonts;
+    if (!fonts) {
+      fontsReady.current = true;
+      return;
+    }
+    let alive = true;
+    void fonts.ready.then(() => {
+      if (!alive) return;
+      fontsReady.current = true;
+      readRef.current();
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /**
+   * 量一次并盯住纸面。
+   *
+   * 依赖里刻意没有「编辑 / 预览」这一档：宿主两态都在，测量不该随视图切换重算。
+   */
+  useLayoutEffect(() => {
+    read();
+    const paper = hostRef.current?.firstElementChild;
+    if (!paper) return;
+    const observer = new ResizeObserver(() => readRef.current());
+    observer.observe(paper);
+    return () => observer.disconnect();
+  }, [read, hostRef]);
+
+  // 1.5s 还没量到这一版就说「超时」，不要一直挂着上一版
+  useEffect(() => {
+    if (!pageId || !content) return;
+    stopTimeout();
+    if (last.current?.content === content) return;
+    timeout.current = window.setTimeout(() => {
+      setResult({ pageId, status: "unknown", version: okVersion, content, reason: "timeout" });
+    }, MEASURE_TIMEOUT_MS);
+    return stopTimeout;
+  }, [content, pageId, stopTimeout]);
+
+  return result;
 }
 
 /**

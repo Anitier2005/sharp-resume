@@ -1,5 +1,6 @@
 import { useWorkspace } from "@/store/workspace";
 import { countChars, pageIndex } from "@/lib/doc";
+import { measureTip, TOLERANCE_MAX } from "@/lib/measure";
 import styles from "./status-bar.module.css";
 
 /**
@@ -14,10 +15,25 @@ import styles from "./status-bar.module.css";
  * 用 flex + auto 边距会因为左右两段宽度不同而偏。
  */
 export function StatusBar() {
-  const { person, resume, page, saveState, layoutStatus } = useWorkspace();
+  const { person, resume, page, saveState, layoutStatus, measure } = useWorkspace();
 
   const index = resume ? pageIndex(resume, page?.id ?? null) : -1;
   const chars = person ? countChars(person, page) : 0;
+
+  // 只有真量到才算得出页数：拿 unknown 当 1 页会让用户以为「已经一页了」
+  const pages =
+    measure?.status === "ok" && measure.onePage && measure.contentPx
+      ? measure.contentPx / measure.onePage
+      : null;
+  const pagesOk = pages !== null && pages <= TOLERANCE_MAX;
+  const pagesText =
+    pages === null
+      ? ""
+      : pages <= 1
+        ? "1.00 页内"
+        : pages <= TOLERANCE_MAX
+          ? `${pages.toFixed(2)} 页`
+          : `${pages.toFixed(2)} 页 · 超 ${(pages - 1).toFixed(2)}`;
 
   return (
     <footer className={styles.bar} data-print="hide">
@@ -44,6 +60,22 @@ export function StatusBar() {
             <span>
               第 {index + 1} 页 / 共 {resume.pages.length} 页
             </span>
+            {/* 实测徽标：口径文案全在 measureTip 里，这里只负责画点和数字 */}
+            {measure && (
+              <span className={styles.measure} title={measureTip(measure, resume.targetPages)}>
+                {pages !== null ? (
+                  <>
+                    <i className={pagesOk ? styles.dotIdle : styles.dotWarn} />
+                    {pagesText}
+                  </>
+                ) : (
+                  <>
+                    <i className={styles.dotIdleDash} />
+                    页数未知
+                  </>
+                )}
+              </span>
+            )}
             <span>{chars.toLocaleString("zh-CN")} 字</span>
             <span className={styles.save}>
               <i className={saveState === "saving" ? styles.dotBusy : styles.dotIdle} />

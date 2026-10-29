@@ -15,6 +15,7 @@ import { EMPTY_WORKSPACE } from "@/data/empty";
 import { loadWorkspace, saveWorkspace } from "@/lib/storage";
 import { describeChange, diff, flatten, type Flat } from "@/lib/changes";
 import { submitLayout } from "@/lib/layout";
+import { TOLERANCE_MAX, usePageMeasure } from "@/lib/measure";
 import {
   applyAgentActions,
   chatBridge,
@@ -25,6 +26,8 @@ import {
 import { uid } from "@/lib/uid";
 import { useToast } from "@/components/ui/toast-context";
 import { Confirm } from "@/components/ui/confirm";
+import { Paper } from "@/components/resume/paper";
+import paperStyles from "@/components/resume/paper.module.css";
 import { reducer } from "./reducer";
 import type { Action } from "./types";
 import { WorkspaceContext, type WorkspaceContextValue, type SaveState } from "./context";
@@ -143,6 +146,16 @@ function describeDeletions(state: Workspace, ops: Action[]): string[] {
 }
 
 
+/* ==========================================================================
+   自动自查（F-010）
+   ========================================================================== */
+
+/** 同一页同一件事最多自动投几轮，再压不动就该人决定了 */
+const AUTO_ROUNDS_MAX = 3;
+
+/** 一帧里的多次测量只投一次：排版跑一轮是模型调用，不能每帧都花一次 */
+const AUTO_DEBOUNCE_MS = 300;
+
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, INITIAL_WORKSPACE);
   const [ready, setReady] = useState(false);
@@ -201,6 +214,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     () => resume?.pages.find((item) => item.id === resolvedPageId) ?? null,
     [resume, resolvedPageId],
   );
+
+  /** 离屏测量宿主的 `.wrap`：实测只从这里取，预览那份只管显示 */
+  const measureHost = useRef<HTMLDivElement | null>(null);
+  const measure = usePageMeasure({ hostRef: measureHost, person, page });
 
   /**
    * 页签栏用的「快速检索」列表（MRU）：
@@ -565,6 +582,64 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, [dispatch, toast]);
 
+  /** 自动自查已投了几轮：pageId → 轮数。只放 ref：它属于这一场编辑，不是数据 */
+  const autoRounds = useRef(new Map<string, number>());
+
+  /**
+   * 溢出且有目标页数 → 让排版 agent 再压一轮，最多 3 轮；还不收敛就留一条批注让人决定。
+   *
+   * 全在前端做：Rust 侧没有 DOM，那边做定时轮询只会产出假数据。
+   * 量不到时不投 —— 拿一个假数去指挥排版，比不投更糟。
+   */
+  useEffect(() => {
+    if (!person || !resume || !page || !measure) return;
+    if (measure.status !== "ok" || !measure.onePage || !measure.contentPx) return;
+    // 排版正在跑这一页：不叠加，等它跑完自然会再看一眼
+    if (layoutStatus?.pageId === page.id) return;
+    const target = resume.targetPages;
+    if (!target) return;
+
+    const pages = measure.contentPx / measure.onePage;
+    if (pages <= TOLERANCE_MAX) {
+      // 收敛了就清零：下次再溢出从第 1 轮重新数
+      autoRounds.current.delete(page.id);
+      return;
+    }
+
+    const round = autoRounds.current.get(page.id) ?? 0;
+    if (round >= AUTO_ROUNDS_MAX) {
+      if (round === AUTO_ROUNDS_MAX) {
+        autoRounds.current.set(page.id, AUTO_ROUNDS_MAX + 1);
+        dispatch({
+          type: "pageNote",
+          personId: person.id,
+          resumeId: resume.id,
+          pageId: page.id,
+          note: {
+            id: `n-auto-${page.id}-4`,
+            text: `自动自查已投 ${AUTO_ROUNDS_MAX} 轮，仍实测 ${pages.toFixed(2)} 页（目标 ${target} 页）。差 ${(pages - 1).toFixed(2)} 页，需要人决定：减内容还是放宽页数。`,
+            at: Math.floor(Date.now() / 1000),
+          },
+        });
+      }
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      // 计数在真正投出去的那一刻加：被防抖取消掉的那几次不算一轮
+      autoRounds.current.set(page.id, round + 1);
+      void submitLayout({
+        person,
+        resume,
+        page,
+        state,
+        kind: "request",
+        text: `自动自查：这一页实测 ${pages.toFixed(2)} 页，超出 ${(pages - 1).toFixed(2)} 页，目标是 ${target} 页。请继续压到目标页数内；压不动就说清差多少，不要谎报。`,
+      });
+    }, AUTO_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [measure, person, resume, page, state, layoutStatus, dispatch]);
+
   // 系统文本缩放：Windows「辅助功能 → 文本大小」不会自动传给网页，主动问一次。
   // 问不到时用可读下限兜底（老系统没这个设置）。
   const [systemTextScale, setSystemTextScale] = useState(AUTO_TEXT_SCALE_FLOOR);
@@ -608,6 +683,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     person,
     resume,
     page,
+    measure,
     activePageId: resolvedPageId,
     setActivePageId,
     openPages,
@@ -633,6 +709,32 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   return (
     <WorkspaceContext.Provider value={value}>
       {children}
+
+      {/* 编辑态没有纸面 DOM（面板只在预览分支挂 .paper），而默认视图就是编辑。
+          实测只能从这份离屏实例取；预览那份只管显示，不许另起一套公式。
+          宽度必须固定：纸是 A4 等比缩略，跟着面板变就把字号与分页一起量歪了。
+          data-print="hide"：打印只留纸面元素，不藏这份就会多打出同样一页。 */}
+      {person && page && (
+        <div
+          aria-hidden
+          data-measure="host"
+          data-print="hide"
+          style={{
+            position: "absolute",
+            left: -9999,
+            top: 0,
+            width: 374,
+            visibility: "hidden",
+            pointerEvents: "none",
+            zIndex: -1,
+          }}
+        >
+          <div className={paperStyles.wrap} ref={measureHost}>
+            <Paper person={person} page={page} />
+          </div>
+        </div>
+      )}
+
       <Confirm
         open={!!pending}
         title={

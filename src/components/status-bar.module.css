@@ -52,7 +52,9 @@
 
 .live,
 .dotIdle,
-.dotBusy {
+.dotBusy,
+.dotWarn,
+.dotIdleDash {
   width: 5px;
   height: 5px;
   border-radius: 50%;
@@ -62,6 +64,18 @@
 .live,
 .dotIdle {
   background: var(--ok);
+}
+
+/* 实测溢出：不能用 --warn，那个颜色已经归「保存中」，两个琥珀点会分不清 */
+.dotWarn {
+  background: var(--danger);
+}
+
+/* 量不到：空心虚线点。这里本来该有个数，但没量到 —— 不用实心点假装有数 */
+.dotIdleDash {
+  box-sizing: border-box;
+  border: 1px dashed var(--fg-3);
+  background: transparent;
 }
 
 /* 保存中：橙色点 + 轻微呼吸，表示「正在写盘」而不是「已经好了」 */
@@ -80,6 +94,14 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+/* 实测徽标：点 + 页数，和「保存状态」同一种排法 */
+.measure {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: default;
 }
 
 /* 排版 agent 正在改这一页：文案可能很长，截断而不是把页码挤出去 */

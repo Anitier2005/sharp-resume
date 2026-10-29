@@ -116,6 +116,22 @@ describe("measureTip", () => {
   it("没有目标页数时不讲达标与否", () => {
     expect(measureTip(ok(900))).toContain("没有目标页数");
   });
+
+  it("过期：内容改过就说旧测量作废，不拿旧数糊弄", () => {
+    const tip = measureTip(
+      {
+        pageId: "pg1",
+        status: "stale",
+        version: 12,
+        content: "b7c1d2e3",
+        previous: { content: "a3f19c04", onePage: 1000, contentPx: 1180 },
+      },
+      1,
+    );
+    expect(tip).toContain("尚未实测");
+    expect(tip).toContain("作废");
+    expect(tip).not.toContain("超出 0.18");
+  });
 });
 
 describe("原件页数暂存", () => {

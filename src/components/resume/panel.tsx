@@ -25,6 +25,7 @@ import {
 import { pageToDocx } from "@/lib/docx";
 import { saveAsset } from "@/lib/assets";
 import { nextPageLabel } from "@/lib/pages";
+import { TOLERANCE_MAX } from "@/lib/measure";
 import { displayName, type ResumePage } from "@/types";
 import { Paper } from "./paper";
 import { ResumeForm } from "./form";
@@ -66,6 +67,7 @@ export function ResumePanel() {
     person,
     resume,
     page,
+    measure: pageMeasure,
     openPages,
     openPage,
     closePage,
@@ -80,8 +82,6 @@ export function ResumePanel() {
   // 归 provider 统一发起（那里是 state 的唯一汇聚点）。
   // 预览只是一个看法，顺手烧一次模型调用既费钱又不是用户要的时机。
   const [zoom, setZoom] = useState(100);
-  const [sheets, setSheets] = useState(1);
-  const [a4Height, setA4Height] = useState(529);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   /**
@@ -191,10 +191,21 @@ export function ResumePanel() {
   const [pendingCut, setPendingCut] = useState<{ kind: "section" | "block"; blockId: string } | null>(
     null,
   );
+  /** 等用户点头「照这样导出」的那一次导出；放面板不放 provider：它是导出的局部状态 */
+  const [pendingExport, setPendingExport] = useState<{ run: () => void; items: string[] } | null>(
+    null,
+  );
   /** 刚点了「+」，等 state 落地后把新页选中 */
   const wantNewPage = useRef(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
   const preview = mode === "preview";
+  /**
+   * 这一页实测几页；量不到就是 null。
+   * 分页虚线、导出前置门都用它 —— 只有一份数，别再在这里自己量一遍纸面。
+   */
+  const pages =
+    pageMeasure?.status === "ok" && pageMeasure.onePage && pageMeasure.contentPx
+      ? pageMeasure.contentPx / pageMeasure.onePage
+      : null;
 
   // 只在预览态有纸面，所以跟着 mode 重跑；切页也要重判（见 fit 里的分支）
   useEffect(() => {
@@ -322,21 +333,8 @@ export function ResumePanel() {
     return () => observer.disconnect();
   }, [measure, visible, showMore]);
 
-  useEffect(() => {
-    const paper = wrapRef.current?.firstElementChild as HTMLElement | null;
-    if (!paper) return;
-    const read = () => {
-      const width = paper.offsetWidth;
-      if (!width) return;
-      const onePage = width * (297 / 210);
-      setA4Height(onePage);
-      setSheets(Math.max(1, paper.offsetHeight / onePage));
-    };
-    read();
-    const observer = new ResizeObserver(read);
-    observer.observe(paper);
-    return () => observer.disconnect();
-  }, [mode, page?.id]);
+  // 纸面高度不再在这里量：测量统一归 provider 的离屏宿主（两套公式必然漂移），
+  // 这里只读 pageMeasure（provider 的离屏实测），见下面的分页虚线与导出门。
 
   if (!person || !resume) {
     return (
@@ -419,6 +417,27 @@ export function ResumePanel() {
         );
       })
       .catch((error) => toast(String(error)));
+  };
+
+  /**
+   * 溢出的页：只有「量到了且真溢出」才算 —— 量不到的页不拦（F-011）。
+   * 离屏宿主一次只渲染当前页，所以这里天然只可能列出这一页。
+   */
+  const overflowedPages = () => {
+    if (pages === null || pages <= TOLERANCE_MAX) return [];
+    return [
+      `第 ${pageIndex(resume, page.id) + 1} 页「${page.label || "未命名页"}」实测 ${pages.toFixed(2)} 页`,
+    ];
+  };
+
+  /** 已设目标页数 + 实测溢出 → 先问一句，不硬拦；其余情况直接导出 */
+  const gate = (run: () => void) => {
+    const list = overflowedPages();
+    if (!resume.targetPages || !list.length) {
+      run();
+      return;
+    }
+    setPendingExport({ run, items: list });
   };
 
   const pageMap = new Map(resume.pages.map((item) => [item.id, item]));
@@ -664,9 +683,9 @@ export function ResumePanel() {
             </button>
           }
         >
-          <MenuItem label="打印 / 存为 PDF" hint="当前页" onSelect={handlePrint} />
+          <MenuItem label="打印 / 存为 PDF" hint="当前页" onSelect={() => gate(handlePrint)} />
           <MenuSep />
-          <MenuItem label="Word · 当前页" hint=".docx" onSelect={() => exportDocx(page)} />
+          <MenuItem label="Word · 当前页" hint=".docx" onSelect={() => gate(() => exportDocx(page))} />
           <MenuItem label="Markdown · 当前页" onSelect={() => exportMd(page)} />
           <MenuItem
             label="Markdown · 整份"
@@ -681,17 +700,22 @@ export function ResumePanel() {
           <MenuItem
             label="Word · 整份"
             hint="导出文件夹"
-            onSelect={exportFolder}
+            onSelect={() => gate(exportFolder)}
           />
         </Dropdown>
       </div>
 
       {preview ? (
         <div className={styles.canvas} ref={canvasRef} data-print="flow">
-          <div className={paperStyles.wrap} data-print="page" ref={wrapRef} style={{ zoom: zoom / 100 }}>
+          <div className={paperStyles.wrap} data-print="page" style={{ zoom: zoom / 100 }}>
             <Paper person={person} page={page} />
-            {sheets > 1.02 && (
-              <div className={paperStyles.break} style={{ top: a4Height }} aria-hidden>
+            {/* 虚线本身要跟着缩放走，但页高来自离屏实测（1:1），所以这里乘 zoom */}
+            {pages !== null && pages > TOLERANCE_MAX && (
+              <div
+                className={paperStyles.break}
+                style={{ top: (pageMeasure?.onePage ?? 0) * (zoom / 100) }}
+                aria-hidden
+              >
                 <span>A4</span>
               </div>
             )}
@@ -791,6 +815,26 @@ export function ResumePanel() {
             onSelect={() => setPendingDelete(menuPage.id)}
           />
         </ContextMenu>
+      )}
+
+      {/* 导出门：溢出 + 已设目标页数时先问一句。不硬拦 —— 用户可能是故意导一份
+          两页的稿子；拦死等于替用户决定「必须一页」。 */}
+      {pendingExport && (
+        <Confirm
+          open
+          danger={false}
+          title={`这一页还没压到 ${resume.targetPages ?? "目标"} 页内`}
+          description="导出的文件和你在屏幕上看的一样，会排到第二页上。要不要先让排版继续压？"
+          items={pendingExport.items}
+          confirmLabel="照这样导出"
+          cancelLabel="先去压一页"
+          onConfirm={() => {
+            const job = pendingExport;
+            setPendingExport(null);
+            job.run();
+          }}
+          onCancel={() => setPendingExport(null)}
+        />
       )}
 
       {pendingPage && (

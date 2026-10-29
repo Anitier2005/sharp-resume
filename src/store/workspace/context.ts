@@ -1,5 +1,5 @@
 import { createContext } from "react";
-import type { Person, Resume, ResumePage, Workspace } from "@/types";
+import type { PageMeasure, Person, Resume, ResumePage, Workspace } from "@/types";
 import type { Action } from "./types";
 
 export type SaveState = "idle" | "saving" | "saved";
@@ -17,6 +17,11 @@ export interface WorkspaceContextValue {
   person: Person | null;
   resume: Resume | null;
   page: ResumePage | null;
+  /**
+   * 当前页的实测结果，来自常驻离屏宿主 —— 页面页数的**唯一真值源**。
+   * 不落库：它是「这一版 DOM 此刻多高」，刷新即失效。
+   */
+  measure: PageMeasure | null;
   activePageId: string | null;
   setActivePageId: (id: string | null) => void;
   /** 页签栏的快速检索列表：最近用过的在前，当前页一定在首位 */
