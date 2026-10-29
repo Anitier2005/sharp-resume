@@ -79,10 +79,14 @@ export function contentVersion(person: Person | null, page: ResumePage | null): 
 }
 
 /**
- * 状态栏徽标的 title 文案（方案 §9.2 五句）。
+ * 状态栏徽标的 title 文案（方案 §7.3 五句）。
  *
  * 留在 `lib/` 而不是 `status-bar.tsx`：那里引了 `.module.css`，node 环境的单测
- * 进不去 —— 于是这两句最容易写错的措辞就没人守了。
+ * 进不去 —— 于是这几句最容易写错的措辞就没人守了。
+ *
+ * **`targetPages` 是「这一段」的上限，不是整份**（方案路线二）。所以文案里必须
+ * 出现「这一段」三个字：说成「目标 1 页」会让用户以为整份只有一张纸，而实际上
+ * 三段简历每段都可以到 1 页。判定本身早在 `facts.rs::fit_of` 里做完，这里只翻译。
  */
 export function measureTip(measure: PageMeasure | null | undefined, targetPages?: number): string {
   if (!measure) return "尚未实测（预览没打开，量不到）。";
@@ -95,15 +99,20 @@ export function measureTip(measure: PageMeasure | null | undefined, targetPages?
 
   const pages = contentPx / onePage;
   const shown = pages.toFixed(2);
+  const bound = targetPages ? `这一段最多 ${targetPages} 页` : "";
   if (pages > TOLERANCE_MAX) {
     if (!targetPages) return `实测 ${shown} 页。没有目标页数，不讲达标与否。`;
     const lines = Math.round((contentPx - onePage) / (measure.lineHeight ?? LINE_HEIGHT_FALLBACK));
-    return `实测 ${shown} 页（目标 ${targetPages} 页，未达标）。超出 ${(pages - 1).toFixed(2)} 页 · 约 ${lines} 行正文。`;
+    return `实测 ${shown} 页（${bound}，未达标）。超出 ${(pages - 1).toFixed(2)} 页 · 约 ${lines} 行正文。`;
   }
   // 1 页以上、容忍上限以内：算没有溢出，但要如实说是「容忍」而不是「达标」
-  if (pages > 1) return `实测 ${shown} 页，在 2% 容忍内，仍算没有溢出。`;
+  if (pages > 1) {
+    return targetPages
+      ? `实测 ${shown} 页，在 2% 容忍内，仍算没有溢出（${bound}）。`
+      : `实测 ${shown} 页，在 2% 容忍内，仍算没有溢出。`;
+  }
   return targetPages
-    ? `实测 ${shown} 页（目标 ${targetPages} 页，达标）。`
+    ? `实测 ${shown} 页（${bound}，达标）。`
     : `实测 ${shown} 页。没有目标页数，不讲达标与否。`;
 }
 

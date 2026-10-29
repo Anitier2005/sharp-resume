@@ -96,15 +96,25 @@ describe("measureTip", () => {
     lineHeight: 17,
   });
 
-  it("溢出：说清超出多少页、约多少行", () => {
+  it("溢出：说清超出多少页、约多少行，并且说的是「这一段」而不是整份", () => {
     const tip = measureTip(ok(1180), 1);
+    expect(tip).toContain("这一段最多 1 页");
     expect(tip).toContain("超出 0.18");
     expect(tip).toContain("约 11 行正文");
     expect(tip).toContain("未达标");
   });
 
+  it("达标：一页以内且说了「这一段最多 N 页」", () => {
+    const tip = measureTip(ok(900), 1);
+    expect(tip).toContain("实测 0.90 页");
+    expect(tip).toContain("这一段最多 1 页");
+    expect(tip).toContain("达标");
+  });
+
   it("容忍带：1 页以上但没超上限，仍算没有溢出", () => {
-    expect(measureTip(ok(1010), 1)).toContain("2% 容忍内");
+    const tip = measureTip(ok(1010), 1);
+    expect(tip).toContain("2% 容忍内");
+    expect(tip).toContain("这一段最多 1 页");
   });
 
   it("量不到：按 reason 说「尚未实测」", () => {
@@ -113,8 +123,10 @@ describe("measureTip", () => {
     expect(tip).toContain("预览没打开");
   });
 
-  it("没有目标页数时不讲达标与否", () => {
-    expect(measureTip(ok(900))).toContain("没有目标页数");
+  it("没有目标页数时不讲达标与否，也不提「这一段最多」", () => {
+    const tip = measureTip(ok(900));
+    expect(tip).toContain("没有目标页数");
+    expect(tip).not.toContain("这一段最多");
   });
 
   it("过期：内容改过就说旧测量作废，不拿旧数糊弄", () => {
