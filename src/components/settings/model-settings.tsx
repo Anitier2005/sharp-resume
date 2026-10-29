@@ -36,6 +36,7 @@ import { configureKnowledge } from "@/lib/knowledge";
 import { notifySettingsChanged } from "@/lib/settings-window";
 import {
   Button,
+  Columns,
   Field,
   Grip,
   Input,
@@ -43,11 +44,13 @@ import {
   ListAdd,
   ListEmpty,
   ListRow,
+  Pane,
+  PaneHead,
+  PaneScroll,
   PasswordInput,
   Select,
   Tooltip,
 } from "@/components/ui";
-import { cx } from "@/lib/cx";
 import { Confirm } from "@/components/ui/confirm";
 import { Check, Plus, Trash } from "@/components/ui/icons";
 import styles from "./settings.module.css";
@@ -426,13 +429,12 @@ export function ModelSettings() {
         </button>
       </nav>
 
-      <div className={styles.cols}>
+      <Columns>
         {/* 左列：模型。选一个模型，右列才长出来 —— 和知识库的「库 → 条目」同一套读法 */}
-        <section className={cx(styles.col, styles.colLeft)} style={{ width: colW }}>
-          <div className={styles.colHead}>
-            <span className={styles.colTitle}>模型</span>
-          </div>
-          <List className={styles.colList}>
+        <Pane width={colW} bordered>
+          <PaneHead title="模型" />
+          <PaneScroll pad={2}>
+            <List>
             <ListAdd
               label="添加模型"
               onClick={() => {
@@ -476,8 +478,9 @@ export function ModelSettings() {
                 />
               );
             })}
-          </List>
-        </section>
+            </List>
+          </PaneScroll>
+        </Pane>
 
         <Grip
           label="调整模型列宽度"
@@ -492,11 +495,11 @@ export function ModelSettings() {
 
         {/* 右列：这个模型的配置。没选模型时整列不出现，不留空壳 */}
         {editing && (
-          <section className={cx(styles.col, styles.colRight)}>
-            <div className={styles.colHead}>
-              <span className={styles.colTitle}>{isDraft ? "添加模型" : editing.label}</span>
-              {!isDraft && <span className={styles.colNote}>{kindLabel(kindOf(editing))}</span>}
-            </div>
+          <Pane grow>
+            <PaneHead
+              title={isDraft ? "添加模型" : editing.label}
+              note={isDraft ? undefined : kindLabel(kindOf(editing))}
+            />
 
             <div className={styles.colTabs} role="tablist">
               <button
@@ -518,7 +521,7 @@ export function ModelSettings() {
               </button>
             </div>
 
-            <div className={styles.colBody}>
+            <PaneScroll pad={4}>
               {isDraft ? (
                 <DraftProfile draft={draft!} onCommit={commitDraft} />
               ) : pane === "model" ? (
@@ -588,10 +591,10 @@ export function ModelSettings() {
                   )}
                 </>
               )}
-            </div>
-          </section>
+            </PaneScroll>
+          </Pane>
         )}
-      </div>
+      </Columns>
 
       {dropModel && (
         <Confirm

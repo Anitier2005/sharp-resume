@@ -31,35 +31,9 @@
 
 /* ---------- 三列骨架 ---------- */
 
-.cols {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-
 /* 列底与主页面侧栏同一个颜色（--bg-side，亮色下就是纯白）：
    之前用 --bg-canvas 的浅灰，只留一列时灰块旁边是一大片白，看着像两个界面拼在一起。
    列与列之间靠 grip 的左边线分隔，不靠底色差 */
-.pane {
-  flex: none;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-side);
-  /* 列与列的界就是这一条线：底色统一成白的之后，不画线就看不出这里有两列 */
-  border-right: 1px solid var(--line-strong);
-}
-
-.paneHead {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 6px 0 10px;
-  border-bottom: 1px solid var(--line-soft);
-}
-
 .paneTitle {
   flex: 1;
   min-width: 0;
@@ -98,13 +72,6 @@
 /* ---------- 列表 ---------- */
 /* 列内滚动容器。行本身（高度/缩进/悬停/选中）统一由 @/components/ui/list 负责，
    这里不再定义 .row —— 两套行样式正是行高对不齐的来源 */
-
-.list {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 4px;
-}
 
 .empty {
   margin: 8px 6px;
@@ -197,15 +164,6 @@
 }
 
 /* ---------- 第三列：块 ---------- */
-
-.detail {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--bg-elev);
-}
 
 .detailHead {
   flex: none;
@@ -376,15 +334,6 @@
 }
 
 /* ---------- 库列底部：向量化状态 ---------- */
-.paneFoot {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-top: 1px solid var(--line-soft);
-}
-
 .footMeta {
   flex: 1;
   min-width: 0;

@@ -42,6 +42,7 @@ import { ImageView } from "@/components/ui/image-view";
 import { cx } from "@/lib/cx";
 import {
   Button,
+  Columns,
   Field,
   Grip,
   Input,
@@ -49,6 +50,10 @@ import {
   ListAdd,
   ListEmpty,
   ListRow,
+  Pane,
+  PaneFoot,
+  PaneHead,
+  PaneScroll,
   Textarea,
   Tooltip,
 } from "@/components/ui";
@@ -596,16 +601,15 @@ export function KnowledgePanel({
         }}
       />
 
-      <div className={styles.cols}>
+      <Columns>
         {/* ---------- 第一列：库 ---------- */}
         {/* 没选库时只该有这一列，宽度和主页面侧栏一样是固定的：拉满整页
             只会让「还没有库」这几个字飘在一大片空白中间 */}
-        <section className={styles.pane} style={{ width: widths[0] }}>
-          <header className={styles.paneHead}>
-            <span className={styles.paneTitle}>库</span>
-          </header>
+        <Pane width={widths[0]} bordered>
+          <PaneHead title="库" />
 
-          <List className={styles.list}>
+          <PaneScroll pad={4}>
+            <List>
             <ListAdd label="新建库" onClick={() => setLibDraft({ name: "", note: "" })} />
             {libs.map((library) => (
               <ListRow
@@ -646,11 +650,12 @@ export function KnowledgePanel({
                 }
               />
             ))}
-            {libs.length === 0 && <ListEmpty>还没有库</ListEmpty>}
-          </List>
+              {libs.length === 0 && <ListEmpty>还没有库</ListEmpty>}
+            </List>
+          </PaneScroll>
 
           {/* 向量化是每库一个决策：模型换了就得重算，所以状态与按钮都挂在库上 */}
-          <div className={styles.paneFoot}>
+          <PaneFoot>
             <span className={styles.footMeta}>
               {activeLib?.builtin
                 ? "只读"
@@ -666,8 +671,8 @@ export function KnowledgePanel({
             >
               {vectorizing ? "向量化…" : "向量化"}
             </Button>
-          </div>
-        </section>
+          </PaneFoot>
+        </Pane>
 
         <Grip
           label="调整库列宽度"
@@ -679,16 +684,9 @@ export function KnowledgePanel({
         />
 
         {/* ---------- 第二列：条目（选中库之后才出现） ---------- */}
-        <section
-          className={styles.pane}
-          style={{
-            width: widths[1],
-            display: libId ? undefined : "none",
-            // 还没选条目时没有第三列，条目列自己把剩下的宽度吃掉
-            flex: entryOpen ? "none" : "1",
-          }}
-        >
-          <header className={styles.paneHead}>
+        {/* 还没选内容时没有第三列，这一列自己把剩下的宽度吃掉 */}
+        <Pane width={entryOpen ? widths[1] : undefined} grow={!entryOpen} hidden={!libId}>
+          <PaneHead>
             <span className={styles.searchRow}>
               <Search size={11} />
               <input
@@ -709,9 +707,10 @@ export function KnowledgePanel({
                 <Upload size={11} />
               </button>
             </Tooltip>
-          </header>
+          </PaneHead>
 
-          <List className={styles.list}>
+          <PaneScroll pad={4}>
+            <List>
             {/* 新建是列表首项。预置库只读，没有「新建」这回事 */}
             {libId && !activeLib?.builtin && (
               <ListAdd
@@ -783,8 +782,9 @@ export function KnowledgePanel({
                 )}
               </>
             )}
-          </List>
-        </section>
+            </List>
+          </PaneScroll>
+        </Pane>
 
         <Grip
           label="调整内容列宽度"
@@ -796,7 +796,7 @@ export function KnowledgePanel({
         />
 
         {/* ---------- 第三列：这一条的块（选中条目后才出现） ---------- */}
-        <section className={styles.detail} style={entryOpen ? undefined : { display: "none" }}>
+        <Pane grow hidden={!entryOpen}>
           {draft ? (
             <div className={styles.editor}>
               <Field label="标题">
@@ -983,8 +983,8 @@ export function KnowledgePanel({
               <span>选中条目查看分块。库与条目归你管，模型只读。</span>
             </div>
           )}
-        </section>
-      </div>
+        </Pane>
+      </Columns>
     </>
   );
 

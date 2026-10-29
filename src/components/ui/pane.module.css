@@ -1,0 +1,73 @@
+/* ==========================================================================
+   分栏（知识库 / 模型配置共用）
+   结构：Columns（横向）→ Pane（一列）→ PaneHead / PaneScroll / PaneFoot
+   宽度由调用方给（拖拽手柄改的也是它），这里只保证列不会撑破容器
+   ========================================================================== */
+
+.cols {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 分栏之间的「界」：用 --line-strong，--line 在白底上只有隐约的程度 */
+.bordered {
+  border-right: 1px solid var(--line-strong);
+}
+
+.head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+}
+
+.title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.59375rem;
+  letter-spacing: 0.04em;
+  color: var(--fg-4);
+}
+
+.note {
+  flex: none;
+  margin-left: auto;
+  font-size: 0.5625rem;
+  color: var(--fg-4);
+}
+
+.actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 4px 8px;
+}
+
+.foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--line-soft);
+}

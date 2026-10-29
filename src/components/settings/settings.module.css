@@ -226,60 +226,6 @@
 /* ---------- 模型配置：左模型、右配置 ----------
    和知识库的「库 → 条目」同一套读法：左边选对象，右边看它的内容；
    右边没东西就不出现，不留一条空壳列 */
-.cols {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  gap: 0;
-  /* 列自己滚，页面不跟着滚 */
-  overflow: hidden;
-}
-
-.col {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-
-.colLeft {
-  flex: none;
-  /* 宽度由拖拽手柄写入 inline style；这里只兜个默认值 */
-  width: 220px;
-  /* 结构线用 --line-strong：--line(#ededea) 在白底上只有「隐约」的程度 */
-  border-right: 1px solid var(--line-strong);
-}
-
-.colRight {
-  flex: 1;
-}
-
-.colHead {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 8px;
-}
-
-.colTitle {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.59375rem;
-  letter-spacing: 0.04em;
-  color: var(--fg-4);
-}
-
-.colNote {
-  flex: none;
-  margin-left: auto;
-  font-size: 0.5625rem;
-  color: var(--fg-4);
-}
-
 /* 右列内的「配置 / 模型」切换：比分栏 tab 小一号，它不是页面级导航 */
 .colTabs {
   flex: none;
@@ -304,23 +250,6 @@
 .colTabs button:disabled {
   opacity: 0.4;
   pointer-events: none;
-}
-
-.colList {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 2px 6px 10px;
-}
-
-.colBody {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 4px 10px 14px;
 }
 
 /* ---------- 配置页签 ----------
