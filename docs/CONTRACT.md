@@ -186,7 +186,7 @@ pub target_pages_turn: Option<u32>,  // JSON: targetPagesTurn —— 第几条�
 
 ```rust
 pub role: Option<String>,       // "candidate" —— 渲染层不会拿它当页头照片
-pub source: Option<String>,     // 来源 PDF 的 assetId
+pub source: Option<String>,     // 源文件名（人类可读；源附件不进 person.assets，因为要保住一轮 8 张候选的名额）
 pub page_index: Option<u32>,    // 在来源 PDF 里的页序（1 基）
 ```
 
@@ -299,6 +299,10 @@ pub page_index: Option<u32>,    // 在来源 PDF 里的页序（1 基）
 
 量不到时的措辞**必须**与「达标」明显不同：测量不可用时写「尚未实测」，不许写「没有溢出」。
 `describe_page` 的正文末尾追加 `## 这一页的实测` 一段，与上面同源（`facts::measure_section()`）。
+
+`达标` 只用于**用户说过的**目标（`target.source` 为 `UserThisTurn` / `UserBefore`）；
+目标来自原件页数（`FromOrigin`，即用户没说过页数时的默认值）时**不宣称达标**，
+改说「按原件页数 {t} 页算」（事实块、实测段、`set_page_layout` 返回值三处同批）。
 
 ---
 

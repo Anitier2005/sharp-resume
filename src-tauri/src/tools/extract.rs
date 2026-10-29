@@ -7,13 +7,12 @@
 //! 三条边界：
 //!   1. **系统不判断哪张是证件照**。只给尺寸与「占版心」的占比，选哪张由模型定，
 //!      挑不出就问用户。猜错一次用户就得多说一轮。
-//!   2. **幂等靠内容寻址**：asset id 就是池内存储名（`<sha16>.png`），同一张图
+//!   2. **幂等靠内容寻址**：asset id 就是池内存储名（`<sha16>.<ext>`），同一张图
 //!      永远同一个 id。所以「再抽一次」不需要分页参数：已登记的按 id 跳过、
 //!      不占名额，天然拿到下一批。
 //!   3. 失败也要说清「照片没有放上去」—— 那句是模型必须转告用户的话。
 
 use std::io::Cursor;
-use std::path::Path;
 
 use image::{ImageFormat, RgbaImage};
 use serde_json::{json, Value};
@@ -64,18 +63,12 @@ pub fn extract_images(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         ));
     }
 
+    // 没有数据目录就写不了池，候选图拿不到 assetId
     let Some(root) = ctx.root else {
         return Ok(register_failed(name));
     };
     let Ok(bytes) = crate::attach::read(root, stored) else {
         return Ok(open_failed(name));
-    };
-    let source = match ensure_source_asset(ctx, root, &bytes, name) {
-        Ok(id) => id,
-        Err(error) => {
-            eprintln!("[extract] 材料登记失败：{error}");
-            return Ok(register_failed(name));
-        }
     };
 
     let report = match pdfembed::extract(&bytes) {
@@ -112,7 +105,9 @@ pub fn extract_images(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         let file = format!("{}-p{}-{}.{ext}", stem(name), image.page, pushed + 1);
         let mut asset = pool::put_at(root, &id, &file, &data)?;
         asset.extra.insert("role".into(), json!("candidate"));
-        asset.extra.insert("source".into(), json!(source));
+        // source 写**文件名**而不是源 PDF 的 assetId：源附件不进 person.assets
+        // （8 个名额全给候选图），写 id 就成了谁也查不到的悬空引用
+        asset.extra.insert("source".into(), json!(name));
         asset.extra.insert("pageIndex".into(), json!(image.page));
         push_asset(ctx, asset)?;
         pushed += 1;
@@ -182,23 +177,6 @@ fn row_text(id: &str, image: &Embedded, pct: Option<u32>, bytes: usize) -> Strin
         image.width as f64 / image.height as f64,
         bytes as f64 / 1024.0
     )
-}
-
-/// 把源 PDF 材料化，返回它的 assetId。
-///
-/// 不 `push_asset`：8 个名额是给候选图的。源 PDF 只作为候选图上 `extra.source`
-/// 的出处，前端不需要它出现在材料清单里（附件本来就在 inbox 里）。
-fn ensure_source_asset(
-    ctx: &ToolCtx,
-    root: &Path,
-    bytes: &[u8],
-    name: &str,
-) -> Result<String, String> {
-    let id = crate::snapshot::pool_name(&pool::sha256_hex(bytes), Some("pdf"))?;
-    if known(ctx, &id) || root.join("pool").join(&id).exists() {
-        return Ok(id);
-    }
-    Ok(pool::put_at(root, &id, name, bytes)?.stored)
 }
 
 /// 已登记 = 工作区里能找到，或本轮出站口里已经有
@@ -481,9 +459,11 @@ mod tests {
             assert!(!first_ids.contains(&asset.id.as_str()), "id 不能重复：{}", asset.id);
         }
         assert!(second_assets.iter().all(|asset| {
+            // source 是**原始文件名**（人类可读），不是源 PDF 的 assetId —— 源附件不进
+            // person.assets，写 id 会是悬空引用
             asset.extra.get("role").and_then(Value::as_str) == Some("candidate")
-                && asset.extra.get("source").is_some()
-                && asset.extra.get("pageIndex").is_some()
+                && asset.extra.get("source").and_then(Value::as_str) == Some("扫描件.pdf")
+                && asset.extra.get("pageIndex").and_then(Value::as_u64) == Some(1)
         }));
     }
 
