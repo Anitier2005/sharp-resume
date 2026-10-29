@@ -6,6 +6,7 @@ import { ImagePeek } from "@/components/ui/image-view";
 import { Dropdown, MenuItem } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui";
 import { cx } from "@/lib/cx";
+import { useToast } from "@/components/ui/toast-context";
 import { listAllModels, listProfiles } from "@/lib/model-config";
 import { segmentText, tokenRanges, uniqueToken } from "@/lib/inline-tokens";
 import styles from "./composer.module.css";
@@ -107,6 +108,8 @@ export function Composer({
    * 附件进正文：在光标处插入 `@文件名`，并把附件挂上同一个 token。
    * 不再是「顶上排一排 chip」——那样它和句子没有关系。
    */
+  const toast = useToast();
+
   const addFiles = useCallback(
     (picked: Attachment[]) => {
       if (!picked.length) return;
@@ -142,6 +145,17 @@ export function Composer({
     [files, onFilesChange, onTextChange, text],
   );
 
+  /** 选中的文件统一走这里：上传失败（太大 / 读不出）要告诉用户，别静默丢掉 */
+  const pickFiles = useCallback(
+    (files: File[]) => {
+      if (!files.length) return;
+      void Promise.all(files.map(toAttachment))
+        .then((picked) => addFiles(picked))
+        .catch((error) => toast(error instanceof Error ? error.message : "附件读取失败"));
+    },
+    [addFiles, toast],
+  );
+
   // 正文里删掉了某个标记 → 对应附件也不再随消息发出（这是「指代」的另一半）
   useEffect(() => {
     const stale = files.filter((file) => file.token && !text.includes(file.token));
@@ -150,26 +164,26 @@ export function Composer({
   }, [text, files, onFilesChange]);
 
   /** 粘贴：图片/文件一律变成行内标记；纯文本粘贴交回浏览器默认行为 */
-  const onPaste = async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = Array.from(event.clipboardData?.items ?? []);
-    const picked: Attachment[] = [];
-    for (const item of items) {
+  const onPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files: File[] = [];
+    for (const item of Array.from(event.clipboardData?.items ?? [])) {
       if (item.kind !== "file") continue;
       const file = item.getAsFile();
       if (!file) continue;
-      const named =
+      // 截图粘贴没有文件名，给一个带时间戳的，好歹能在正文标记里区分
+      files.push(
         file.name && file.name !== "image.png"
           ? file
           : new File(
               [file],
               `粘贴-${Date.now()}.${(file.type.split("/")[1] || "png").replace("jpeg", "jpg")}`,
               { type: file.type },
-            );
-      picked.push(await toAttachment(named));
+            ),
+      );
     }
-    if (!picked.length) return;
+    if (!files.length) return;
     event.preventDefault();
-    addFiles(picked);
+    pickFiles(files);
   };
 
   const submit = () => {
@@ -364,7 +378,7 @@ export function Composer({
             hidden
             onChange={(event) => {
               const files = Array.from(event.target.files ?? []);
-              void Promise.all(files.map(toAttachment)).then((picked) => addFiles(picked));
+              pickFiles(files);
               event.target.value = "";
             }}
           />
