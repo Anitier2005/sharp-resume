@@ -33,6 +33,11 @@ export interface ModalProps {
   /** 头部第二行小字：一句说明它为什么出现 */
   subtitle?: ReactNode;
   /**
+   * 尺寸档：`sm` 420（确认框、表单），`lg` 764×668（资料这类左导航 + 主区的面板）。
+   * 只此两档 —— 中间值意味着又要为每个宽度调一次内部栅格。
+   */
+  size?: "sm" | "lg";
+  /**
    * 「取消」。给了就渲染取消按钮，且 ESC 走它。
    * 与 `onClose` 同时给时，以 `onCancel` 为准，X 不渲染。
    */
@@ -64,6 +69,7 @@ const FOCUSABLE = [
 export function Modal({
   title,
   subtitle,
+  size = "sm",
   onCancel,
   onClose,
   footer,
@@ -145,7 +151,7 @@ export function Modal({
       data-print="hide"
       onKeyDown={keepFocus}
     >
-      <div className={styles.card} role="dialog" aria-modal="true" aria-label={title} data-selectable>
+      <div className={cx(styles.card, size === "lg" && styles.lg)} role="dialog" aria-modal="true" aria-label={title} data-selectable>
         <header className={styles.head}>
           <div className={shared.overlayTitle}>
             <b>{title}</b>

@@ -1,18 +1,5 @@
 /* 经历库抽屉。遮罩、面板头、表单字段来自 ui/shared.module.css */
 
-.drawer {
-  width: min(764px, calc(100vw - 56px));
-  height: min(668px, calc(100vh - 88px));
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-elev);
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  box-shadow: 0 2px 6px rgba(20, 20, 15, 0.05),
-    0 34px 64px -34px rgba(20, 20, 15, 0.45);
-  overflow: hidden;
-  animation: drawerIn 0.16s ease both;
-}
 @keyframes drawerIn {
   from {
     opacity: 0;
@@ -22,15 +9,6 @@
     opacity: 1;
     transform: none;
   }
-}
-
-.head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 48px;
-  padding: 0 10px 0 16px;
-  border-bottom: 1px solid var(--line);
 }
 
 /* 中英编辑开关 */
@@ -401,27 +379,6 @@
 }
 
 /* ---------- 底栏 ---------- */
-.foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 16px;
-  border-top: 1px solid var(--line);
-  background: var(--bg-canvas);
-  font-size: 0.625rem;
-  color: var(--fg-3);
-}
-.foot .cur {
-  color: var(--fg-2);
-}
-.foot .sp {
-  flex: 1;
-}
-.foot .dim {
-  color: var(--fg-4);
-}
-
 /* 面板里的小块（字段之后、记录之前）：标题 + 内容 */
 .block {
   display: flex;

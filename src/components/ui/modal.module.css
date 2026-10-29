@@ -25,6 +25,13 @@
   overflow: hidden;
 }
 
+/* 大面板档：资料这类「左导航 + 主区」的窗。宽高由内容结构决定，
+   与小窗同一张卡片，只是换一把尺子 —— 两套独立的卡片样式必然走形 */
+.lg {
+  width: min(764px, calc(100vw - 56px));
+  height: min(668px, calc(100vh - 88px));
+}
+
 .head {
   flex: none;
   display: flex;
@@ -32,7 +39,9 @@
   gap: 10px;
   min-height: 44px;
   padding: 8px 10px 8px 16px;
-  border-bottom: 1px solid var(--line);
+  /* 不画分隔线：标题、正文、按钮区是同一张纸上的三层，一条线就把纸切成了条块。
+     需要区分层级时靠字号与留白，不靠框线 */
+  border-bottom: 0;
 }
 /* 标题列吃掉剩余宽度，右上角的 X 才不会被长标题挤出去 */
 .head > :first-child {

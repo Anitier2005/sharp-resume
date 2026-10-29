@@ -66,6 +66,8 @@
   display: flex;
   flex-direction: column;
   background: var(--bg-side);
+  /* 列与列的界就是这一条线：底色统一成白的之后，不画线就看不出这里有两列 */
+  border-right: 1px solid var(--line);
 }
 
 .paneHead {
@@ -91,8 +93,8 @@
   flex: none;
   width: 7px;
   cursor: col-resize;
-  /* 用 --line 而不是 --line-soft：列底现在是白的，发丝线在白底上等于没有 */
-  border-left: 1px solid var(--line);
+  /* 线由列自己的 border-right 画，这里不重复画 —— 两条 1px 中间夹 7px 白，看着像缝隙 */
+  border-left: 0;
   transition: background 0.12s ease;
 }
 
