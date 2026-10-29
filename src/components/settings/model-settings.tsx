@@ -79,13 +79,29 @@ export function ModelSettings() {
   const [openId, setOpenId] = useState<string | null>(() =>
     new URLSearchParams(window.location.search).get("open"),
   );
+  /** 详情页里正在看哪一组配置（列表点进来时直接落到那一组） */
+  const [openProfileId, setOpenProfileId] = useState<string | null>(null);
+  /** 详情页内的分区：模型本身 / 这组配置。一次只看一段，免得一页长滚动 */
+  const [pane, setPane] = useState<"model" | "config">("config");
   const [draft, setDraft] = useState<ModelConfig | null>(null);
   const [dropModel, setDropModel] = useState<ModelConfig | null>(null);
-  const [dropProfile, setDropProfile] = useState<ModelProfile | null>(null);
+  /** 删配置要记着它属于哪个模型：列表里删的时候手上没有 editing */
+  const [dropProfile, setDropProfile] = useState<{
+    model: ModelConfig;
+    profile: ModelProfile;
+  } | null>(null);
   /** localStorage 写完之后用它触发重读 */
   const [tick, setTick] = useState(0);
 
   const models = useMemo(() => listAllModels(), [tick]);
+  /**
+   * 「模型 + 配置」组合：一个组合就是一个选项，名字统一是「模型名：配置名」。
+   * 列表与下拉都从这里取，免得两个地方各自拼一遍名字、拼出两种写法。
+   */
+  const combos = useMemo(
+    () => models.flatMap((model) => listProfiles(model).map((profile) => ({ model, profile }))),
+    [models],
+  );
   const editing = draft ?? (openId ? (findModel(openId) ?? null) : null);
   const isDraft = draft !== null;
   const custom = editing !== null && (isDraft || isCustomModel(editing.id));
@@ -96,6 +112,8 @@ export function ModelSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [editing, tick, isDraft],
   );
+  /** 详情页当前看的那组配置：从列表点进来的优先，否则退回第一组 */
+  const selectedProfile = profiles.find((item) => item.id === openProfileId) ?? profiles[0];
 
   /* ---------------- 读取当前指针 ---------------- */
 
@@ -113,10 +131,7 @@ export function ModelSettings() {
     return slots[kind as keyof SlotSettings] ?? null;
   };
 
-  /** 某个模型被哪几类用途在用：勾与「会话 · 压缩」小字都靠它 */
-  const usedBy = (modelId: string): ModelKind[] =>
-    MODEL_KINDS.map((item) => item.kind).filter((kind) => choiceFor(kind)?.model === modelId);
-
+  /** 某组配置被哪几类用途在用：勾与「会话 · 压缩」小字都靠它 */
   const profileUsedBy = (modelId: string, profileId: string): ModelKind[] =>
     MODEL_KINDS.map((item) => item.kind).filter((kind) => {
       const choice = choiceFor(kind);
@@ -160,23 +175,14 @@ export function ModelSettings() {
     void notifySettingsChanged("slots");
   };
 
-  const pickModel = (kind: ModelKind, modelId: string) => {
-    if (!modelId) {
+  /** 下拉里一个值 = 「模型|配置」。空串是「不使用」 */
+  const pickCombo = (kind: ModelKind, packed: string) => {
+    if (!packed) {
       writeChoice(kind, null);
       return;
     }
-    const profile = listProfiles(findModel(modelId) ?? blank(kind, ""))[0];
-    if (!profile) {
-      // 配置被删光了的模型：选中时补一套默认的，否则选中了也没有可用网关
-      const spec = findModel(modelId);
-      if (!spec) return;
-      const fresh = defaultProfile(spec);
-      saveProfile(spec.id, fresh);
-      setTick((value) => value + 1);
-      writeChoice(kind, choiceOf(modelId, fresh));
-      return;
-    }
-    writeChoice(kind, choiceOf(modelId, profile));
+    const [modelId, profileId] = packed.split("|");
+    pickProfile(kind, modelId, profileId);
   };
 
   const pickProfile = (kind: ModelKind, modelId: string, profileId: string) => {
@@ -264,7 +270,31 @@ export function ModelSettings() {
   const back = () => {
     setDraft(null);
     setOpenId(null);
+    setOpenProfileId(null);
+    setPane("config");
   };
+
+  /**
+   * 删配置的确认窗：列表页和详情页都会用到，所以做成一段共用的 JSX。
+   * 手上必须带模型 —— 从列表删的时候没有 editing 这个上下文。
+   */
+  const dropProfileDialog = dropProfile ? (
+    <Confirm
+      open
+      title={`删除配置「${dropProfile.profile.label}」？`}
+      description="只删这一组网关与密钥，模型本身保留；如果这是最后一组，会补一套空配置，免得模型变成点不进去的空壳。"
+      onCancel={() => setDropProfile(null)}
+      onConfirm={() => {
+        const { model, profile } = dropProfile;
+        removeProfile(model.id, profile.id);
+        // 组合列表是按配置展开的：一组都不剩，这个模型就从所有清单里消失了，
+        // 但它还在模型清单里占一行 —— 补回一套默认配置，让它仍然可配
+        if (listProfiles(model).length === 0) saveProfile(model.id, defaultProfile(model));
+        setDropProfile(null);
+        setTick((value) => value + 1);
+      }}
+    />
+  ) : null;
 
   /* ---------------- 详情 ---------------- */
 
@@ -283,8 +313,28 @@ export function ModelSettings() {
           )}
         </header>
 
-        <section className={styles.group}>
-          <span className={styles.groupTitle}>模型</span>
+        {/* 模型与配置分两段看：它们改的是两种东西（模型的身份 / 这组网关的接入参数），
+            摆在同一页只能一路往下滚，改完还得来回找 */}
+        <nav className={styles.tabs} role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={pane === "config"}
+            onClick={() => setPane("config")}
+          >
+            配置
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={pane === "model"}
+            onClick={() => setPane("model")}
+          >
+            模型
+          </button>
+        </nav>
+
+        <section className={styles.group} style={pane === "model" ? undefined : { display: "none" }}>
           <div className={styles.fields}>
             <Field label="显示名称">
               <Input
@@ -335,7 +385,7 @@ export function ModelSettings() {
 
         {isDraft ? (
           <DraftProfile draft={draft!} onCommit={commitDraft} />
-        ) : (
+        ) : pane === "config" ? (
           <>
             <section className={styles.group}>
               <div className={styles.groupHead}>
@@ -345,9 +395,11 @@ export function ModelSettings() {
                 <ListAdd label="添加配置" onClick={addProfile} />
                 {profiles.map((profile) => {
                   const used = profileUsedBy(editing.id, profile.id);
+                  const on = profile.id === (selectedProfile?.id ?? "");
                   return (
                     <ListRow
                       key={profile.id}
+                      active={on}
                       leading={used.length > 0 ? <Check size={10} /> : undefined}
                       title={profile.label}
                       meta={
@@ -356,10 +408,9 @@ export function ModelSettings() {
                           {used.length > 0 && ` · ${used.map(kindLabel).join(" / ")}`}
                         </>
                       }
-                      onSelect={() => {
-                        const first = used[0] ?? "chat";
-                        pickProfile(first, editing.id, profile.id);
-                      }}
+                      /* 点配置行 = 看这一组的字段，而不是把某个用途切过去：
+                         改参数是这里的正事，换用途应该去「模型选择」页 */
+                      onSelect={() => setOpenProfileId(profile.id)}
                       actions={
                         <Tooltip label="删除这组配置">
                           <Button
@@ -367,7 +418,7 @@ export function ModelSettings() {
                             size="xs"
                             icon
                             aria-label={`删除配置 ${profile.label}`}
-                            onClick={() => setDropProfile(profile)}
+                            onClick={() => setDropProfile({ model: editing, profile })}
                           >
                             <Trash size={10} />
                           </Button>
@@ -380,17 +431,18 @@ export function ModelSettings() {
               </List>
             </section>
 
-            {profiles.map((profile) => (
+            {/* 只显示选中那一组的字段：四组配置全摊开时，改一个网关要滚半屏 */}
+            {selectedProfile && (
               <ProfileFields
-                key={profile.id}
+                key={selectedProfile.id}
                 model={editing}
-                profile={profile}
-                live={profileUsedBy(editing.id, profile.id).length > 0}
-                onPatch={(patch) => patchProfile(profile, patch)}
+                profile={selectedProfile}
+                live={profileUsedBy(editing.id, selectedProfile.id).length > 0}
+                onPatch={(patch) => patchProfile(selectedProfile, patch)}
               />
-            ))}
+            )}
           </>
-        )}
+        ) : null}
 
         {dropModel && (
           <Confirm
@@ -402,19 +454,7 @@ export function ModelSettings() {
           />
         )}
 
-        {dropProfile && editing && (
-          <Confirm
-            open
-            title={`删除配置「${dropProfile.label}」？`}
-            description="只删这一组网关与密钥，模型本身保留。"
-            onCancel={() => setDropProfile(null)}
-            onConfirm={() => {
-              removeProfile(editing.id, dropProfile.id);
-              setDropProfile(null);
-              setTick((value) => value + 1);
-            }}
-          />
-        )}
+        {dropProfileDialog}
       </div>
     );
   }
@@ -447,41 +487,27 @@ export function ModelSettings() {
                   <span className={styles.groupTitle}>{item.label}</span>
                   <span className={styles.groupNote}>{item.note}</span>
                 </div>
-                <div className={styles.fields}>
-                  <Field label="模型">
-                    <Select
-                      ariaLabel={`${item.label}模型`}
-                      value={choice?.model ?? ""}
-                      options={[
-                        ...(item.kind === "chat"
-                          ? []
-                          : [{ value: "", label: "不使用" }]),
-                        ...models.map((model) => ({
-                          value: model.id,
-                          label: `${model.label} · ${model.provider}`,
-                        })),
-                      ]}
-                      onChange={(value) => pickModel(item.kind, value)}
-                    />
-                  </Field>
-                  <Field label="配置">
-                    <Select
-                      ariaLabel={`${item.label}配置`}
-                      value={profile?.id ?? ""}
-                      options={
-                        list.length > 0
-                          ? list.map((entry) => ({ value: entry.id, label: entry.label }))
-                          : [{ value: "", label: "—" }]
-                      }
-                      onChange={(value) =>
-                        spec && pickProfile(item.kind, spec.id, value)
-                      }
-                    />
-                  </Field>
-                </div>
-                <span className={styles.hint}>
-                  {spec ? `${spec.label}：${profile?.label ?? "默认"}` : "沿用会话模型"}
-                </span>
+                {/* 一个下拉列完所有「模型：配置」：分成两个下拉时，
+                    选了模型还得再选一次配置，而多数模型只有一组配置 */}
+                <Field label="模型 · 一个模型加一组配置算一个选项">
+                  <Select
+                    ariaLabel={`${item.label}模型`}
+                    value={choice && profile ? `${choice.model}|${profile.id}` : ""}
+                    options={[
+                      ...(item.kind === "chat" ? [] : [{ value: "", label: "不使用" }]),
+                      ...combos.map((combo) => ({
+                        value: `${combo.model.id}|${combo.profile.id}`,
+                        label: `${combo.model.label}：${combo.profile.label}`,
+                      })),
+                    ]}
+                    onChange={(value) => pickCombo(item.kind, value)}
+                  />
+                </Field>
+                {spec && (
+                  <span className={styles.hint}>
+                    {spec.label} · {spec.provider} · {profile?.baseUrl || spec.baseUrl}
+                  </span>
+                )}
               </section>
             );
           })}
@@ -511,45 +537,67 @@ export function ModelSettings() {
             setDraft(blank("chat", ai.baseUrl));
           }}
         />
-        {models.map((model) => {
-          const used = usedBy(model.id);
+        {/* 一行 = 一个「模型 + 配置」：同一个模型的不同网关是两件事，
+            只列模型名的话，用户得点进去才知道这行到底是哪个网关 */}
+        {combos.map(({ model, profile }) => {
+          const used = profileUsedBy(model.id, profile.id);
+          const live = used.length > 0;
           return (
             <ListRow
-              key={model.id}
-              active={used.length > 0}
+              key={`${model.id}|${profile.id}`}
+              active={live}
               /* 勾在最左：它是「这一行正在被用」的状态，不是内容 */
-              leading={used.length > 0 ? <Check size={10} /> : undefined}
-              title={model.label}
+              leading={live ? <Check size={10} /> : undefined}
+              title={`${model.label}：${profile.label}`}
               meta={
                 <>
                   {model.provider} ·{" "}
-                  {used.length > 0 ? used.map(kindLabel).join(" / ") : kindLabel(kindOf(model))}
+                  {live ? used.map(kindLabel).join(" / ") : kindLabel(kindOf(model))}
                 </>
               }
               onSelect={() => {
                 setDraft(null);
+                setPane("config");
                 setOpenId(model.id);
+                setOpenProfileId(profile.id);
               }}
               actions={
-                <Tooltip label="设置">
-                  <Button
-                    variant="quiet"
-                    size="xs"
-                    icon
-                    aria-label={`打开 ${model.label} 的设置`}
-                    onClick={() => {
-                      setDraft(null);
-                      setOpenId(model.id);
-                    }}
-                  >
-                    <Gear size={11} />
-                  </Button>
-                </Tooltip>
+                <>
+                  <Tooltip label="设置">
+                    <Button
+                      variant="quiet"
+                      size="xs"
+                      icon
+                      aria-label={`打开 ${model.label}：${profile.label} 的设置`}
+                      onClick={() => {
+                        setDraft(null);
+                        setPane("config");
+                        setOpenId(model.id);
+                        setOpenProfileId(profile.id);
+                      }}
+                    >
+                      <Gear size={11} />
+                    </Button>
+                  </Tooltip>
+                  <Tooltip label="删除这组配置">
+                    <Button
+                      variant="quiet"
+                      size="xs"
+                      icon
+                      aria-label={`删除配置 ${model.label}：${profile.label}`}
+                      onClick={() => setDropProfile({ model, profile })}
+                    >
+                      <Trash size={10} />
+                    </Button>
+                  </Tooltip>
+                </>
               }
             />
           );
         })}
       </List>
+
+      {dropProfileDialog}
     </div>
   );
 }
