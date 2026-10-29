@@ -25,7 +25,7 @@ import {
   type KnowledgeHit,
   type KnowledgeLibrary,
 } from "@/lib/knowledge";
-import { findModel } from "@/lib/model-config";
+import { capabilityOf, capabilityTest } from "@/lib/capability";
 import { aiReady, loadAi, loadAux, slotAi } from "@/lib/ai";
 import { extOf, resolveStored, saveAsset } from "@/lib/assets";
 import { ImageView } from "@/components/ui/image-view";
@@ -86,7 +86,7 @@ function readWidths(): [number, number] {
  * 导入与「重写说明」共用这一套判定 —— 各判一套的话，同一个库里会出现
  * 两种口径的描述，用户没法判断哪句更可信。
  */
-function imageAnnotator() {
+async function imageAnnotator() {
   const chatAi = loadAi();
   const chunkAi = slotAi("chunk");
   const ocrChoice = loadAux().ocr;
@@ -98,11 +98,26 @@ function imageAnnotator() {
           model: ocrChoice.model,
         }
       : null;
-  const mode: "model" | "ocr" | "none" = findModel(chunkAi.model)?.vision
-    ? "model"
-    : ocr
-      ? "ocr"
-      : "none";
+
+  /**
+   * 走「实测」而不是模型清单里那个出厂声明：清单说不能看图而网关其实能看，
+   * 结果就是图片永远走 OCR 甚至直接导不进来。
+   *
+   * 判定顺序有讲究：
+   *   1. 实测支持 → 直接让模型描述；
+   *   2. 配了 OCR → 用 OCR（确定性更好，也不必为一个导入动作花掉一次探针）；
+   *   3. 没测过且没 OCR → 当场测一次，测出来就支持；
+   *   4. 其余 → 明确告诉用户「先配一个能看图的模型或 OCR」。
+   */
+  const conf = chunkAi.model
+    ? { baseUrl: chunkAi.baseUrl, model: chunkAi.model, apiKey: chunkAi.apiKey }
+    : null;
+  let seen = conf ? await capabilityOf(conf).catch(() => null) : null;
+  if (seen?.state !== "supported" && !ocr && seen && seen.checkedAt === null && conf) {
+    seen = await capabilityTest(conf).catch(() => seen);
+  }
+  const mode: "model" | "ocr" | "none" =
+    seen?.state === "supported" ? "model" : ocr ? "ocr" : "none";
   return { chunkAi, ocr, mode };
 }
 
@@ -409,7 +424,7 @@ export function KnowledgePanel({
       toast("先选一个自己的库（预置库只读）");
       return;
     }
-    const { chunkAi, ocr: ocrAi, mode } = imageAnnotator();
+    const { chunkAi, ocr: ocrAi, mode } = await imageAnnotator();
     const files = Array.from(picked);
     const failures: string[] = [];
     let done = 0;
@@ -480,7 +495,7 @@ export function KnowledgePanel({
 
   /** 重跑一次图片标注：图还在材料池里，这里只换说明文字 */
   const redrawImage = async (chunk: KnowledgeChunkItem) => {
-    const { chunkAi, ocr, mode } = imageAnnotator();
+    const { chunkAi, ocr, mode } = await imageAnnotator();
     if (mode === "none") {
       toast("先配一个能看图的模型或 OCR，才能重写说明（左下角 设置 → 模型）");
       return;
