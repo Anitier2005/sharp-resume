@@ -187,14 +187,20 @@ npm run package:clean  # 把 exe 放进 ../release-clean（清空、自检、单
 
 ## 数据
 
-工作区是一个 JSON：`{ version, people[], ui{} }`。
+一个目录：**`<exe 同级>\SharpResumeData\`**，整个目录拷走就是完整搬迁。
 
-- 桌面端（便携）：**exe 同级的 `SharpResumeData\workspace.json`**
-  —— 整个目录可整体拷贝 / 备份 / 放 U 盘，数据跟着 exe 走。
-- 桌面端（回退）：若 exe 所在位置不可写（如 `Program Files`、只读介质），
-  自动回退到 `%LOCALAPPDATA%\com.sharpresume.desktop\workspace.json`。
-  旧版数据会自动复制一份到新位置，原文件保留。
-- 不存在第三处：前端不再把工作区写进 localStorage。
+| 里面有啥 | 装什么 |
+|---|---|
+| `app.db`（SQLite） | **全部结构化数据**：人 / 简历 / 页 / 块（person、resume、page）、界面状态（ui）、会话（chat、message）、知识库（knowledge_*）、材料登记（asset） |
+| `pool\` | 材料字节（证件照、作品图、证书 PDF），按内容哈希命名，引用归零才进 `pool\.trash\` |
+| `inbox\` | 拖进对话的附件原件（同样内容寻址）。与 pool 分开：对话附件不是用户的「材料」 |
+
+- 位置可回退：exe 所在目录不可写（`Program Files`、只读介质）时自动改用
+  `%LOCALAPPDATA%\com.sharpresume.desktop\`，旧数据会复制一份过去，原文件保留。
+- `workspace.json` 只剩**兼容用途**：老版本（v4 及以前）把整份工作区存成这个 JSON，
+  新版本启动时读它一次、导入 `app.db`，之后不再写。目录里通常已经看不到它。
+- 不在这里的两样：模型配置与密钥在 WebView 的 localStorage（见下），
+  界面偏好（栏宽、输入框高度）也在那儿 —— 它们不是简历数据。
 
 ## 目录
 
