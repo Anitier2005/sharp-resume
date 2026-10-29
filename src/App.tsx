@@ -11,7 +11,6 @@ import { readableOn } from "@/lib/color";
 import { installSelectAll } from "@/lib/shortcuts";
 import { configureKnowledge } from "@/lib/knowledge";
 import { listen } from "@tauri-apps/api/event";
-import { isTauri } from "@/lib/storage";
 import type { AccentKey } from "@/types";
 import type { UiPatch } from "@/lib/settings-window";
 
@@ -55,7 +54,6 @@ function Shell() {
    * 设置窗自己不持有工作区，所以「改一下、看一眼」全靠这条通道。
    */
   useEffect(() => {
-    if (!isTauri()) return;
     let off: (() => void) | undefined;
     void listen<UiPatch>("ui:patch", (event) => {
       const patch = event.payload;

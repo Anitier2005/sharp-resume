@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Person, ResumePage, Workspace } from "@/types";
 import { displayName, fieldText } from "@/types";
 import { headerOf, sectionsOf } from "@/lib/blocks";
-import { isTauri, saveWorkspace } from "@/lib/storage";
+import { saveWorkspace } from "@/lib/storage";
 
 /** 一页 → Markdown：字段就是字段，标题就是用户写的标题 */
 export function pageToMarkdown(person: Person, page: ResumePage): string {
@@ -37,54 +37,30 @@ export function resumeToMarkdown(person: Person, pages: ResumePage[]): string {
   return pages.map((page) => pageToMarkdown(person, page)).join("\n\n---\n\n");
 }
 
-/** 保存文本：桌面端弹系统保存框，浏览器端走下载 */
+/** 保存文本：弹系统保存框，取消返回 null */
 export async function saveText(defaultName: string, content: string): Promise<string | null> {
-  if (isTauri()) {
-    const { save } = await import("@tauri-apps/plugin-dialog");
-    const path = await save({
-      defaultPath: defaultName,
-      filters: [{ name: "Markdown", extensions: ["md", "txt"] }],
-    });
-    if (!path) return null;
-    await invoke("save_text_file", { path, content });
-    return path;
-  }
-
-  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = defaultName;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-  return defaultName;
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const path = await save({
+    defaultPath: defaultName,
+    filters: [{ name: "Markdown", extensions: ["md", "txt"] }],
+  });
+  if (!path) return null;
+  await invoke("save_text_file", { path, content });
+  return path;
 }
 
-/** 保存二进制（DOCX 等）：桌面端弹系统保存框，浏览器端走下载 */
+/** 保存二进制（DOCX 等）：弹系统保存框，取消返回 null */
 export async function saveBytes(
   defaultName: string,
   bytes: Uint8Array,
   filterName: string,
   extensions: string[],
-  mime = "application/octet-stream",
 ): Promise<string | null> {
-  if (isTauri()) {
-    const { save } = await import("@tauri-apps/plugin-dialog");
-    const path = await save({ defaultPath: defaultName, filters: [{ name: filterName, extensions }] });
-    if (!path) return null;
-    await invoke("save_binary_file", { path, data: Array.from(bytes) });
-    return path;
-  }
-
-  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  const blob = new Blob([buffer as ArrayBuffer], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = defaultName;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-  return defaultName;
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const path = await save({ defaultPath: defaultName, filters: [{ name: filterName, extensions }] });
+  if (!path) return null;
+  await invoke("save_binary_file", { path, data: Array.from(bytes) });
+  return path;
 }
 
 /** 打印当前页；在系统对话框里选「另存为 PDF」即导出 */
@@ -117,7 +93,6 @@ export async function exportResumeFolder(
   personId: string,
   resumeId: string,
 ): Promise<ExportOutcome> {
-  if (!isTauri()) throw new Error("整份导出只在桌面端可用");
   await saveWorkspace(workspace);
   return invoke<ExportOutcome>("export_resume", { input: { personId, resumeId } });
 }

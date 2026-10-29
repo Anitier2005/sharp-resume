@@ -398,7 +398,6 @@ export function ResumePanel() {
       bytes,
       "Word 文档",
       ["docx"],
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ).then((path) => path && toast("已导出 Word"));
   };
   const exportMd = (target: ResumePage) => {

@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Person, ResumePage, Workspace } from "@/types";
 import { aiReady, slotAi } from "@/lib/ai";
-import { isTauri } from "@/lib/storage";
 
 /**
  * 把一条输入交给「页排版 agent」。
@@ -26,7 +25,6 @@ export async function submitLayout(input: {
   kind: "change" | "request";
   text: string;
 }): Promise<boolean> {
-  if (!isTauri()) return false;
   // 排版是独立用途：它可以用一个便宜快模型，不必占着会话那把
   const ai = slotAi("layout");
   if (!aiReady(ai)) return false;

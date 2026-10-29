@@ -2,42 +2,29 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Workspace } from "@/types";
 import { migrateWorkspace } from "@/lib/migrate";
 
-/** 键名不随版本变：版本号存在数据里的 `version` 字段，换了键名等于把用户数据弄丢 */
-const KEY = "sharp-resume:workspace:v1";
+/**
+ * 工作区读写。真相只有一处：数据目录里的 workspace.json。
+ *
+ * 这里曾经有一条「不在 Tauri 里就退回 localStorage」的分支，配合浏览器调试模式。
+ * 现在没有那个模式了（前端只跑在 Tauri 窗口里），存储也就只有一条路 ——
+ * 两条存储路径最容易出现「这边改了那边没改」。
+ */
 
-export function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-/** 读取工作区。桌面端写用户数据目录，浏览器回落 localStorage。 */
 export async function loadWorkspace(): Promise<Workspace | null> {
   try {
-    if (isTauri()) {
-      const raw = await invoke<string | null>("read_state");
-      if (!raw) return null;
-      return migrateWorkspace(JSON.parse(raw));
-    }
-    const raw = localStorage.getItem(KEY);
-    return raw ? migrateWorkspace(JSON.parse(raw)) : null;
+    const raw = await invoke<string | null>("read_state");
+    if (!raw) return null;
+    return migrateWorkspace(JSON.parse(raw));
   } catch (error) {
-    console.warn("[storage] 读取失败，使用种子数据", error);
+    console.warn("[storage] 读取失败，按空工作区处理", error);
     return null;
   }
 }
 
 export async function saveWorkspace(workspace: Workspace): Promise<void> {
-  const json = JSON.stringify(workspace);
-  if (isTauri()) {
-    await invoke("write_state", { json });
-    return;
-  }
-  localStorage.setItem(KEY, json);
+  await invoke("write_state", { json: JSON.stringify(workspace) });
 }
 
 export async function clearWorkspace(): Promise<void> {
-  if (isTauri()) {
-    await invoke("write_state", { json: "" });
-    return;
-  }
-  localStorage.removeItem(KEY);
+  await invoke("write_state", { json: "" });
 }

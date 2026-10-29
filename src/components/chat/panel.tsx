@@ -13,10 +13,9 @@ import { entriesOf } from "@/lib/blocks";
 import { skillsPrompt } from "@/lib/skills";
 import { AiSettingsSheet } from "./ai-settings";
 import { AssistantTurn, EmptyTurn, SystemTurn, TypingTurn, UserTurn } from "./message";
-import { aiReady, loadAi, loadAux, saveAi, slotAi, streamChat, type AiSettings } from "@/lib/ai";
+import { aiReady, loadAi, loadAux, saveAi, slotAi, type AiSettings } from "@/lib/ai";
 import { DEFAULT_RESERVE, findModel, listProfiles } from "@/lib/model-config";
-import { buildContext, buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
-import { isTauri } from "@/lib/storage";
+import { buildContext, splitReply } from "@/lib/prompt";
 import { applyAgentActions, askSessionFromLayout, registerChatBridge, type AskQuestion } from "@/lib/agent-actions";
 import { submitLayout } from "@/lib/layout";
 import { AskForm } from "./ask-form";
@@ -83,7 +82,7 @@ export function ChatPanel() {
   /**
    * 模型设置在独立窗口里。窗口改完会推 `settings:changed` —— 这里重读 localStorage，
    * 否则本面板还拿着旧模型，下一条消息会发给已经换掉的接口。
-   * 浏览器调试开不了窗口，退回老的小窗（只服务开发）。
+   * 建窗失败时退回浮层（例如窗口管理出问题），不让入口变成死链。
    */
   const openModelSettings = async () => {
     // 带上主题：模型窗不读工作区，空参数会开出默认浅色的窗
@@ -91,7 +90,6 @@ export function ChatPanel() {
   };
 
   useEffect(() => {
-    if (!isTauri()) return;
     let off: (() => void) | undefined;
     void listen<SettingsChanged>("settings:changed", (event) => {
       if (event.payload.kind === "ai") setAi(loadAi());
@@ -111,7 +109,7 @@ export function ChatPanel() {
   >(null);
   /** 上一轮发出时的页面快照（摊平后），用来算「这一轮之前你手改了什么」 */
   const baseRef = useRef<{ key: string; flat: Flat } | null>(null);
-  /** 消息真相源在 Rust（chat_history 拉全量投影）；浏览器调试模式才退回工作区 */
+  /** 消息真相源在 Rust：组件只持有 chat_history 拉回来的投影 */
   const [remote, setRemote] = useState<ChatMessage[]>([]);
   /**
    * 压缩点：`upto` 是最后一条被压进摘要的消息 id。
@@ -119,7 +117,6 @@ export function ChatPanel() {
    */
   const [digest, setDigest] = useState<{ upto: string; text: string } | null>(null);
   const [reasoning, setReasoning] = useState("");
-  const desktop = isTauri();
 
   const configured = aiReady(ai);
   /**
@@ -165,10 +162,7 @@ export function ChatPanel() {
     toast(`已切换到 ${spec.label}：${profile.label}`);
   };
 
-  const messages = useMemo(
-    () => (desktop ? remote : person?.messages ?? []),
-    [desktop, remote, person],
-  );
+  const messages = useMemo(() => remote, [remote]);
 
   /**
    * 对话流只放用户与会话 agent 的往返。
@@ -182,7 +176,7 @@ export function ChatPanel() {
 
   // 切人/启动时从 Rust 拉一次：现在拿的是全部消息，不再随模型窗口变
   useEffect(() => {
-    if (!desktop || !personId) {
+    if (!personId) {
       setRemote([]);
       setDigest(null);
       return;
@@ -205,7 +199,7 @@ export function ChatPanel() {
     return () => {
       alive = false;
     };
-  }, [desktop, personId]);
+  }, [personId]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -324,8 +318,7 @@ export function ChatPanel() {
        * 答复回投给排版 agent。
        *
        * 提问与答复都不进对话流，用户看不见 —— 但排版 agent 拿不到答复就等于白问，
-       * 所以这一轮结束后把正文重新投进那一页的排版信箱。浏览器模式没有信箱，
-       * submitLayout 自己会跳过，这里不用分支。
+       * 所以这一轮结束后把正文重新投进那一页的排版信箱。
        */
       const answerBack = (content: string) => {
         if (!silent) return;
@@ -347,70 +340,6 @@ export function ChatPanel() {
       setReasoning("");
       abortRef.current = new AbortController();
 
-      /* ---------- 浏览器调试模式：保持原有工作区流程 ---------- */
-      if (!desktop) {
-        // 内部消息照旧落库（带 internal），模型下一轮还看得见，只是渲染时被过滤掉
-        dispatch({ type: "appendMessage", personId: person.id, message: userMessage });
-        dispatch({ type: "appendMessage", personId: person.id, message: draft });
-        const controller = abortRef.current;
-        let acc = "";
-        void (async () => {
-          try {
-            // 浏览器调试模式没有后端，附件内容不解析 —— 只有桌面端才读得到
-            const attachmentBlocks = attachments.map((file) => ({
-              name: file.name,
-              text: "（浏览器调试模式不解析附件内容；桌面端才会读正文和图片）",
-            }));
-            await streamChat({
-              settings: ai,
-              messages: toApiMessages(
-                buildSystemPrompt(context),
-                person.messages.map((item) => ({ role: item.role, content: item.content })),
-                text,
-                attachmentBlocks,
-                [],
-              ),
-              signal: controller.signal,
-              onDelta: (delta) => {
-                acc += delta;
-                dispatch({
-                  type: "patchMessage",
-                  personId: person.id,
-                  messageId: replyId,
-                  patch: { content: acc },
-                });
-              },
-            });
-            const { content, changes } = splitReply(acc, person, targetPage);
-            dispatch({
-              type: "patchMessage",
-              personId: person.id,
-              messageId: replyId,
-              patch: {
-                content: content || "（模型没有返回正文）",
-                tool: `${ai.model} · 完成`,
-                changes: changes.length ? changes : undefined,
-              },
-            });
-            answerBack(content);
-          } catch (error) {
-            if (controller.signal.aborted) return;
-            const reason = error instanceof Error ? error.message : String(error);
-            dispatch({
-              type: "patchMessage",
-              personId: person.id,
-              messageId: replyId,
-              patch: { content: `调用失败：${reason}`, tool: `${ai.model} · 调用失败` },
-            });
-          } finally {
-            setBusy(false);
-            setSilentBusy(false);
-          }
-        })();
-        return;
-      }
-
-      /* ---------- 桌面：消息交给 Rust，上下文与裁剪也在那边 ---------- */
       // 内部往返不进 remote：用户看到的对话流里不该出现提问与答复这两条
       if (!silent) setRemote((prev) => [...prev, userMessage, draft]);
 
@@ -588,7 +517,6 @@ export function ChatPanel() {
       ai,
       configured,
       toast,
-      desktop,
       patchLocal,
       runLayoutFor,
     ],
@@ -622,10 +550,6 @@ export function ChatPanel() {
           content,
           time: Date.now(),
         };
-        if (!desktop) {
-          dispatch({ type: "appendMessage", personId: person.id, message });
-          return;
-        }
         setRemote((prev) => [...prev, message]);
         void invoke("chat_push", { key: person.id, message });
       },
@@ -642,14 +566,10 @@ export function ChatPanel() {
     [],
   );
 
-  /** 统一补丁入口：桌面端消息真相在 Rust，浏览器端在工作区 */
+  /** 统一补丁入口：消息真相在 Rust，这里先改本地投影，再把补丁写回去 */
   const patchMessage = useCallback(
     (id: string, patch: Partial<ChatMessage>) => {
       if (!person) return;
-      if (!desktop) {
-        dispatch({ type: "patchMessage", personId: person.id, messageId: id, patch });
-        return;
-      }
       patchLocal(id, patch);
       // undefined 序列化会丢字段，Rust 侧用 null 表示"清空"
       const wire: Record<string, unknown> = {};
@@ -658,16 +578,14 @@ export function ChatPanel() {
       }
       void invoke("chat_patch", { key: person.id, id, patch: wire });
     },
-    [person, desktop, dispatch, patchLocal],
+    [person, patchLocal],
   );
 
-  /** 中断当前请求（只有桌面模式有效：命令层能置取消标记） */
+  /** 中断当前请求：命令层置取消标记，模型那边这一轮会被丢掉 */
   const stop = useCallback(() => {
     abortRef.current?.abort();
-    if (desktop && person) {
-      void invoke("chat_cancel", { key: person.id });
-    }
-  }, [desktop, person]);
+    if (person) void invoke("chat_cancel", { key: person.id });
+  }, [person]);
 
   const handleAction = (message: ChatMessage, action: ChatAction) => {
     if (!person || !resume) return;

@@ -18,13 +18,13 @@
 
 - [x] 两级列表：候选人 → 简历（展开/收起、搜索、新建、重命名、复制、删除）
 - [x] 会话：消息流、任意文件上传与拖放、改写建议、一键写回共享经历
-- [x] **附件进上下文**：txt / md / csv / json 等纯文本附件随消息送进模型（单份上限 200KB），PDF、图片等只报文件名
+- [x] **附件进上下文**：选完文件即上传到后端解析（文本 / PDF 取字 / 图片 OCR，扫描件自动转文字），前台只报「哪几个附件」
 - [x] 简历区：多页签（中文 / English / 作品集）、新增与删除页面、缩放
 - [x] 纸面内联编辑（contentEditable，非受控写入，编辑即写回数据）
 - [x] 中英双语字段（公司、职位、学历、技能、作品各有一份英文）
 - [x] **经历库**：人这一级的共享资料，经历 / 作品 / 教育 / 技能 / 人物五个分页，可增删、排序、中英切换
 - [x] **本页取用**：每条经历与作品都有「本页」勾选，决定它出不出现于当前页（作品集页只取作品）
-- [x] 本地持久化：桌面端写用户数据目录 `workspace.json`，浏览器回落 localStorage
+- [x] 本地持久化：写用户数据目录 `workspace.json`
 - [x] 导出：打印 / 存 PDF（当前页）、**Word .docx（当前页）**、Markdown（当前页 / 整份）
 - [x] **A4 页数估算**：页脚按纸张宽高比实时算「≈ N 页 A4」，超过一页转警示色，同时在纸面第 529px 处画分页虚线
 - [x] 主题：白（默认）/ 靛 / 松 / 朱 + 明暗两套
@@ -111,8 +111,7 @@
 
 ```bash
 npm install
-npm run dev            # 纯前端热更新，浏览器开 http://localhost:1420
-.tools\dev.cmd        # 桌面窗口热更新（前端即时，Rust 改动自动重建重启）
+.tools\dev.cmd        # 开发：Tauri 窗口（前端即时热更新，Rust 改动自动重建重启）
 .tools\build.bat      # release exe
 npm run package:clean  # 把 exe 放进 ../release-clean（清空、自检、单文件）
 ```
@@ -125,7 +124,7 @@ npm run package:clean  # 把 exe 放进 ../release-clean（清空、自检、单
 | `prompts/system.md` | system 模板，`{{context}}` 是材料占位 | ✅ | 同上（`include_str!` 编进 Rust） |
 | `prompts/skills/*.md` | 技能：每个文件一段「什么时候用 / 怎么做 / 输出格式」 | ✅ | 同上（vite glob 编进前端，自动带上新文件） |
 | `testdata/ai.json` | 测试环境：baseUrl / model / 参数（**不含密钥**） | ✅ | dev 默认值 |
-| `testdata/mock/*.json` | 各版本的工作区样例，验证迁移用 | ✅ | 手塞 localStorage 即可 |
+| `testdata/mock/*.json` | 各版本的工作区样例，验证迁移用 | ✅ | 覆盖到数据目录的 `workspace.json` 后重启 |
 | `testdata/secrets/*.json` | 本机密钥（`apiKey`） | ❌ **gitignore** | 覆盖 `ai.json` 的同名字段 |
 
 技能不需要注册：丢一个 `.md` 进 `prompts/skills/`，刷新界面对话时它就在 system 提示词里。
@@ -145,12 +144,11 @@ npm run package:clean  # 把 exe 放进 ../release-clean（清空、自检、单
 | `src-tauri/**`（Rust） | tauri 自动增量重建并重启窗口，debug 档十几秒 |
 | `tauri.conf.json` | 重启窗口 |
 
-只调界面时用 `npm run dev` 更轻：浏览器里同样是热更新，只是没有文件对话框等 Tauri 能力
-（状态回落 localStorage、导出回落浏览器下载，功能照样能点）。
-
-> 首屏一律是空白工作区，跟正式版一致。要载入示例数据（8 个虚构候选人 + 一段对话，
-> 调版式用）就在浏览器地址后面加参数：`http://localhost:1420/?seed=1`。
-> 桌面 dev 窗口不带参数，所以不会再被示例数据占住。
+> **只有一种运行形态**：Tauri 窗口。`npm run dev` 只是 `tauri dev` 的前端那半
+> （`beforeDevCommand` 会自己调它），单独在浏览器里打开 1420 没有后端：
+> 附件解析、知识库、真实模型调用都会失败 —— 那条「浏览器调试模式」的分支已经删掉了。
+>
+> 首屏一律是空白工作区，示例数据也一并删了：需要样例就在界面里自己建。
 
 > 两个 `.tools\*.cmd` 只负责把 MSVC 环境拼好再调命令 —— 本机 `cl.exe` 不在 PATH 里，
 > 且 Windows SDK 的 ucrt 库不全（缺 `legacy_stdio_definitions.lib` / `oldnames.lib`），
@@ -196,10 +194,7 @@ npm run package:clean  # 把 exe 放进 ../release-clean（清空、自检、单
 - 桌面端（回退）：若 exe 所在位置不可写（如 `Program Files`、只读介质），
   自动回退到 `%LOCALAPPDATA%\com.sharpresume.desktop\workspace.json`。
   旧版数据会自动复制一份到新位置，原文件保留。
-- 浏览器：`localStorage["sharp-resume:workspace:v1"]`
-
-开发构建首次启动写入 `src/data/seed.ts` 的示例数据（2 个完整候选人 + 6 个占位）；
-生产构建经 `vite.config` 的 alias 换成空工作区，**发布产物不含任何示例数据**。
+- 不存在第三处：前端不再把工作区写进 localStorage。
 
 ## 目录
 
@@ -251,5 +246,5 @@ design/         视觉探索过程，editor.html 是定稿方向
 
 - `design/` 下是设计阶段的文件，不参与构建，保留作参照。
 - 没配模型时，回复来自 `src/lib/rewrite.ts` 的本地规则，只做「主动语态」这类可解释的文本变换，**不编造数字**，也不联网。
-- 附件读取在浏览器侧完成（`src/lib/attach.ts`）：选完文件立刻把纯文本读进内存，发送时直接拼进最后一条 user 消息，不上传、不落盘。PDF / 图片 / Office 文档当前只把文件名告诉模型——要提取正文得另接解析器，或交给支持多模态的接口。
+- 附件解析在后端（`src-tauri/src/attach.rs`）：选完文件即上传到 `<数据目录>/inbox/`（内容寻址），当场取字 / 标记扫描件；发送时由 `chat_send` 组装材料段、跑 OCR、渲染 PDF 页面。前端只传存储名，不碰字节。
 - 纸面按 A4 比例排版：宽度自适应，`min-height` 等于一页 A4 的等比高度。超出后画布内部滚动（整列高度被 `grid-template-rows:minmax(0,1fr)` 锁住，页脚不会被顶出窗口），页脚的「≈ N 页 A4」用纸张宽高比换算，缩放不影响结果。内容真超一页时，纸面上会有一条 A4 分页虚线标出打印会被切断的位置。

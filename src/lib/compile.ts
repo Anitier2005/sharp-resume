@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Asset, Person, ResumePage } from "@/types";
 import { resolveUrl } from "@/lib/assets";
-import { isTauri } from "@/lib/storage";
 
 /**
  * 成品层：把一页编译成可直接渲染的 HTML。
@@ -27,7 +26,6 @@ export async function compilePage(
   page: ResumePage,
   person: Person,
 ): Promise<CompiledPage | null> {
-  if (!isTauri()) return null;
   return invoke<CompiledPage>("compile_page", { page, person });
 }
 
@@ -44,7 +42,7 @@ function findAsset(person: Person, id: string): Asset | undefined {
 /**
  * 把 `asset:<id>` 换成能直接加载的地址。
  *
- * 编译层只输出占位符：真地址怎么来（桌面端 blob URL、浏览器调试模式 data URL）
+ * 编译层只输出占位符：真地址怎么来（材料池 / data URL）
  * 是前端的事，后端不该知道 —— 它也不该把图片字节塞进 HTML。
  */
 export async function resolveAssetRefs(html: string, person: Person): Promise<string> {

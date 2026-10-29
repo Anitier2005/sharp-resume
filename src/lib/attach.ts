@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "@/types";
-import { isTauri } from "@/lib/storage";
 
 /**
  * 附件：这里只做「上传」和「取回显示」，**不做任何解析**。
@@ -48,10 +47,6 @@ export async function toAttachment(file: File): Promise<Attachment> {
   // 待发送阶段用 object URL 做缩略图；发出去之后靠 stored 从 inbox 取回
   const preview = isImage(ext) ? URL.createObjectURL(file) : undefined;
 
-  if (!isTauri()) {
-    // 浏览器调试模式没有后端：只留名字，界面能看、内容不解析
-    return { id, name: file.name, size: file.size, ext, preview };
-  }
   if (file.size > MAX_BYTES) {
     throw new Error(`「${file.name}」超过 12MB，先压缩再放进来`);
   }
@@ -76,7 +71,7 @@ export const attachRefs = (list: Attachment[]) =>
 export async function attachmentSrc(file: Attachment): Promise<string | null> {
   if (file.preview) return file.preview;
   const stored = file.stored;
-  if (!stored || !isTauri()) return null;
+  if (!stored) return null;
   const cached = srcCache.get(stored);
   if (cached) return cached;
   try {

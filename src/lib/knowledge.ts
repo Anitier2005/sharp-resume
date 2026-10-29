@@ -202,6 +202,6 @@ export function configureKnowledge(choice: AuxModelChoice | null = loadAux().emb
       }
     : null;
   void invoke("knowledge_configure", { embedding: payload }).catch(() => {
-    // 浏览器调试模式没有后端：静默跳过，面板照样能用（只是没有检索预览）
+    // 配置失败不影响面板本身的可用性（只是没有检索预览），不打扰用户
   });
 }

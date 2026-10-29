@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit, emitTo } from "@tauri-apps/api/event";
-import { isTauri } from "@/lib/storage";
 
 /**
  * 设置窗口。
@@ -21,13 +20,12 @@ export type SettingsView = "model" | "look" | "knowledge";
  * 权限，再用 `getByLabel` 去重又是另一条权限 —— 少一条就静默失败，很难查。
  * 这里只发一条命令。
  *
- * 返回 false 表示当前不是桌面环境（浏览器调试），调用方自行退回浮层。
+ * 返回 false 表示建窗失败，调用方自行退回浮层。
  */
 export async function openSettingsWindow(
   view: SettingsView,
   params: Record<string, string> = {},
 ): Promise<boolean> {
-  if (!isTauri()) return false;
   try {
     await invoke("open_settings", { view, params });
     return true;
@@ -53,7 +51,6 @@ export interface UiPatch {
 }
 
 async function toMain(event: string, payload: unknown) {
-  if (!isTauri()) return;
   try {
     await emitTo("main", event, payload);
   } catch {
@@ -63,7 +60,6 @@ async function toMain(event: string, payload: unknown) {
 
 /** 广播给所有窗口（含发出者自己，重复应用同一份主题是幂等的） */
 async function toAll(event: string, payload: unknown) {
-  if (!isTauri()) return;
   try {
     await emit(event, payload);
   } catch {

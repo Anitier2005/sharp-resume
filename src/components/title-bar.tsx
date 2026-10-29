@@ -1,6 +1,4 @@
 import { useWorkspace } from "@/store/workspace";
-import { isTauri } from "@/lib/storage";
-import { useToast } from "@/components/ui/toast-context";
 import { Logo } from "@/components/ui/logo";
 import { PanelLeft, PanelRight, WinClose, WinMax, WinMin } from "@/components/ui/icons";
 import styles from "./title-bar.module.css";
@@ -15,16 +13,10 @@ async function windowAction(action: "minimize" | "maximize" | "close") {
 
 export function TitleBar() {
   const { state, resume, dispatch } = useWorkspace();
-  const toast = useToast();
-  const desktop = isTauri();
   const showSide = state.ui.showSide !== false;
   const showDoc = state.ui.showDoc !== false;
 
   const run = (action: "minimize" | "maximize" | "close") => {
-    if (!desktop) {
-      toast("窗口控制在打包后可用");
-      return;
-    }
     void windowAction(action);
   };
 

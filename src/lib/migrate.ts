@@ -12,8 +12,8 @@ import { normalizeWorkspace } from "@/lib/blocks";
  * 为什么不在这里再留一份：两份规则已经漂移过一次 —— 年限字段前端拼成了「3 年」，
  * 后端把数字当成空串直接丢掉。修好的方式是「只留一处」，不是「两边同步着改」。
  *
- * 浏览器调试模式（没有 Rust）读的是 localStorage，里面是前端自己写的 v5；
- * 遇到更老的版本直接报错，让用户用桌面端打开一次，而不是在这里悄悄迁一半。
+ * 更老的版本在这里直接报错：真正的迁移在 Rust 侧（`model::adopt`），
+ * 前端只做结构自检与「老数据落到前端的最后一公里」，不在两边各迁一半。
  */
 export function migrateWorkspace(raw: unknown): Workspace {
   const src = raw as Workspace | undefined;
@@ -22,7 +22,7 @@ export function migrateWorkspace(raw: unknown): Workspace {
   }
   if (typeof src.version === "number" && src.version < 4) {
     throw new Error(
-      `这份数据是老版本（v${src.version}），请用桌面端打开一次完成升级（浏览器调试模式不做迁移）`,
+      `这份数据是老版本（v${src.version}），前端不做迁移 —— 用当前版本打开一次会自动升级`,
     );
   }
 

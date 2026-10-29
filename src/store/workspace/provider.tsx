@@ -11,9 +11,8 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import type { Asset, Block, PageNote, Resume, Workspace } from "@/types";
 import { AUTO_TEXT_SCALE_FLOOR, displayName } from "@/types";
-import { SEED } from "@/data/seed";
 import { EMPTY_WORKSPACE } from "@/data/empty";
-import { loadWorkspace, saveWorkspace, isTauri } from "@/lib/storage";
+import { loadWorkspace, saveWorkspace } from "@/lib/storage";
 import { describeChange, diff, flatten, type Flat } from "@/lib/changes";
 import { submitLayout } from "@/lib/layout";
 import {
@@ -31,20 +30,12 @@ import type { Action } from "./types";
 import { WorkspaceContext, type WorkspaceContextValue, type SaveState } from "./context";
 
 /**
- * 初始工作区：空白起步，跟正式版一致。
+ * 初始工作区：空白起步。
  *
- * 以前是「DEV 就给示例数据」，结果 dev 窗口当正式工作区用时，没有存档就会载入
- * 8 个虚构候选人和一段假的 AI 改写对话，一操作还落盘，用户会以为自己的数据
- * 被一堆「不存在的会话」占了。现在改成显式索取：
- *   http://localhost:1420/?seed=1   → 载入示例数据（调样式用）
- *   桌面 dev 窗口 / 不带参数          → 空白，跟生产一致
- *
- * vite.config 在 production 下把 @/data/seed 重定向到 seed.prod（空实现），
- * 所以发布产物里永远不含示例简历，带 ?seed=1 也只会得到空白工作区。
+ * 曾经有「DEV 就载入示例数据」和 `?seed=1` 两个入口，都是给浏览器调试模式看的；
+ * 那个模式已经删掉，示例数据也一并停了 —— 需要样例就在界面里自己建。
  */
-const wantsSeed =
-  import.meta.env.DEV && new URLSearchParams(window.location.search).has("seed");
-const INITIAL_WORKSPACE: Workspace = wantsSeed ? SEED : EMPTY_WORKSPACE;
+const INITIAL_WORKSPACE: Workspace = EMPTY_WORKSPACE;
 
 /** 后端排版跑完后推回来的动作 */
 interface LayoutApplied {
@@ -504,7 +495,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
    * 面板卸载了也得收得到，否则这一轮就白跑了。
    */
   useEffect(() => {
-    if (!isTauri()) return;
     let alive = true;
     const stops: Array<() => void> = [];
     const keep = (unlisten: () => void) => {
@@ -576,10 +566,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [dispatch, toast]);
 
   // 系统文本缩放：Windows「辅助功能 → 文本大小」不会自动传给网页，主动问一次。
-  // 非桌面端（浏览器预览）拿不到，用可读下限兜底。
+  // 问不到时用可读下限兜底（老系统没这个设置）。
   const [systemTextScale, setSystemTextScale] = useState(AUTO_TEXT_SCALE_FLOOR);
   useEffect(() => {
-    if (!isTauri()) return;
     let alive = true;
     import("@tauri-apps/api/core")
       .then(({ invoke }) => invoke<number>("text_scale"))

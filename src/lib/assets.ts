@@ -1,14 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Asset } from "@/types";
-import { isTauri } from "@/lib/storage";
 import { uid } from "@/lib/uid";
 
 /**
  * 材料的存取。
  *
  * 桌面端：文件进 `<数据目录>/pool/`（资产池，按内容寻址，同一份文件只落一份），
- * state 里只留存储名；浏览器（`npm run dev`）：没有文件系统，退化成 data URL 塞进 stored。
- * 两条路对上层是同一个 `resolveUrl()`，界面不用关心自己在哪跑。
+ * state 里只留存储名，两条路（新文件 / 旧 data URL）对上层是同一个 `resolveUrl()`。
  *
  * 为什么不再用 `asset_put`：那套写 `assets/` 目录、按原文件名存，同一张图拖两次就是两份。
  * 资产池把「存在哪」和「谁在用」分开了 —— 引用统计由后端在每次保存后同步。
@@ -24,15 +22,6 @@ const urlCache = new Map<string, string>();
 /** 单张图片上限 12MB：再大就不是身份证照片了，是设计稿 */
 const MAX_BYTES = 12 * 1024 * 1024;
 
-function readAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("读取文件失败"));
-    reader.readAsDataURL(file);
-  });
-}
-
 /** 文件 → 材料。图片归 image，其余归 file（链接走 addLink） */
 export async function saveAsset(file: File): Promise<Asset> {
   if (file.size > MAX_BYTES) {
@@ -42,18 +31,14 @@ export async function saveAsset(file: File): Promise<Asset> {
   const kind: Asset["kind"] = IMAGE_EXT.has(ext) || file.type.startsWith("image/") ? "image" : "file";
   const id = uid("a");
 
-  if (isTauri()) {
-    const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-    // 资产池按内容寻址：同一份文件拖两次只落一份，存储名由后端算（sha256 前 16 位）
-    const saved = await invoke<{ stored: string; sha256: string }>("pool_put", {
-      id,
-      name: file.name,
-      data: bytes,
-    });
-    return { id, kind, name: file.name, stored: saved.stored };
-  }
-
-  return { id, kind, name: file.name, stored: await readAsDataUrl(file) };
+  const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+  // 资产池按内容寻址：同一份文件拖两次只落一份，存储名由后端算（sha256 前 16 位）
+  const saved = await invoke<{ stored: string; sha256: string }>("pool_put", {
+    id,
+    name: file.name,
+    data: bytes,
+  });
+  return { id, kind, name: file.name, stored: saved.stored };
 }
 
 /** 链接型材料：没有文件，stored 就是网址 */
@@ -95,7 +80,8 @@ async function urlOfStored(stored: string): Promise<string | null> {
  */
 export async function resolveUrl(asset: Asset): Promise<string | null> {
   if (asset.kind === "link") return asset.stored;
-  if (!isTauri() || asset.stored.startsWith("data:")) return asset.stored;
+  // 早期浏览器模式把图存成 data URL，老工作区里还有这种值：原样返回，不判失败
+  if (asset.stored.startsWith("data:")) return asset.stored;
 
   return urlOfStored(asset.stored);
 }
@@ -104,15 +90,14 @@ export async function resolveUrl(asset: Asset): Promise<string | null> {
  * 按材料池里的存储名取显示地址；读不到返回 null（不抛）。
  *
  * 模型引用知识库图片时只会写 `asset:<stored>`，拿不到 Asset（也就没有 kind）。
- * 浏览器调试模式没有池，直接判失败让调用方退回显示原文 —— 这里不报错也不 toast：
+ * 读不到就直接判失败让调用方退回显示原文 —— 这里不报错也不 toast：
  * 「池里没有这张图」是内容问题，不是操作失误。
  */
 export async function resolveStored(stored: string): Promise<string | null> {
   const name = stored.trim();
   if (!name) return null;
-  // 浏览器里存的就是 data URL；链接型材料也直接可用
+  // 老工作区里的 data URL、链接型材料：本身就是可用地址
   if (name.startsWith("data:") || name.startsWith("blob:")) return name;
-  if (!isTauri()) return null;
 
   return urlOfStored(name);
 }

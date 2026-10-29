@@ -41,10 +41,7 @@ export function Sidebar() {
   const [libOpen, setLibOpen] = useState(false);
   /** 知识库是全局的（跨候选人）；设置同理，两者都收在左下角的「设置」项下面 */
   const [kbOpen, setKbOpen] = useState(false);
-  /**
-   * 设置是独立窗口。浏览器调试时开不了窗口，退回一个浮层 ——
-   * 它只服务开发，所以只要能用就行，不做完整对齐。
-   */
+  /** 设置是独立窗口；建窗失败时退回浮层，不让入口变成死链 */
   const [fallback, setFallback] = useState<SettingsView | null>(null);
   /** 「设置」下挂三个二级项，默认展开：默认收起的话这三个入口等于藏起来了 */
   const [navOpen, setNavOpen] = useState(true);
@@ -81,7 +78,7 @@ export function Sidebar() {
     // 三个子窗口都要带上主题：它们独立成窗、不读工作区，只靠这份查询串定色
     const params = themeParams(state.ui, systemTextScale);
     const opened = await openSettingsWindow(view, params);
-    // 知识库有现成的抽屉，浏览器调试就退回它；模型/外观退回浮层
+    // 建窗失败：知识库退回抽屉，模型/外观退回浮层
     if (!opened) {
       if (view === "knowledge") setKbOpen(true);
       else setFallback(view);
