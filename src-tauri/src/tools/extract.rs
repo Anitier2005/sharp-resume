@@ -343,16 +343,16 @@ mod tests {
         }
     }
 
+    /// 走 `ToolCtx::of` 而不是字面量：以后 ToolCtx 加字段（比如 B2-4 的 facts），
+    /// 这里不用跟着改
+    fn ctx<'a>(bench: &'a Bench, workspace: &'a Value, out: &'a Outbox) -> ToolCtx<'a> {
+        let mut ctx = ToolCtx::of(workspace, "p1", "r1", "pg1", out);
+        ctx.root = Some(&bench.root);
+        ctx
+    }
+
     fn run(bench: &Bench, workspace: &Value, out: &Outbox) -> Result<String, String> {
-        let ctx = ToolCtx {
-            workspace,
-            person_id: "p1",
-            resume_id: "r1",
-            page_id: "pg1",
-            out,
-            root: Some(&bench.root),
-        };
-        extract_images(&bench.args(), &ctx)
+        extract_images(&bench.args(), &ctx(bench, workspace, out))
     }
 
     fn rows(text: &str) -> Vec<&str> {
@@ -398,14 +398,7 @@ mod tests {
         let bench = Bench::new(b"whatever", "照片.png");
         let ws = bench.workspace();
         let out = Outbox::default();
-        let ctx = ToolCtx {
-            workspace: &ws,
-            person_id: "p1",
-            resume_id: "r1",
-            page_id: "pg1",
-            out: &out,
-            root: Some(&bench.root),
-        };
+        let ctx = ctx(&bench, &ws, &out);
         let err = extract_images(&json!({ "stored": "abc.png" }), &ctx).unwrap_err();
         assert!(err.contains("这不是 PDF"), "{err}");
     }
@@ -426,14 +419,7 @@ mod tests {
         let bench = Bench::new(&pdf_with_pages(1), "扫描件.pdf");
         let ws = bench.workspace();
         let out = Outbox::default();
-        let ctx = ToolCtx {
-            workspace: &ws,
-            person_id: "p1",
-            resume_id: "r1",
-            page_id: "pg1",
-            out: &out,
-            root: None,
-        };
+        let ctx = ToolCtx::of(&ws, "p1", "r1", "pg1", &out);
         let text = extract_images(&bench.args(), &ctx).unwrap();
         assert!(text.contains("【材料登记】"), "{text}");
         assert!(text.contains("照片没有放上去"), "{text}");
