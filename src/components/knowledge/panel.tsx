@@ -603,6 +603,8 @@ export function KnowledgePanel({
 
   const activeLib = libs.find((item) => item.id === libId);
   const showHits = hits !== null;
+  /** 第三列（块）在选中条目或正在编辑时才有内容可放 */
+  const entryOpen = entryId !== "" || draft !== null;
 
   const box = (
     <div
@@ -638,7 +640,8 @@ export function KnowledgePanel({
 
       <div className={styles.cols}>
         {/* ---------- 第一列：库 ---------- */}
-        <section className={styles.pane} style={{ width: widths[0] }}>
+        {/* 没选库时只该有这一列，铺满整块面板：留一条空荡荡的条目列只会让人以为数据没加载 */}
+        <section className={styles.pane} style={libId ? { width: widths[0] } : { flex: 1 }}>
           <header className={styles.paneHead}>
             <span className={styles.paneTitle}>库</span>
             <Tooltip label="新建库">
@@ -726,10 +729,19 @@ export function KnowledgePanel({
           aria-orientation="vertical"
           aria-label="调整库列宽度"
           onPointerDown={dragColumn("lib")}
+          style={libId ? undefined : { display: "none" }}
         />
 
-        {/* ---------- 第二列：条目 ---------- */}
-        <section className={styles.pane} style={{ width: widths[1] }}>
+        {/* ---------- 第二列：条目（选中库之后才出现） ---------- */}
+        <section
+          className={styles.pane}
+          style={{
+            width: widths[1],
+            display: libId ? undefined : "none",
+            // 还没选条目时没有第三列，条目列自己把剩下的宽度吃掉
+            flex: entryOpen ? "none" : "1",
+          }}
+        >
           <header className={styles.paneHead}>
             <span className={styles.searchRow}>
               <Search size={11} />
@@ -842,10 +854,11 @@ export function KnowledgePanel({
           aria-orientation="vertical"
           aria-label="调整条目列宽度"
           onPointerDown={dragColumn("entry")}
+          style={entryOpen ? undefined : { display: "none" }}
         />
 
-        {/* ---------- 第三列：这一条的块 ---------- */}
-        <section className={styles.detail}>
+        {/* ---------- 第三列：这一条的块（选中条目后才出现） ---------- */}
+        <section className={styles.detail} style={entryOpen ? undefined : { display: "none" }}>
           {draft ? (
             <div className={styles.editor}>
               <Field label="标题">
