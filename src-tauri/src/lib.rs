@@ -9,6 +9,7 @@ mod history;
 mod knowledge;
 mod model;
 mod net;
+mod pdfembed;
 mod pdfimage;
 mod pool;
 mod render;

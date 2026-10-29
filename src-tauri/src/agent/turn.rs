@@ -75,6 +75,7 @@ fn describe(name: &str, args: &Value) -> String {
             Some("preview") => "切到预览".to_string(),
             _ => "切到编辑".to_string(),
         },
+        "extract_images" => "在原件里找内嵌图片".to_string(),
         "set_open_pages" => "调整快捷标签".to_string(),
         "set_ui" => "调整界面".to_string(),
         other => format!("调用 {other}"),

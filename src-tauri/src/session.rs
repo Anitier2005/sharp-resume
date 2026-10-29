@@ -497,12 +497,20 @@ pub async fn chat_send(
     // 附件解析全在这里：取字、OCR、PDF 渲染都是 Rust 的活，
     // 前端只传「哪几个附件」，拿不到字节也拿不到正文
     let root = crate::data_dir(&app).ok();
-    let (attach_section, attach_images) = match (&root, args.attachments.is_empty()) {
+    let attached = match (&root, args.attachments.is_empty()) {
         (Some(dir), false) => {
             crate::attach::materials(dir, &args.attachments, args.vision, args.ocr.as_ref()).await
         }
-        _ => (String::new(), Vec::new()),
+        _ => crate::attach::Materials {
+            section: String::new(),
+            images: Vec::new(),
+            origin: None,
+        },
     };
+    let attach_section = attached.section;
+    let attach_images = attached.images;
+    // 原件信息（页数）随 SendResult 回传前端，接线在 B2-4
+    let _origin = attached.origin;
     let mut materials = args.context.clone();
     if !attach_section.is_empty() {
         materials.push_str("\n\n");

@@ -814,11 +814,25 @@ fn render_media(block: &Block, person: &Person, warnings: &mut Vec<String>) -> S
 
 /* ---------- 小工具 ---------- */
 
+/// 页头照片：人身上第一张图片。
+///
+/// 跳过 `role=="candidate"`：PDF 抽出来的图全部登记进 person.assets，不跳的话
+/// 第一张 logo/水印会立刻变成页头证件照。老数据没有这个键，行为不变。
 fn photo_of(person: &Person) -> Option<String> {
+    let is_candidate = |asset: &Asset| {
+        asset.extra.get("role").and_then(Value::as_str) == Some("candidate")
+    };
     person
         .assets
         .iter()
-        .find(|asset| asset.kind == "image")
+        .find(|asset| asset.kind == "image" && !is_candidate(asset))
+        // 没有 role 键 = 老数据（升级前就在的证件照），照旧取第一张
+        .or_else(|| {
+            person
+                .assets
+                .iter()
+                .find(|asset| asset.kind == "image" && !asset.extra.contains_key("role"))
+        })
         .map(|asset| asset.id.clone())
 }
 
@@ -1016,6 +1030,37 @@ mod tests {
         // 证件照是人物第一张图片
         assert!(out.html.contains(r#"src="asset:a-photo""#), "{}", out.html);
         assert_eq!(out.mode, "structured");
+    }
+
+    /// F-004：PDF 抽出来的候选图不能顶替页头照片；老数据没有 role 键，行为不变
+    #[test]
+    fn head_photo_never_picks_a_candidate() {
+        let candidate = || {
+            serde_json::from_value::<Asset>(json!({
+                "id": "a-cand",
+                "kind": "image",
+                "name": "候选.jpg",
+                "stored": "cand.jpg",
+                "role": "candidate",
+                "source": "src.pdf",
+                "pageIndex": 2
+            }))
+            .expect("候选资产")
+        };
+
+        // 候选图排在真照片前面 → 仍然取真照片
+        let mut with_candidate = person();
+        with_candidate.assets.insert(0, candidate());
+        assert_eq!(photo_of(&with_candidate).as_deref(), Some("a-photo"));
+
+        // 全是候选 → 没有照片（页头不出 <img>），不 panic
+        let mut only_candidates = person();
+        only_candidates.assets.clear();
+        only_candidates.assets.push(candidate());
+        assert_eq!(photo_of(&only_candidates), None);
+
+        // 老数据：两张图都没有 role → 还是第一张（升级后原有证件照不会消失）
+        assert_eq!(photo_of(&person()).as_deref(), Some("a-photo"));
     }
 
     #[test]

@@ -10,6 +10,7 @@
 
 pub mod ask;
 pub mod edit;
+pub mod extract;
 pub mod image;
 pub mod layout;
 pub mod page;
@@ -405,6 +406,18 @@ pub const TOOLS: &[Tool] = &[
         scopes: &[Scope::Session],
         writes: true,
     },
+    Tool {
+        name: "extract_images",
+        description: "从用户上传的 PDF 里抽出内嵌位图（证件照通常就在里面），登记成候选材料。\
+                      用户传了带照片的简历 PDF、或说「把照片放到页头」时先调它。\
+                      `stored` 从材料段里那行「附件标识」取，**不是文件名**。\
+                      返回的清单每行开头反引号里就是 assetId，交给 set_field 写进页头图片字段。\
+                      系统不判断哪张是证件照，挑不出就问用户，不要猜。",
+        params: extract::extract_images_params,
+        run: extract::extract_images,
+        scopes: &[Scope::Session],
+        writes: true,
+    },
     /* ---------- 页面控制（只影响「看到什么」，不改内容） ---------- */
     Tool {
         name: "open_page",
@@ -702,6 +715,18 @@ mod tests {
         assert_eq!(first["type"], "function");
         assert!(first["function"]["name"].is_string());
         assert_eq!(first["function"]["parameters"]["type"], "object");
+
+        // 抽图的 schema：stored 必填、不接受别的键（模型乱塞参数会静默失败）
+        let list = specs.as_array().expect("数组");
+        let extract = list
+            .iter()
+            .find(|item| item["function"]["name"] == "extract_images")
+            .expect("extract_images 要在会话工具清单里");
+        assert_eq!(extract["function"]["parameters"]["required"], json!(["stored"]));
+        assert_eq!(
+            extract["function"]["parameters"]["additionalProperties"],
+            json!(false)
+        );
     }
 
     /// 分配机制的自检：能力只写在每个工具的 `scopes` 里。
@@ -715,12 +740,17 @@ mod tests {
 
         // 工具数就是能力边界的快照：少一个说明注册时漏了，多一个说明有人偷偷
         // 给某个角色开了口子，两者都该在这里被看见
-        assert_eq!(session.len(), 38, "会话 agent 的工具数变了：{session:?}");
+        assert_eq!(session.len(), 39, "会话 agent 的工具数变了：{session:?}");
         assert_eq!(layout.len(), 9, "排版 agent 的工具数变了：{layout:?}");
 
         // 会话 agent：能读、能转交、能转图，但不能自己动版面
         assert!(session.contains(&"request_layout"));
         assert!(session.contains(&"convert_image"));
+        // 抽图只给会话：排版 agent 不改内容，拿到一组图片 id 也无从下手
+        assert!(session.contains(&"extract_images"));
+        assert!(!layout.contains(&"extract_images"));
+        // 目标页数是 Batch 2 的卡，别在这一批偷偷开出来
+        assert!(!session.contains(&"set_target_pages"));
         // PDF 渲染给自己看：只有会话需要，排版 agent 拿到的是结构化内容
         assert!(session.contains(&"view_asset"));
         assert!(!layout.contains(&"view_asset"));
@@ -754,6 +784,7 @@ mod tests {
         assert!(readers.contains(&"search_history"), "翻历史不改任何状态");
         assert!(!readers.contains(&"set_page_layout"));
         assert!(!readers.contains(&"convert_image"));
+        assert!(!readers.contains(&"extract_images"), "抽图会写池与材料");
         // 内容工具全部有副作用（改的是本轮暂存区，轮末才落地，但仍然是写）
         assert!(!readers.contains(&"set_field"));
         assert!(!readers.contains(&"apply_patch"));

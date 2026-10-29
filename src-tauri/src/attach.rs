@@ -57,6 +57,16 @@ struct Parsed {
     text: String,
     scanned: bool,
     note: String,
+    /// PDF 的页数（F-005 的唯一来源）。读不出 = None，**绝不写 0**
+    pages: Option<u32>,
+}
+
+/// `materials()` 的产物：材料段 + 本轮附给视觉模型的图 + 原件信息
+pub struct Materials {
+    pub section: String,
+    pub images: Vec<String>,
+    /// 本轮第一个 PDF 附件。`pages: None` = 读不出（损坏 / 不是 PDF）
+    pub origin: Option<crate::agent::facts::Origin>,
 }
 
 /// 解析结果缓存。键是内容寻址的 stored 名，同一份内容永远不会读出错的结果
@@ -157,7 +167,7 @@ fn kind_of(ext: &str) -> String {
     }
 }
 
-fn read(root: &Path, stored: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn read(root: &Path, stored: &str) -> Result<Vec<u8>, String> {
     // stored 由后端生成（sha + 扩展名），不接受前端拼路径
     let name = crate::pool::safe_stored(stored)?;
     std::fs::read(inbox_dir(root).join(name)).map_err(|error| format!("附件已不在：{error}"))
@@ -171,20 +181,25 @@ fn parse(ext: &str, data: &[u8]) -> Parsed {
             text: String::new(),
             scanned: false,
             note: String::new(),
+            pages: None,
         };
     }
     if ext == "pdf" {
+        // 页数只有这一处算：读不出就是 None，不要写 0（写成 0 会被当成「原件是空文档」）
+        let pages = crate::pdfembed::page_count(data);
         return match pdf_extract::extract_text_from_mem(data) {
             Ok(text) if !text.trim().is_empty() => Parsed {
                 text: clip(text.trim()),
                 scanned: false,
                 note: String::new(),
+                pages,
             },
             // 提不出字 ≠ 坏文件：扫描件天生没有文字层，这条要留给 OCR
             _ => Parsed {
                 text: String::new(),
                 scanned: true,
                 note: String::new(),
+                pages,
             },
         };
     }
@@ -194,12 +209,14 @@ fn parse(ext: &str, data: &[u8]) -> Parsed {
             text: clip(text.trim()),
             scanned: false,
             note: String::new(),
+            pages: None,
         };
     }
     Parsed {
         text: String::new(),
         scanned: false,
         note: format!("（.{} 暂不支持解析 —— 目前能读 PDF / 文本 / 图片）", ext),
+        pages: None,
     }
 }
 
@@ -216,9 +233,11 @@ pub async fn materials(
     refs: &[AttachRef],
     vision: bool,
     ocr: Option<&OcrConf>,
-) -> (String, Vec<String>) {
+) -> Materials {
     let mut blocks: Vec<String> = Vec::new();
     let mut images: Vec<String> = Vec::new();
+    // 只取本轮第一个 PDF：原件页数是「这一轮上传了什么」这么一件事，不是清单
+    let mut first_pdf: Option<(String, Option<u32>)> = None;
 
     for file in refs {
         let Some(stored) = non_empty(&file.stored) else {
@@ -233,11 +252,17 @@ pub async fn materials(
         let bytes = match read(root, stored) {
             Ok(bytes) => bytes,
             Err(error) => {
+                if ext == "pdf" && first_pdf.is_none() {
+                    first_pdf = Some((name.to_string(), None));
+                }
                 blocks.push(format!("（附件 {name}：{error}）"));
                 continue;
             }
         };
         let parsed = cached(stored, &ext, &bytes);
+        if ext == "pdf" && first_pdf.is_none() {
+            first_pdf = Some((name.to_string(), parsed.pages));
+        }
 
         if is_image(&ext) {
             if vision {
@@ -287,10 +312,29 @@ pub async fn materials(
             parsed.text.clone()
         };
 
-        let body = if text.trim().is_empty() {
-            format!("（附件 {name}：读不到内容）")
+        // PDF 附件额外交代两件事：模型要拿 `stored` 才能调 extract_images（它看不到文件名），
+        // 页数是「原件几页」的唯一来源。扫描件（读不到内容）同样要交代 —— 有照片的正好是它
+        let marks = if ext == "pdf" {
+            let pages = match parsed.pages {
+                Some(count) => format!("（原件共 {count} 页）"),
+                None => "（页数读不出）".to_string(),
+            };
+            format!("（附件标识：{stored}）\n{pages}\n")
         } else {
-            format!("──── {name} ────\n{}{note}\n──── 文件结束 ────", text.trim())
+            String::new()
+        };
+
+        let body = if text.trim().is_empty() {
+            if marks.is_empty() {
+                format!("（附件 {name}：读不到内容）")
+            } else {
+                format!("──── {name} ────\n{marks}（附件 {name}：读不到内容）\n──── 文件结束 ────")
+            }
+        } else {
+            format!(
+                "──── {name} ────\n{marks}{}{note}\n──── 文件结束 ────",
+                text.trim()
+            )
         };
         blocks.push(body);
         if !parsed.note.is_empty() {
@@ -299,10 +343,17 @@ pub async fn materials(
     }
 
     images.truncate(MAX_IMAGES);
-    if blocks.is_empty() {
-        return (String::new(), images);
+    let section = if blocks.is_empty() {
+        String::new()
+    } else {
+        format!("【本次附件】\n{}", blocks.join("\n\n"))
+    };
+    let origin = first_pdf.map(|(name, pages)| crate::agent::facts::Origin { name, pages });
+    Materials {
+        section,
+        images,
+        origin,
     }
-    (format!("【本次附件】\n{}", blocks.join("\n\n")), images)
 }
 
 fn cached(stored: &str, ext: &str, bytes: &[u8]) -> Parsed {
@@ -312,6 +363,7 @@ fn cached(stored: &str, ext: &str, bytes: &[u8]) -> Parsed {
                 text: hit.text.clone(),
                 scanned: hit.scanned,
                 note: hit.note.clone(),
+                pages: hit.pages,
             };
         }
     }
@@ -320,6 +372,7 @@ fn cached(stored: &str, ext: &str, bytes: &[u8]) -> Parsed {
         text: parsed.text.clone(),
         scanned: parsed.scanned,
         note: parsed.note.clone(),
+        pages: parsed.pages,
     };
     if let Ok(mut map) = cache().lock() {
         map.insert(stored.to_string(), cloned);
@@ -434,10 +487,76 @@ mod tests {
             name: "简历.md".into(),
             ext: "md".into(),
         }];
-        let (section, images) = materials(&root, &refs, false, None).await;
-        assert!(section.contains("【本次附件】"), "{section}");
-        assert!(section.contains("华北电力大学"), "{section}");
-        assert!(images.is_empty());
+        let materials = materials(&root, &refs, false, None).await;
+        assert!(materials.section.contains("【本次附件】"), "{}", materials.section);
+        assert!(materials.section.contains("华北电力大学"), "{}", materials.section);
+        assert!(materials.images.is_empty());
+        // 纯 .md 附件没有原件页数可说
+        assert!(materials.origin.is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 页数只有这一处算：读不出写 None，**绝不写 0**；`stored` 要交代给模型
+    #[tokio::test]
+    async fn pdf_materials_carry_pages_and_the_stored_mark() {
+        let root = std::env::temp_dir().join(format!("sr-attach-{}", crate::session::uuid_like()));
+        std::fs::create_dir_all(root.join("inbox")).unwrap();
+        let body = crate::pdfembed::fixtures::pdf_with_pages(2);
+        let stored = crate::snapshot::pool_name(&crate::pool::sha256_hex(&body), Some("pdf")).unwrap();
+        std::fs::write(root.join("inbox").join(&stored), &body).unwrap();
+
+        let refs = vec![
+            AttachRef {
+                stored: stored.clone(),
+                name: "原件.pdf".into(),
+                ext: "pdf".into(),
+            },
+            AttachRef {
+                stored: "second.pdf".into(),
+                name: "第二份.pdf".into(),
+                ext: "pdf".into(),
+            },
+        ];
+        let materials = materials(&root, &refs, false, None).await;
+        let origin = materials.origin.expect("有 PDF 附件就该有 origin");
+        assert_eq!(origin.name, "原件.pdf");
+        assert_eq!(origin.pages, Some(2));
+        assert!(
+            materials.section.contains(&format!("（附件标识：{stored}）")),
+            "{}",
+            materials.section
+        );
+        assert!(materials.section.contains("（原件共 2 页）"), "{}", materials.section);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 坏 PDF：读不出页数 → None（不是 0），且「读不到内容」这句话不能丢
+    #[tokio::test]
+    async fn broken_pdf_reports_unknown_pages() {
+        let root = std::env::temp_dir().join(format!("sr-attach-{}", crate::session::uuid_like()));
+        std::fs::create_dir_all(root.join("inbox")).unwrap();
+        let body = b"not a pdf".to_vec();
+        let stored = crate::snapshot::pool_name(&crate::pool::sha256_hex(&body), Some("pdf")).unwrap();
+        std::fs::write(root.join("inbox").join(&stored), &body).unwrap();
+
+        let refs = vec![AttachRef {
+            stored: stored.clone(),
+            name: "坏.pdf".into(),
+            ext: "pdf".into(),
+        }];
+        let materials = materials(&root, &refs, false, None).await;
+        assert_eq!(materials.origin.expect("文件名还是要报").pages, None);
+        // 坏文件不能变成「原件 0 页」
+        assert!(materials.section.contains("（页数读不出）"), "{}", materials.section);
+        assert!(!materials.section.contains("（原件共 0 页）"), "{}", materials.section);
+        // 附件标识还是要给：扫描件正是最需要抽图的那种
+        assert!(
+            materials.section.contains(&format!("（附件标识：{stored}）")),
+            "{}",
+            materials.section
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -452,8 +571,8 @@ mod tests {
             name: "丢了.md".into(),
             ext: "md".into(),
         }];
-        let (section, _) = materials(&root, &refs, false, None).await;
-        assert!(section.contains("附件已不在"), "{section}");
+        let materials = materials(&root, &refs, false, None).await;
+        assert!(materials.section.contains("附件已不在"), "{}", materials.section);
         let _ = std::fs::remove_dir_all(&root);
     }
 

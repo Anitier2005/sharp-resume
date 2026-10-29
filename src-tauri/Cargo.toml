@@ -77,8 +77,10 @@ pdf-extract = "0.7"
 # 它本来就在树里（pdf-extract 的传递依赖，lock 里已锁 0.34.0），所以不动版本。
 # 必须关默认特性：lopdf 的 default = chrono_time + nom_parser + rayon，
 # 而 pdf-extract 只开 nom_parser —— 打开默认特性会额外拉进 rayon / crossbeam / chrono
-# 六个包（lock 多 48 行），白增编译量。这里与 pdf-extract 的声明保持同一份口径。
-lopdf = { version = "0.34", default-features = false }
+# 六个包（lock 多 48 行），白增编译量。
+# 显式声明 nom_parser：`content::Content::decode` 与本模块的 `Document::load_mem`
+# 都在它后面，别依赖 pdf-extract 的传递 feature（那个开关一改我们就编译不过）。
+lopdf = { version = "0.34", default-features = false, features = ["nom_parser"] }
 
 # OCR 接口通道要把图片拼成 data URL，需要 base64。纯 Rust，无 C 依赖。
 base64 = "0.22"
