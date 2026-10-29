@@ -1197,8 +1197,8 @@ const overflowedPages = () => {
 | F-002 | Flate predictor 用例 | 造 `Predictor 12` 的流 → 解码成功且首行像素正确（防 predictor 走错路） |
 | F-002 | 不 panic | 给 `extract(b"not a pdf")` → `Err("open")`；给截断的 PDF → 不 panic |
 | F-003 | 占比 | `cm` 设为 0.3749/0.3695 → `pct ≈ 8`、`near=false`；`cm` 铺满版心 → `pct ≈ 100`、`near=true` |
-| F-001 | 幂等 | 同一 `stored` 调两次 → `out.assets` 只多 1 条；第二次返回既有 assetId |
-| F-001 | 8 张上限与「再抽一次」 | 造 11 张图的 PDF：第一次 `images=8`、文案含 `还有 3 张没列`；把第一批假装已登记后第二次的 8 张里不含第一批任何 id、只剩 3 张 |
+| F-002 | 幂等 | 同一 `stored` 调两次 → `out.assets` 只多 1 条；第二次返回既有 assetId |
+| F-002 | 8 张上限与「再抽一次」 | 造 11 张图的 PDF：第一次 `images=8`、文案含 `还有 3 张没列`；把第一批假装已登记后第二次的 8 张里不含第一批任何 id、只剩 3 张 |
 | F-003 | 口径常量 | `assert!(block(...).contains(MEASURE_RULER))`，且 `MEASURE_RULER` 含 `预览容器宽 374px`、**不含** `860` / `16mm`（防文案回退） |
 | F-004 | 照片位 | `photo_of`：person.assets 里有 `role:"candidate"` 的图在前、真照片在后 → 返回真照片 id；老数据（无 role）→ 返回第一张 |
 | F-007 | **提示词里不许有阈值** | 用与 `agent/layout.rs:38` 相同的相对路径 `include_str!("../../../prompts/layout.md")` 与 `system.md`，断言都不含 `1.02`；`assert!(!crate::render::GUIDE.contains("1.02"))`；再断 `layout.md` 含 `达标` 与 `尚未实测`，`GUIDE` 含 `实测达标才算排好`（防那句回退）、且 `GUIDE` **不含** `//`（raw string 里写注释会进提示词，见 §10.3）。阈值只许出现在 `facts.rs`（§13.1） |
