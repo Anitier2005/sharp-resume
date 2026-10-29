@@ -99,6 +99,22 @@ fn normalize_ext(raw: &str, stored: &str) -> String {
         .unwrap_or_default()
 }
 
+/// 魔数识别：扩展名不可信时（文件名没后缀 / 后缀写错）按字节认类型。
+///
+/// 只认 PDF / PNG / JPEG 三种：认错了会走错分支，比不认更糟。
+fn sniff_ext(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(b"%PDF-") {
+        return Some("pdf");
+    }
+    if data.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return Some("png");
+    }
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("jpg");
+    }
+    None
+}
+
 /// 单个附件进上下文的字数上限：200KB 字符足够一份简历，
 /// 再长的东西该让模型用工具分段读，而不是一次塞进 prompt
 const MAX_CHARS: usize = 200 * 1024;
@@ -205,7 +221,13 @@ pub(crate) fn read(root: &Path, stored: &str) -> Result<Vec<u8>, String> {
 
 /// 解析：文本直读、PDF 取字、图片留给 OCR。纯函数，缓存由调用方管
 fn parse(ext: &str, data: &[u8]) -> Parsed {
-    let ext = ext.to_ascii_lowercase();
+    // 扩展名只当提示：真 PDF 被存成 `<sha>.bin`（文件名没后缀）时，正文会永远空、
+    // 图却照旧抽得出来 —— 这种「半通不通」最难查，所以让字节说话
+    let declared = ext.trim().trim_start_matches('.').to_ascii_lowercase();
+    let ext = match sniff_ext(data) {
+        Some(sniffed) if sniffed != declared => sniffed.to_string(),
+        _ => declared,
+    };
     if is_image(&ext) {
         return Parsed {
             text: String::new(),
@@ -275,17 +297,22 @@ pub async fn materials(
             continue;
         };
         let name = if file.name.is_empty() { stored } else { &file.name };
-        let ext = normalize_ext(&file.ext, stored);
+        let declared = normalize_ext(&file.ext, stored);
         let bytes = match read(root, stored) {
             Ok(bytes) => bytes,
             Err(error) => {
-                if ext == "pdf" && first_pdf.is_none() {
+                if declared == "pdf" && first_pdf.is_none() {
                     first_pdf = Some((name.to_string(), None));
                 }
                 blocks.push(format!("（附件 {name}：{error}）"));
                 continue;
             }
         };
+        // 与 parse 同一套判断：扩展名不可信时以字节为准，否则 附件标识 / 页数 /
+        // 页面渲染这些「只有 pdf 才有」的东西会跟着一起缺席
+        let ext = sniff_ext(&bytes)
+            .map(str::to_string)
+            .unwrap_or(declared);
         let parsed = cached(stored, &ext, &bytes);
         if ext == "pdf" && first_pdf.is_none() {
             first_pdf = Some((name.to_string(), parsed.pages));
@@ -336,24 +363,8 @@ pub async fn materials(
             format!("\n{}", notes.join("\n"))
         };
 
-        // 扫描件 + 看不了图：只剩 OCR 这一条路，否则这份文件在模型眼里是空的
-        let text = if parsed.text.is_empty() && parsed.scanned && !vision {
-            let scanned = render_pages(&bytes, 2);
-            let mut parts: Vec<String> = Vec::new();
-            for (index, page) in scanned.iter().enumerate() {
-                let jpeg = data_url_bytes(page);
-                let text = ocr_text(&jpeg, "jpg", ocr).await;
-                if text.starts_with("（OCR 失败") {
-                    parts.clear();
-                    parts.push(text);
-                    break;
-                }
-                parts.push(format!("【第 {} 页】\n{text}", index + 1));
-            }
-            format!(
-                "（这份 PDF 没有文字层，下面是页面 OCR 出来的）\n{}",
-                parts.join("\n\n")
-            )
+        let text = if ext == "pdf" {
+            pdf_text(&bytes, &parsed, vision, ocr).await
         } else {
             parsed.text.clone()
         };
@@ -429,6 +440,46 @@ fn cached(stored: &str, ext: &str, bytes: &[u8]) -> Parsed {
         map.insert(key, cloned);
     }
     parsed
+}
+
+/// PDF 的正文：有文字就照抄；没有就说清**为什么没有**。
+///
+/// 为什么值得分档：原来只有一句「（附件 X：读不到内容）」，它分不清是扫描件、
+/// 加密、还是解析器不支持 —— 用户只能猜，模型也只能瞎试。三种成因给三条可 grep 的路。
+async fn pdf_text(bytes: &[u8], parsed: &Parsed, vision: bool, ocr: Option<&OcrConf>) -> String {
+    if !parsed.text.trim().is_empty() {
+        return parsed.text.clone();
+    }
+    // 页数读不出 = 文件本身坏了或加密：那不是「扫描件」，别让人去配 OCR
+    if parsed.pages.is_none() {
+        return "（这份 PDF 解析不出文字（可能加密或结构异常）。把文字直接贴过来最快。）".into();
+    }
+    if vision {
+        // 模型能看页面图，缺的只是「没有文字层」这件事本身
+        return "（这份 PDF 没有文字层（扫描件），文字只能看附上的页面图片。）".into();
+    }
+    if !ocr_ready(ocr) {
+        return "（这份 PDF 没有文字层（扫描件），当前也没配 OCR，所以读不到任何文字。要读它，请在 设置 → 模型 → OCR 配一个能看图的模型，或直接把文字贴过来。）".into();
+    }
+    let rendered = render_pages(bytes, 2);
+    if rendered.is_empty() {
+        return "（这份 PDF 没有文字层，OCR 也没读出来：这一版渲染不出页面，没法送 OCR。）".into();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for (index, page) in rendered.iter().enumerate() {
+        let text = ocr_text(&data_url_bytes(page), "jpg", ocr).await;
+        if text.starts_with("（OCR 失败") {
+            return format!(
+                "（这份 PDF 没有文字层，OCR 也没读出来：{}。）",
+                ocr_reason(&text)
+            );
+        }
+        parts.push(format!("【第 {} 页】\n{text}", index + 1));
+    }
+    format!(
+        "（这份 PDF 没有文字层，下面是页面 OCR 出来的）\n{}",
+        parts.join("\n\n")
+    )
 }
 
 /// 图片附件 + 非视觉模型时的交代：说清「读不了」还是「没读出来」，并给出下一步。
@@ -624,30 +675,108 @@ mod tests {
         assert!(parsed.text.is_empty());
     }
 
-    /// 缓存 key 必须带 ext：`parse` 的走向完全由 ext 决定。
-    /// 只按 stored 做键时，一次空 ext 的解析会把「空正文」钉死在这份内容上 ——
-    /// 之后每轮都拿不到正文，而抽图直接读字节，于是表现成「图抽得出、字永远没有」。
+    /// 扩展名不可信时以字节为准：文件名没后缀的真 PDF 也要出正文，
+    /// 而且 附件标识 / 页数这些「只有 pdf 才有」的交代不能跟着缺席
+    #[tokio::test]
+    async fn a_pdf_without_a_file_extension_still_gives_its_text() {
+        let Some(bytes) = real_sample() else {
+            eprintln!("skipped: 本机没有可用的 PDF 样本（设 SHARP_RESUME_SAMPLE_PDF 指一份）");
+            return;
+        };
+        // 存成 .bin（= 文件名没有后缀时 pool_name 的兜底），AttachRef 也不给 ext
+        let (root, stored) = inbox_with(&bytes, "bin");
+        let refs = vec![AttachRef {
+            stored: stored.clone(),
+            name: "简历".into(),
+            ext: String::new(),
+        }];
+        let materials = materials(&root, &refs, false, None, "test-model").await;
+        assert!(materials.section.contains(&format!("（附件标识：{stored}）")), "{}", materials.section);
+        assert!(materials.section.contains("（原件共 1 页）"), "{}", materials.section);
+        assert!(materials.section.contains("谭 轶 天"), "正文要读得出来：{}", materials.section);
+        assert_eq!(materials.origin.expect("原件信息").pages, Some(1));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 空正文的第一档：扫描件 + 没配 OCR —— 说清「没有文字层」与去哪儿配
+    #[tokio::test]
+    async fn a_scanned_pdf_without_ocr_says_it_has_no_text_layer() {
+        let (root, stored) = inbox_with(&crate::pdfembed::fixtures::pdf_with_pages(1), "pdf");
+        let refs = vec![AttachRef {
+            stored,
+            name: "扫描件.pdf".into(),
+            ext: "pdf".into(),
+        }];
+        let materials = materials(&root, &refs, false, None, "deepseek-chat").await;
+        assert!(materials.section.contains("没有文字层"), "{}", materials.section);
+        assert!(materials.section.contains("没配 OCR"), "{}", materials.section);
+        assert!(materials.section.contains("设置 → 模型"), "{}", materials.section);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 第二档：扫描件 + 配了 OCR 但没读出来 —— 带上原因
+    #[tokio::test]
+    async fn a_scanned_pdf_with_a_broken_ocr_channel_says_ocr_failed() {
+        let (root, stored) = inbox_with(&crate::pdfembed::fixtures::pdf_with_pages(1), "pdf");
+        let refs = vec![AttachRef {
+            stored,
+            name: "扫描件.pdf".into(),
+            ext: "pdf".into(),
+        }];
+        let conf = OcrConf {
+            base_url: "http://127.0.0.1:9".into(),
+            api_key: "sk-test".into(),
+            model: "some-vl".into(),
+        };
+        let materials = materials(&root, &refs, false, Some(&conf), "deepseek-chat").await;
+        assert!(materials.section.contains("没有文字层"), "{}", materials.section);
+        assert!(materials.section.contains("OCR 也没读出来"), "{}", materials.section);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 第三档：页数都读不出（加密 / 结构异常）—— 那是文件的问题，不是「扫描件」
+    #[tokio::test]
+    async fn a_broken_pdf_says_it_cannot_be_parsed_instead_of_calling_it_scanned() {
+        let (root, stored) = inbox_with(b"not a pdf at all", "pdf");
+        let refs = vec![AttachRef {
+            stored,
+            name: "坏.pdf".into(),
+            ext: "pdf".into(),
+        }];
+        let materials = materials(&root, &refs, false, None, "deepseek-chat").await;
+        assert!(materials.section.contains("解析不出文字"), "{}", materials.section);
+        assert!(
+            !materials.section.contains("没有文字层"),
+            "坏文件不该被当成扫描件：{}",
+            materials.section
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 缓存 key 必须带 ext：`parse` 的分支由 ext 决定（PDF / 图片这种能靠魔数认出来的
+    /// 不受影响，但纯文本这一档完全看扩展名）。只用 stored 当键时，一次空 ext 的解析
+    /// 会把「空正文」钉死在这份内容上 —— 之后每轮都拿不到正文。
     #[test]
     fn the_cache_key_must_include_the_extension() {
-        let bytes = crate::pdfembed::fixtures::pdf_with_pages(1);
+        let bytes = b"# \xe6\xa0\x87\xe9\xa2\x98\n\xe6\xad\xa3\xe6\x96\x87".to_vec();
         let stored = crate::snapshot::pool_name(&crate::pool::sha256_hex(&bytes), Some("bin")).unwrap();
 
         // 先以「没有扩展名」解析一次：走的是「不认识这个扩展名」那条分支
         let unknown = cached(&stored, "", &bytes);
-        assert!(unknown.pages.is_none(), "空 ext 不该当 PDF 解析");
-        assert!(!unknown.scanned);
+        assert!(unknown.text.is_empty(), "空 ext 认不出这是文本");
+        assert!(unknown.note.contains("暂不支持解析"), "{}", unknown.note);
 
-        // 再来一次真扩展名：必须重新解析，拿到 PDF 的走向
-        let as_pdf = cached(&stored, "pdf", &bytes);
-        assert_eq!(as_pdf.pages, Some(1), "换了 ext 必须重解析，不能吃上次的空结果");
-        assert_ne!(as_pdf.note, unknown.note, "两条分支的 note 不一样");
+        // 再来一次真扩展名：必须重新解析，拿到正文
+        let as_md = cached(&stored, "md", &bytes);
+        assert!(!as_md.text.is_empty(), "换了 ext 必须重解析，不能吃上次的空结果");
+        assert!(as_md.note.is_empty());
 
-        // 反向：先按 pdf 解析过的内容，再用空 ext 问，也不许拿到 pdf 的结果
+        // 反向：先按 md 解析过的内容，再用空 ext 问，也不许拿到正文
         let other = crate::snapshot::pool_name(&crate::pool::sha256_hex(b"another-content"), Some("bin")).unwrap();
-        assert_eq!(cached(&other, "pdf", &bytes).pages, Some(1));
+        assert!(!cached(&other, "md", &bytes).text.is_empty());
         assert!(
-            cached(&other, "", &bytes).pages.is_none(),
-            "空 ext 不该复用 pdf 的解析结果"
+            cached(&other, "", &bytes).text.is_empty(),
+            "空 ext 不该复用 md 的解析结果"
         );
     }
 
