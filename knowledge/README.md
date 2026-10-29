@@ -96,20 +96,24 @@ knowledge/
 - `["session", "layout"]`：两者都能。**谨慎使用**——排版 agent 每轮都跑，
   给它检索能力会明显增加延迟与花费。
 
-## 4. 用户自建：库 → 条目 → chunk
+## 4. 用户自建：库 → chunk（条目是切块的中间层）
 
-三层，缺一层都会让「管理」和「检索」打架：库是主题边界（删库=整块不要），
-条目是人写人读的单位，chunk 才是检索单位。
+界面上只有两层：库与块。库是主题边界（删库=整块不要），块是检索与管理的单位。
+`knowledge_entry` 仍然存在，但它只是「一次输入被切成这组块」的载体：
+用户输入一段文字或导入一个文件 → 后端立即切块 → 之后就是逐块改、逐块删。
+块删光时那条 entry 会被级联删掉（否则它会变成界面里点不到、只让计数变大的幽灵）。
 
 - 表：
   - `knowledge_library(id, name, note, ord, updated_at)`
   - `knowledge_entry(id, library_id, title, tags, body, ord, updated_at)`
   - `knowledge_chunk(id, entry_id, ord, heading, text, summary, questions, updated_at)`
-- 切块：保存条目时**后端立即切**（`split_chunks`，与第 3 节同口径），
+- 切块：保存时**后端立即切**（`split_chunks`，与第 3 节同口径），
   块的 id = `<entryId>#<序号>`。切块规则内置、不可配 —— 召回率依赖它稳定。
-- 摘要与关联问题：切完由模型生成（`knowledge_entry_enrich`），
+- 摘要与关联问题：切完由模型生成（`knowledge_entry_enrich`，按 entry 发一次请求），
   `summary` ≤60 字，`questions` 3 条「别人可能怎么问」。它们参与词项打分（权重 ×2），
   这样「并发能力」也能命中正文只写「QPS」的块。
+- 单块改正文走 `knowledge_chunk_save`：改完这块的 `summary`/`vector` 一并清空，
+  因为它们是照着旧正文算的 —— 留着就会拿旧结论骗检索。
 - 文本没变的块在重存时保留原摘要，避免「改一个标点全库重算」。
 - id：条目 `k-<毫秒时间戳>`；带这个形态的 id 不会与预置冲突（预置形如 `k-<slug>-001`）。
 - 向量：用户条目**没有**向量（写入时不算），只参与词项通道；预置块的向量仍来自 `vectors.bin`。
