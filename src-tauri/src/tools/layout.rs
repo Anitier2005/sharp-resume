@@ -282,7 +282,15 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         }),
     )?;
 
-    Ok(format!("这一页的版面已更新：{}", notes.join("、")))
+    let mut reply = format!("这一页的版面已更新：{}", notes.join("、"));
+    // 实测结论必须跟着返回：agent 不知道「这一版到底有没有进一页」就会
+    // 接着说「已经压到一页了」。`ctx.facts` 为空（老调用点 / 测试）时不追加，
+    // 免得在拿不到实测的情况下编一句。
+    if let Some(facts) = ctx.facts {
+        reply.push('\n');
+        reply.push_str(&crate::agent::facts::layout_result_line(facts));
+    }
+    Ok(reply)
 }
 
 /* ---------- 排版 agent：留批注 / 向会话 agent 提问 ---------- */
@@ -492,4 +500,93 @@ pub fn ask_session(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
     Ok("问题已转给会话 agent：它可能自己查经历库回答，也可能去问用户。\n\
         不要重复问同一个问题 —— 说完继续把能排的排好，不用等答复。"
         .into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::facts::{PageFacts, PageMeasure, Target, TargetSource};
+    use crate::tools::Outbox;
+
+    fn workspace() -> Value {
+        json!({ "people": [{ "id": "p1", "resumes": [{
+            "id": "r1",
+            "pages": [{ "id": "pg1", "label": "第一页", "blocks": [
+                { "id": "b1", "kind": "section", "title": "工作" }
+            ] }]
+        }]}] })
+    }
+
+    /// 目标 1 页；传 1000.0 = 实测 1.00 页，1180.0 = 1.18 页溢出
+    fn facts(content_px: f64) -> PageFacts {
+        PageFacts {
+            target: Target {
+                pages: Some(1),
+                source: TargetSource::UserBefore,
+            },
+            measure: Some(PageMeasure {
+                page_id: "pg1".into(),
+                status: "ok".into(),
+                version: 12,
+                content: "v37".into(),
+                one_page: Some(1000.0),
+                content_px: Some(content_px),
+                line_height: Some(17.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn run(facts: Option<&PageFacts>, args: Value) -> Result<String, String> {
+        let ws = workspace();
+        let out = Outbox::default();
+        let ctx = ToolCtx {
+            workspace: &ws,
+            person_id: "p1",
+            resume_id: "r1",
+            page_id: "pg1",
+            out: &out,
+            root: None,
+            facts,
+        };
+        set_page_layout(&args, &ctx)
+    }
+
+    #[test]
+    fn reply_appends_the_measured_verdict() {
+        let facts = facts(1000.0);
+        let text = run(Some(&facts), json!({ "preset": "compact" })).unwrap();
+        assert!(text.contains("这一页的版面已更新"), "{text}");
+        // 结论行必须来自 facts 那一处（这里断言「同一份」，不重抄句子）
+        assert!(
+            text.contains(&crate::agent::facts::layout_result_line(&facts)),
+            "{text}"
+        );
+        assert!(text.contains("（目标 1 页，达标）"), "{text}");
+    }
+
+    #[test]
+    fn overflow_reply_says_target_is_still_missed() {
+        let text = run(Some(&facts(1180.0)), json!({ "preset": "compact" })).unwrap();
+        assert!(text.contains("仍未达标"), "{text}");
+        assert!(text.contains("超出 0.18 页"), "{text}");
+    }
+
+    /// 没有 facts（老调用点 / 测试）→ 返回与今天逐字相同，绝不编一句实测
+    #[test]
+    fn without_facts_the_reply_does_not_mention_measurement() {
+        let text = run(None, json!({ "preset": "compact" })).unwrap();
+        assert_eq!(text, "这一页的版面已更新：预设 compact");
+        assert!(!text.contains("实测"), "{text}");
+    }
+
+    /// 只有改成功了才追加结论：报错路径不该顺带说一句「实测多少页」
+    #[test]
+    fn failed_edit_returns_only_the_error() {
+        let facts = facts(1000.0);
+        let err = run(Some(&facts), json!({ "preset": "不存在的预设" })).unwrap_err();
+        assert!(err.contains("preset"), "{err}");
+        assert!(!err.contains("实测"), "{err}");
+    }
 }

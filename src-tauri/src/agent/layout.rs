@@ -50,6 +50,12 @@ pub struct LayoutArgs {
     pub temperature: Option<f64>,
     pub reasoning: Option<String>,
     pub context_window: Option<usize>,
+    /// 前端量的实测值：随本次提交带上来，用完即弃（落库会变成下次启动的假数据）
+    #[serde(default)]
+    pub measure: Option<crate::agent::facts::PageMeasure>,
+    /// 本轮原件的页数：会话侧 `chat_send` 回传、前端存内存再带回来；刷新后就是 None
+    #[serde(default)]
+    pub origin: Option<crate::agent::facts::Origin>,
 }
 
 /// 投进信箱的一条输入。
@@ -231,7 +237,7 @@ fn role_mark(block: &Value) -> String {
 /// 另一件必须交代的事：块的 `role`。结构化生成器按 role 选容器
 /// （tags / kv / table / grid-2…），排版 agent 不知道这一块已被接管成什么形态，
 /// 就会在 `parts` 里再手写一遍，两套排法叠在一起。
-fn describe_page(args: &LayoutArgs) -> String {
+fn describe_page(args: &LayoutArgs, facts: &crate::agent::facts::PageFacts) -> String {
     let Some(person) = args
         .workspace
         .get("people")
@@ -406,6 +412,9 @@ fn describe_page(args: &LayoutArgs) -> String {
         }
     }
     out.push_str(&format!("正文合计约 {chars} 字\n"));
+    // 顺序有理由：先说这一页有多少内容，紧接着说实测多少页 ——
+    // 「多少字 → 实测几页 → 现在怎么排的」，读者才是沿着排版决策的路线走
+    out.push_str(&crate::agent::facts::measure_section(facts));
 
     // 现在怎么排的：不说清的话，agent 会重复改同一块，或者把已有覆盖冲掉
     let layout = page.get("layout");
@@ -480,7 +489,17 @@ async fn run_turn(
     prompt: &str,
 ) -> Result<crate::agent::turn::TurnResult, String> {
     let key = format!("layout:{}:{}", args.resume_id, args.page_id);
-    let system = SYSTEM.replace("{{page}}", &describe_page(args));
+    // 排版侧不传 turn（`None`）：对排版 agent 来说，那个页数确实是「用户之前要求过」
+    let facts = crate::agent::facts::PageFacts::assemble(
+        &args.workspace,
+        &args.person_id,
+        &args.resume_id,
+        &args.page_id,
+        args.measure.clone(),
+        args.origin.clone(),
+        None,
+    );
+    let system = SYSTEM.replace("{{page}}", &describe_page(args, &facts));
 
     let budget_window = args.context_window.unwrap_or(64_000);
     let budget = budget_window.saturating_sub(session::estimate_tokens(&system) + 2_000) * 6 / 10;
@@ -524,7 +543,7 @@ async fn run_turn(
         page_id: &args.page_id,
         out: &out,
         root: root.as_deref(),
-        facts: None,
+        facts: Some(&facts),
     };
 
     let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -710,6 +729,34 @@ mod tests {
             temperature: None,
             reasoning: None,
             context_window: None,
+            measure: None,
+            origin: None,
+        }
+    }
+
+    /// 没有实测、没有原件：事实块落到「尚未实测」档
+    fn no_facts() -> crate::agent::facts::PageFacts {
+        crate::agent::facts::PageFacts::default()
+    }
+
+    /// 实测 1.00 页 + 用户之前要求过 1 页
+    fn measured_facts() -> crate::agent::facts::PageFacts {
+        crate::agent::facts::PageFacts {
+            target: crate::agent::facts::Target {
+                pages: Some(1),
+                source: crate::agent::facts::TargetSource::UserBefore,
+            },
+            measure: Some(crate::agent::facts::PageMeasure {
+                page_id: "pg2".into(),
+                status: "ok".into(),
+                version: 12,
+                content: "v37".into(),
+                one_page: Some(1000.0),
+                content_px: Some(1000.0),
+                line_height: Some(17.0),
+                ..Default::default()
+            }),
+            ..Default::default()
         }
     }
 
@@ -722,7 +769,7 @@ mod tests {
 
     #[test]
     fn page_brief_counts_blocks_and_keeps_style() {
-        let text = describe_page(&sample());
+        let text = describe_page(&sample(), &no_facts());
         assert!(text.contains("第 2 页 / 共 2 页"), "{text}");
         assert!(text.contains("「English」"), "{text}");
         assert!(text.contains("页头 1 个字段"), "{text}");
@@ -742,7 +789,7 @@ mod tests {
             { "id": "a-photo", "kind": "image", "name": "证件照.jpg", "stored": "x.jpg" },
             { "id": "a-doc", "kind": "file", "name": "证书.pdf", "stored": "y.pdf" }
         ]);
-        let text = describe_page(&args);
+        let text = describe_page(&args, &no_facts());
         assert!(text.contains("块 b1"), "页头块 id：{text}");
         assert!(text.contains("块 s1"), "分区块 id：{text}");
         assert!(text.contains("a-photo 证件照.jpg"), "可用图片：{text}");
@@ -757,13 +804,13 @@ mod tests {
             "preset": "compact",
             "parts": { "s1": "<section>手写</section>" }
         });
-        let text = describe_page(&args);
+        let text = describe_page(&args, &no_facts());
         assert!(text.contains("预设 compact"), "{text}");
         assert!(text.contains("已手写过的块：s1"), "{text}");
 
         args.workspace["people"][0]["resumes"][0]["pages"][1]["layout"] =
             json!({ "html": "<article>x</article>" });
-        let text = describe_page(&args);
+        let text = describe_page(&args, &no_facts());
         assert!(text.contains("整页手写"), "{text}");
     }
 
@@ -775,7 +822,7 @@ mod tests {
         let mut args = sample();
         args.workspace["people"][0]["resumes"][0]["pages"][1]["blocks"][0]["role"] = json!("kv");
         args.workspace["people"][0]["resumes"][0]["pages"][1]["blocks"][1]["role"] = json!("tags");
-        let text = describe_page(&args);
+        let text = describe_page(&args, &no_facts());
         assert!(text.contains("〔role: kv〕"), "页头的 role：{text}");
         assert!(text.contains("〔role: tags〕"), "分区的 role：{text}");
     }
@@ -784,7 +831,7 @@ mod tests {
     fn missing_page_is_reported_not_panicked() {
         let mut args = sample();
         args.page_id = "pg-nope".into();
-        assert!(describe_page(&args).contains("找不到这一页"));
+        assert!(describe_page(&args, &no_facts()).contains("找不到这一页"));
     }
 
     #[test]
@@ -792,15 +839,57 @@ mod tests {
         let mut args = sample();
         args.page_id = "pg1".into();
         args.workspace["people"][0]["resumes"][0]["pages"][0]["kind"] = json!("file");
-        assert!(describe_page(&args).contains("没有可调的空间"));
+        assert!(describe_page(&args, &no_facts()).contains("没有可调的空间"));
     }
 
     #[test]
     fn empty_page_says_so_instead_of_showing_zeros() {
         let mut args = sample();
         args.page_id = "pg1".into();
-        let text = describe_page(&args);
+        let text = describe_page(&args, &no_facts());
         assert!(text.contains("还没有分区"), "{text}");
+    }
+
+    /* ---------- 实测段：位置、退化、file 页豁免 ---------- */
+
+    /// 顺序是刻意的：多少内容 → 实测多少页 → 现在怎么排的。
+    /// 插到开头或末尾都会让 agent 先看到版式再看到容量。
+    #[test]
+    fn measured_section_sits_between_content_and_layout() {
+        let args = sample();
+        let facts = measured_facts();
+        let text = describe_page(&args, &facts);
+
+        assert!(text.contains("## 这一页的实测"), "{text}");
+        let section = text.find("## 这一页的实测").unwrap();
+        assert!(text.find("正文合计约").unwrap() < section, "{text}");
+        assert!(section < text.find("当前版面：").unwrap(), "{text}");
+        // 文案来自 facts：切掉版本尾注后必须原样出现（实测段把版本号放到了段尾）
+        let line = crate::agent::facts::measure_line(&facts);
+        let shared = &line[..line.find("测量版本").expect("fit 文案带版本号")];
+        assert!(text.contains(shared), "{text}");
+        // 排版侧没有 turn：库里写的是「这一轮」，这里必须降级成「之前要求过」
+        assert!(text.contains("用户之前要求过"), "{text}");
+        assert!(!text.contains("用户这一轮明确要求"), "{text}");
+    }
+
+    #[test]
+    fn measured_section_says_cannot_measure_when_nothing_arrived() {
+        let text = describe_page(&sample(), &no_facts());
+        assert!(text.contains("## 这一页的实测"), "{text}");
+        assert!(text.contains("尚未实测（预览没打开，量不到）"), "{text}");
+        assert!(!text.contains("没有溢出"), "{text}");
+    }
+
+    /// file 页的版式在文件里，量出来的页数也说明不了什么：早退，不追加实测段
+    #[test]
+    fn file_page_gets_no_measured_section() {
+        let mut args = sample();
+        args.page_id = "pg1".into();
+        args.workspace["people"][0]["resumes"][0]["pages"][0]["kind"] = json!("file");
+        let text = describe_page(&args, &measured_facts());
+        assert!(text.contains("没有可调的空间"), "{text}");
+        assert!(!text.contains("## 这一页的实测"), "{text}");
     }
 
     /* ---------- 信箱：并发与中途插入 ---------- */
@@ -867,7 +956,7 @@ mod tests {
         layouts.enqueue("k", note("change", "改 B"), fresh);
 
         let (_, args) = layouts.take("k").expect("第二轮");
-        assert!(describe_page(&args).contains("新名字"), "排队期间的新内容要跟上");
+        assert!(describe_page(&args, &no_facts()).contains("新名字"), "排队期间的新内容要跟上");
     }
 
     #[test]
