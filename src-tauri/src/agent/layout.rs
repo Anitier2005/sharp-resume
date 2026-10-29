@@ -524,6 +524,7 @@ async fn run_turn(
         page_id: &args.page_id,
         out: &out,
         root: root.as_deref(),
+        facts: None,
     };
 
     let cancel = std::sync::atomic::AtomicBool::new(false);

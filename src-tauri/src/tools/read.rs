@@ -581,6 +581,7 @@ mod tests {
             page_id: "pg1",
             out: &out,
             root: None,
+            facts: None,
         };
         run(&ctx)
     }
@@ -698,6 +699,7 @@ mod tests {
             page_id: "pg1",
             out: &out,
             root: None,
+            facts: None,
         };
         let text = read_page(&json!({}), &ctx).unwrap();
         assert!(text.contains("· role tags"), "{text}");
@@ -737,6 +739,7 @@ mod tests {
             page_id: "pg1",
             out: &out,
             root: None,
+            facts: None,
         };
         let text = read_page(&json!({}), &ctx).unwrap();
         assert!(text.contains("排版批注 2 条"), "{text}");

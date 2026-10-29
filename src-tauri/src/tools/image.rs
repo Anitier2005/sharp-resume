@@ -318,6 +318,7 @@ mod tests {
             page_id: "pg1",
             out: &out,
             root: None,
+            facts: None,
         };
         let err = convert(&json!({ "assetId": "a1" }), &ctx).unwrap_err();
         assert!(err.contains("桌面端"), "{err}");
@@ -351,6 +352,7 @@ mod tests {
             page_id: "pg1",
             out: &out,
             root: Some(&dir),
+            facts: None,
         };
 
         let text = convert(

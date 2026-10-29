@@ -537,6 +537,7 @@ mod tests {
             page_id: "pg2",
             out: &out,
             root: None,
+            facts: None,
         };
 
         let mut messages = vec![

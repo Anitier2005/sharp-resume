@@ -423,6 +423,9 @@ pub struct SendResult {
     pub actions: Vec<Value>,
     /// 本轮工具新产出的材料，前端要并进 state
     pub assets: Vec<crate::model::Asset>,
+    /// 本轮原件的页数。前端存进内存，随下一次 `layout_submit` 传回来 ——
+    /// 排版侧要靠它决定「沿用原件页数」；刷新即失效，不落库
+    pub origin: Option<crate::agent::facts::Origin>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -468,6 +471,9 @@ pub struct SendArgs {
     /// 也决定工具层要不要白跑一趟渲染。
     #[serde(default)]
     pub vision: bool,
+    /// 前端量的页面实测值。只在本次请求里有效 —— 落库的测量值下次启动会变成假数据。
+    #[serde(default)]
+    pub measure: Option<crate::agent::facts::PageMeasure>,
 }
 
 /// 压缩历史摘要用的接入参数
@@ -509,13 +515,30 @@ pub async fn chat_send(
     };
     let attach_section = attached.section;
     let attach_images = attached.images;
-    // 原件信息（页数）随 SendResult 回传前端，接线在 B2-4
-    let _origin = attached.origin;
+    // 原件页数：随 SendResult 回传前端，下次排版提交时再带回来（不落库）
+    let origin = attached.origin;
     let mut materials = args.context.clone();
     if !attach_section.is_empty() {
         materials.push_str("\n\n");
         materials.push_str(&attach_section);
     }
+
+    // 历史在这里读一次：既用来数「第几条用户消息」（目标页数三态要用），
+    // 也用来按预算裁剪。测量值只认本次请求带来的那份，历史里没有它的位置
+    let all = state.list(&args.key);
+    let turn = all
+        .iter()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .count() as u32;
+    let facts = crate::agent::facts::PageFacts::assemble(
+        &args.workspace,
+        &args.key,
+        &args.resume_id,
+        &args.page_id,
+        args.measure.clone(),
+        origin.clone(),
+        Some(turn),
+    );
 
     // 组装：模板 + 材料 + 定位头，历史按预算裁剪
     let mut system = SYSTEM_TEMPLATE.replace("{{context}}", &materials);
@@ -526,6 +549,7 @@ pub async fn chat_send(
         &args.resume_id,
         &args.page_id,
         args.view.as_deref().unwrap_or("edit"),
+        &facts,
     ));
     if !args.extra.trim().is_empty() {
         system.push_str("\n\n");
@@ -535,7 +559,6 @@ pub async fn chat_send(
     // 窗口 = 配置里的上下文；先扣 system 与「压缩提示词预留」，剩下的才是历史的
     let reserved = estimate_tokens(&system) + args.reserve.unwrap_or(DEFAULT_RESERVE);
     let budget = history_budget(window, reserved);
-    let all = state.list(&args.key);
     let history = trim_history(&all, budget);
 
     // 被挤出窗口的那一段：压成摘要接在 system 后面（失败就当作没有）
@@ -590,6 +613,7 @@ pub async fn chat_send(
         page_id: &args.page_id,
         out: &out,
         root: root.as_deref(),
+        facts: Some(&facts),
     };
 
     let reply_id = format!("m-{}", uuid_like());
@@ -632,6 +656,7 @@ pub async fn chat_send(
                 id: reply_id,
                 actions: turn.actions,
                 assets: turn.assets,
+                origin,
             })
         }
         Ok(_) | Err(_) if flag.load(Ordering::SeqCst) => Err("已中断".into()),
@@ -659,6 +684,46 @@ pub(crate) fn chrono_like() -> u128 {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn send_args_carries_measure_and_the_result_hands_origin_back() {
+        // 入参：前端把实测值随 chat_send 上送（不落库，只在本次请求里有效）
+        let args: SendArgs = serde_json::from_value(json!({
+            "key": "p1",
+            "context": "",
+            "baseUrl": "",
+            "apiKey": "",
+            "model": "",
+            "measure": {
+                "pageId": "pg1",
+                "status": "ok",
+                "version": 12,
+                "content": "v37",
+                "onePage": 1000.0,
+                "contentPx": 1180.0,
+                "lineHeight": 17.0
+            }
+        }))
+        .expect("带 measure 的入参要能解析");
+        let measure = args.measure.as_ref().expect("measure 要解析出来");
+        assert_eq!(measure.status, "ok");
+        assert_eq!(measure.version, 12);
+        assert_eq!(measure.content_px, Some(1180.0));
+
+        // 出参：原件页数回传前端，前端下次排版提交时再带回来
+        let result = SendResult {
+            id: "m-1".into(),
+            actions: Vec::new(),
+            assets: Vec::new(),
+            origin: Some(crate::agent::facts::Origin {
+                name: "简历.pdf".into(),
+                pages: Some(3),
+            }),
+        };
+        let value = serde_json::to_value(&result).expect("SendResult 要能序列化");
+        assert_eq!(value["origin"]["name"], "简历.pdf");
+        assert_eq!(value["origin"]["pages"], 3);
+    }
 
     #[test]
     fn tokens_count_cjk_and_latin() {

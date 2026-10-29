@@ -70,6 +70,9 @@ pub struct ToolCtx<'a> {
     /// 数据目录。只有需要碰真实文件的工具才用得到（目前是图片转化）；
     /// 浏览器调试模式没有数据目录，这类工具会明确报「当前环境不支持」。
     pub root: Option<&'a Path>,
+    /// 本轮页面事实（原件页数 / 目标 / 实测）。`None` = 调用点没带上，
+    /// 需要它的工具（`set_page_layout`）就不追加实测结论，而不是编一个。
+    pub facts: Option<&'a crate::agent::facts::PageFacts>,
 }
 
 impl<'a> ToolCtx<'a> {
@@ -88,6 +91,7 @@ impl<'a> ToolCtx<'a> {
             page_id,
             out,
             root: None,
+            facts: None,
         }
     }
 }
@@ -843,6 +847,7 @@ mod tests {
             page_id: "g",
             out: &out,
             root: None,
+            facts: None,
         };
         let err = call("read_everything", &json!({}), &ctx, Scope::Session).unwrap_err();
         assert!(err.contains("read_page"), "{err}");
@@ -880,6 +885,7 @@ mod tests {
             page_id: "pg1",
             out,
             root: None,
+            facts: None,
         }
     }
 

@@ -2278,6 +2278,7 @@ mod tests {
                 page_id: "pg1",
                 out: &self.out,
                 root: None,
+                facts: None,
             }
         }
 

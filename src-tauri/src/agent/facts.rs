@@ -103,6 +103,63 @@ pub struct PageFacts {
     pub turn: Option<u32>,
 }
 
+impl PageFacts {
+    /// 按方案 §6 的表格组装一份。会话侧两个组装点（`chat_send`）与排版侧
+    /// （`run_turn`）都走这里 —— 两处各抄一遍页名/目标的取法，迟早有一处取错。
+    ///
+    /// 每轮现组：不落库、不进程级缓存。上一次测量的数残留成本次，正是 F-014 要防的错。
+    pub fn assemble(
+        workspace: &Value,
+        person_id: &str,
+        resume_id: &str,
+        page_id: &str,
+        measure: Option<PageMeasure>,
+        origin: Option<Origin>,
+        turn: Option<u32>,
+    ) -> Self {
+        let resume = workspace
+            .get("people")
+            .and_then(Value::as_array)
+            .and_then(|list| {
+                list.iter()
+                    .find(|person| person["id"].as_str() == Some(person_id))
+            })
+            .and_then(|person| person.get("resumes"))
+            .and_then(Value::as_array)
+            .and_then(|list| {
+                list.iter()
+                    .find(|resume| resume["id"].as_str() == Some(resume_id))
+            });
+        let page = resume
+            .and_then(|resume| resume.get("pages"))
+            .and_then(Value::as_array)
+            .and_then(|list| list.iter().find(|page| page["id"].as_str() == Some(page_id)));
+
+        // 找不到简历时也要给出一份「未设置」的目标：报错交给工具层，
+        // 事实块本身不该因为这个整块消失
+        let target = match resume {
+            Some(resume) => target_of(resume, origin.as_ref(), turn),
+            None => target_of(&Value::Null, origin.as_ref(), turn),
+        };
+
+        Self {
+            origin,
+            target,
+            measure,
+            page_label: page
+                .and_then(|page| page["label"].as_str())
+                .unwrap_or_default()
+                .to_string(),
+            // 缺省空串 = native：`block` 只把 "file" 当整页原件
+            page_kind: page
+                .and_then(|page| page["kind"].as_str())
+                .unwrap_or_default()
+                .to_string(),
+            turn,
+        }
+    }
+}
+
 /// 量不到的原因。四句话写在这里，两处注入共用同一份措辞。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Reason {
@@ -975,6 +1032,62 @@ mod tests {
         let text = block(&f);
         assert!(text.contains("尚未实测"));
         assert!(!text.contains("没有溢出"));
+    }
+
+    // ---------------------------------------------------------------- B2-4
+
+    #[test]
+    fn assemble_reads_label_kind_and_target_from_the_snapshot() {
+        let ws = json!({ "people": [{ "id": "p1", "resumes": [{
+            "id": "r1",
+            "targetPages": 1,
+            "targetPagesTurn": 11,
+            "pages": [
+                { "id": "pg1", "label": "第一页", "kind": "native" },
+                { "id": "pg2", "label": "附件页", "kind": "file" }
+            ]
+        }]}] });
+
+        let facts = PageFacts::assemble(&ws, "p1", "r1", "pg1", Some(ok_fit()), None, Some(12));
+        assert_eq!(facts.page_label, "第一页");
+        assert_eq!(facts.page_kind, "native");
+        assert_eq!(facts.turn, Some(12));
+        assert_eq!(
+            parts(facts.target),
+            (Some(1), TargetSource::UserThisTurn)
+        );
+
+        let file_page = PageFacts::assemble(&ws, "p1", "r1", "pg2", None, None, None);
+        assert_eq!(file_page.page_kind, "file");
+        // 排版侧没有 turn：即使库里写着「这一轮」，也只能说「之前要求过」
+        assert_eq!(parts(file_page.target), (Some(1), TargetSource::UserBefore));
+    }
+
+    #[test]
+    fn assemble_survives_a_missing_resume() {
+        // 快照里找不到简历时不许 panic，也不许把目标捏成 1 页
+        let facts = PageFacts::assemble(&json!({ "people": [] }), "p1", "r1", "pg1", None, None, None);
+        assert_eq!(parts(facts.target), (None, TargetSource::Unset));
+        assert_eq!(facts.page_label, "");
+        assert_eq!(facts.page_kind, "");
+        assert!(block(&facts).contains("【页面事实】"));
+    }
+
+    #[test]
+    fn assemble_keeps_the_origin_snapshot() {
+        let ws = json!({ "people": [{ "id": "p1", "resumes": [{ "id": "r1", "pages": [] }] }] });
+        let facts = PageFacts::assemble(
+            &ws,
+            "p1",
+            "r1",
+            "pg1",
+            None,
+            Some(origin_pdf(Some(3))),
+            Some(1),
+        );
+        // 原件只有 3 页 → 沿用（用户没说页数时）
+        assert_eq!(parts(facts.target), (Some(3), TargetSource::FromOrigin));
+        assert!(block(&facts).contains("页数 3 页（来源：PDF 页树）"));
     }
 
     #[test]
