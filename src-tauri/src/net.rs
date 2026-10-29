@@ -423,6 +423,26 @@ pub async fn chat_stream(req: AiRequest, on_event: Channel<StreamChunk>) -> Resu
 mod tests {
     use super::*;
 
+    /// 视觉消息的形状：一个 text 段 + 若干 image_url 段。
+    /// 这条断言是给「图片发出去模型却看不到」这类问题兜底的 ——
+    /// 段类型写错，网关不会报错，只会静默忽略图片。
+    #[test]
+    fn image_message_uses_the_multimodal_shape() {
+        let message = ChatMessage::user_with_images(
+            "看这一页",
+            &["data:image/jpeg;base64,AAAA".to_string()],
+        );
+        let value = serde_json::to_value(&message).unwrap();
+        let parts = value["content"].as_array().expect("content 要是数组");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[0]["text"], "看这一页");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(parts[1]["image_url"]["url"], "data:image/jpeg;base64,AAAA");
+        // 纯文本消息仍然是字符串：多数网关对数组的校验更严
+        assert!(serde_json::to_value(ChatMessage::user("纯文本")).unwrap()["content"].is_string());
+    }
+
     fn live_request() -> Option<AiRequest> {
         // 真联网的用例默认不跑：密钥可能在、但配额可能没了（402），
         // 那时红的不是代码。要验 TLS/代理就显式 `SHARP_LIVE=1 cargo test`。
