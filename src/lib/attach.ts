@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "@/types";
 import { loadAi, loadAux } from "@/lib/ai";
 import { isTauri } from "@/lib/storage";
+import { renderPdfPages } from "@/lib/pdf-render";
 
 function extOf(name: string): string {
   const dot = name.lastIndexOf(".");
@@ -79,27 +80,18 @@ async function cacheImage(id: string, file: File): Promise<void> {
 }
 
 /**
- * OCR 是兜底通道，只在「模型看不了图」时才花那几秒。
+ * 把一张图的字节读成文字：内置 tesseract → 设置里的 OCR 接口 → 明确失败文案。
  *
- * 两条腿：内置 tesseract（只有带 ocr feature 的构建才有）→ 设置里的 OCR 接口。
- * 默认构建不带 tesseract，所以第一条腿必然报「这一版没有内置 OCR」，
- * 这时要**自动**走第二条，而不是把错误原样扔给用户 —— 否则功能等于凭空消失。
+ * 两条腿：内置 OCR（只有带 ocr feature 的构建才有）→ 设置里配的 OCR 接口。
+ * lite 构建第一条腿必然报「这一版没有内置 OCR」，这时要**自动**走第二条，
+ * 而不是把错误原样扔给用户 —— 否则功能等于凭空消失。
+ *
+ * 不缓存：图片附件与 PDF 渲染出来的页面各自在外面决定缓存键。
  */
-export async function ensureOcrText(id: string): Promise<string | undefined> {
-  const cached = ocrCache.get(id);
-  if (cached) return cached;
-  const file = fileCache.get(id);
-  if (!file || !isImage(extOf(file.name)) || !isTauri() || file.size > MAX_OCR_BYTES) return undefined;
-
-  const ext = extOf(file.name);
-  const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-
+async function ocrBytes(bytes: number[], ext: string): Promise<string> {
   let failure = "";
   try {
-    const text = await invoke<string>("ocr_image", { bytes, ext });
-    const trimmed = text.slice(0, MAX_CHARS);
-    ocrCache.set(id, trimmed);
-    return trimmed;
+    return (await invoke<string>("ocr_image", { bytes, ext })).slice(0, MAX_CHARS);
   } catch (error) {
     failure = errorText(error);
   }
@@ -108,28 +100,72 @@ export async function ensureOcrText(id: string): Promise<string | undefined> {
   if (aux && aux.model.trim()) {
     try {
       const ai = loadAi();
-      const text = await invoke<string>("ocr_api", {
-        bytes,
-        ext,
-        // 接口地址/密钥留空表示沿用对话模型那把，与设置页的说明一致
-        baseUrl: aux.baseUrl.trim() || ai.baseUrl,
-        apiKey: aux.apiKey.trim() || ai.apiKey,
-        model: aux.model,
-      });
-      const trimmed = text.slice(0, MAX_CHARS);
-      ocrCache.set(id, trimmed);
-      return trimmed;
+      return (
+        await invoke<string>("ocr_api", {
+          bytes,
+          ext,
+          // 接口地址/密钥留空表示沿用对话模型那把，与设置页的说明一致
+          baseUrl: aux.baseUrl.trim() || ai.baseUrl,
+          apiKey: aux.apiKey.trim() || ai.apiKey,
+          model: aux.model,
+        })
+      ).slice(0, MAX_CHARS);
     } catch (error) {
       failure = `${failure}；OCR 接口：${errorText(error)}`;
     }
   } else if (!failure.includes("没有内置 OCR")) {
     failure = `${failure}；也可在 设置 → 模型 → OCR 配置一个能看图的模型`;
   }
+  return `（OCR 失败：${failure}）`;
+}
 
-  // 失败也记下来：同一次会话里别对同一张图反复弹同样的错
-  const message = `（OCR 失败：${failure}）`;
-  ocrCache.set(id, message);
-  return message;
+/** OCR 是兜底通道，只在「模型看不了图」时才花那几秒。同一次会话里一张图只跑一次 */
+export async function ensureOcrText(id: string): Promise<string | undefined> {
+  const cached = ocrCache.get(id);
+  if (cached) return cached;
+  const file = fileCache.get(id);
+  if (!file || !isImage(extOf(file.name)) || !isTauri() || file.size > MAX_OCR_BYTES) return undefined;
+
+  const text = await ocrBytes(Array.from(new Uint8Array(await file.arrayBuffer())), extOf(file.name));
+  ocrCache.set(id, text);
+  return text;
+}
+
+/** data URL → 字节。PDF 页面只在内存里，OCR 接口要的是原始字节 */
+function dataUrlBytes(url: string): number[] {
+  const base64 = url.slice(url.indexOf(",") + 1);
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return Array.from(bytes);
+}
+
+/**
+ * 扫描件 PDF 的兜底：提不出文字就渲染成页面，逐页 OCR。
+ *
+ * 为什么要这条路：文字层是「有没有」的问题，扫描件天生没有。
+ * 模型看不了图时，这份 PDF 在它眼里就是一片空白 —— 而用户明明传了东西。
+ * 只跑前两页：一页 OCR 要几秒，再多就变成让用户干等。
+ */
+export async function pdfOcrText(id: string, maxPages = 2): Promise<string> {
+  const cached = ocrCache.get(`pdf-${id}`);
+  if (cached) return cached;
+  const pages = await pdfPageImages(id, maxPages);
+  if (!pages.length) return "";
+
+  const parts: string[] = [];
+  for (let index = 0; index < pages.length; index += 1) {
+    const text = await ocrBytes(dataUrlBytes(pages[index]), "jpg");
+    // OCR 没配好时每页都会失败：第一页就停，别让同一句话重复两遍
+    if (text.startsWith("（OCR 失败")) {
+      ocrCache.set(`pdf-${id}`, text);
+      return text;
+    }
+    parts.push(`【第 ${index + 1} 页】\n${text.trim()}`);
+  }
+  const joined = parts.join("\n\n");
+  ocrCache.set(`pdf-${id}`, joined);
+  return joined;
 }
 
 const errorText = (error: unknown) =>
@@ -211,13 +247,22 @@ export const attachmentFile = (id: string): File | undefined => fileCache.get(id
 /**
  * PDF 前几页 → 图片 data URL。
  *
- * 文字版 PDF 的正文已经能提出来，但版式全丢；视觉模型要「看原件长什么样」
- * 只能给它图片。渲染在 Rust 侧走系统自带的 Windows.Data.Pdf（零体积代价）。
- * 失败返回空数组：调用方按「只有文字」继续，不要让一次渲染失败毁掉整轮对话。
+ * 两条路，先走跨平台的：
+ *   1. pdf.js 在 WebView 里渲染 —— macOS / Linux 也照样能用，不依赖系统组件；
+ *   2. 失败再交给 Rust 侧（Windows 用系统自带的 Windows.Data.Pdf，其余平台用
+ *      系统里装了的 pdftoppm / gs / mutool）。
+ * 都失败就返回空数组：调用方按「只有文字」继续，一次渲染失败不该毁掉整轮对话。
  */
 export async function pdfPageImages(id: string, maxPages = 3): Promise<string[]> {
   const file = fileCache.get(id);
-  if (!file || !isTauri() || file.size > MAX_PDF_BYTES) return [];
+  if (!file) return [];
+  try {
+    const pages = await renderPdfPages(await file.arrayBuffer(), maxPages);
+    if (pages.length) return pages;
+  } catch {
+    /* pdf.js 也认不出的 PDF 很少见，交给后端再试一次 */
+  }
+  if (!isTauri() || file.size > MAX_PDF_BYTES) return [];
   try {
     const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
     const pages = await invoke<{ dataUrl: string }[]>("pdf_page_images", { bytes, maxPages });

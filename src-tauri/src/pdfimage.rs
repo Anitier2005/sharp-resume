@@ -3,12 +3,19 @@
 //! 为什么要这一步：PDF 里的文字能提出来（`extract.rs`），但版式信息全丢了。
 //! 视觉模型要「看」简历原件的排布，只能给它图片。
 //!
-//! 为什么用 Windows.Data.Pdf 而不是 pdfium / mupdf：
-//!   - pdfium 要额外带一份 10MB+ 的 dll（还得自己下二进制、跟着架构走）；
+//! 渲染器是**按平台挑**的，不绑死 Windows：
+//!   1. Windows：`Windows.Data.Pdf`（Win10 起系统自带，零体积代价、最快）；
+//!   2. 非 Windows / 系统接口不可用：调系统里装着的 `pdftoppm` / `gs` / `mutool`；
+//!   3. 全都不可用：明确报错，让调用方退回「只给文字」。
+//!
+//! 前端另有一条**跨平台主路径**（`src/lib/pdf-render.ts`，pdf.js 跑在 WebView 里）：
+//! 附件那条线根本不经过这里。这里只服务工具（`view_asset`）—— 工具在 Rust 里跑，
+//! 没法借 WebView 的画布。
+//!
+//! 为什么不打包 pdfium / mupdf：
+//!   - pdfium 要额外带 10MB+ 的 dll（自己下二进制、按架构分发、跟着升级）；
 //!   - mupdf 要 cmake 整包编译，这机器上连 NASM 都没有。
-//!   Win10 起系统自带 PDF 渲染器，用它等于零体积代价 —— 这也是本轮才敢做
-//!   「PDF 转图片」的原因（`tools/image.rs` 顶部那段「不做 PDF 转图片」的注释
-//!   当时成立，是因为还没有这条零成本路径）。
+//! 系统接口 + 用户已装工具的组合，在桌面场景里覆盖率已经足够。
 
 use base64::Engine as _;
 
@@ -108,8 +115,150 @@ pub fn pdf_pages(bytes: &[u8], max_pages: usize, width: u32) -> Result<Vec<PageI
 }
 
 #[cfg(not(windows))]
-pub fn pdf_pages(_bytes: &[u8], _max_pages: usize, _width: u32) -> Result<Vec<PageImage>, String> {
-    Err("PDF 转图片目前只提供 Windows 构建".into())
+pub fn pdf_pages(bytes: &[u8], max_pages: usize, width: u32) -> Result<Vec<PageImage>, String> {
+    cli::pdf_pages(bytes, max_pages, width)
+}
+
+/// 没有系统接口时的退路：调用户机器上装着的命令行工具。
+///
+/// 编译条件写成 `any(not(windows), test)`：非 Windows 才用得到，但让它在
+/// Windows 的 `cargo test` 里也参与编译 —— 否则这段代码永远没人编译过，
+/// 等移植那天才发现一堆类型错误。
+#[cfg(any(not(windows), test))]
+mod cli {
+    use super::PageImage;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    /// 按覆盖率排序：poppler 在 Linux 发行版 / Homebrew 里最常见，ghostscript 次之
+    const TOOLS: &[&str] = &["pdftoppm", "gs", "mutool"];
+
+    pub fn pdf_pages(bytes: &[u8], max_pages: usize, width: u32) -> Result<Vec<PageImage>, String> {
+        if bytes.is_empty() {
+            return Err("这份 PDF 是空的".into());
+        }
+        let dir = std::env::temp_dir().join(format!("sharp-resume-pdf-{}", crate::session::uuid_like()));
+        std::fs::create_dir_all(&dir).map_err(|error| format!("建临时目录失败：{error}"))?;
+        let source = dir.join("in.pdf");
+        std::fs::File::create(&source)
+            .and_then(|mut file| file.write_all(bytes))
+            .map_err(|error| format!("写临时 PDF 失败：{error}"))?;
+
+        let result = convert(&source, &dir, max_pages.clamp(1, 8), width);
+        // 临时文件必须清掉：PDF 是用户的原件，不该留在 temp 里
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    fn convert(source: &Path, dir: &Path, max_pages: usize, width: u32) -> Result<Vec<PageImage>, String> {
+        let mut tried: Vec<String> = Vec::new();
+        for &tool in TOOLS {
+            let output = match tool {
+                "pdftoppm" => run(
+                    tool,
+                    &[
+                        "-jpeg".into(),
+                        "-scale-to-x".into(),
+                        width.to_string(),
+                        "-scale-to-y".into(),
+                        "-1".into(),
+                        "-f".into(),
+                        "1".into(),
+                        "-l".into(),
+                        max_pages.to_string(),
+                        source.to_string_lossy().into_owned(),
+                        dir.join("page").to_string_lossy().into_owned(),
+                    ],
+                ),
+                "gs" => run(
+                    tool,
+                    &[
+                        "-q".into(),
+                        "-dNOPAUSE".into(),
+                        "-dBATCH".into(),
+                        "-sDEVICE=jpeg".into(),
+                        "-dJPEGQ=75".into(),
+                        "-dFirstPage=1".into(),
+                        format!("-dLastPage={max_pages}"),
+                        // 150dpi 对 A4 约 1240px 宽，和 WinRT 那条路对齐
+                        "-r150".into(),
+                        format!("-sOutputFile={}", dir.join("page-%d.jpg").to_string_lossy()),
+                        source.to_string_lossy().into_owned(),
+                    ],
+                ),
+                _ => run(
+                    tool,
+                    &[
+                        "draw".into(),
+                        "-q".into(),
+                        "-w".into(),
+                        width.to_string(),
+                        "-o".into(),
+                        dir.join("page-%d.jpg").to_string_lossy().into_owned(),
+                        source.to_string_lossy().into_owned(),
+                        format!("1-{max_pages}"),
+                    ],
+                ),
+            };
+            match output {
+                Ok(()) => {
+                    let pages = collect(dir, max_pages)?;
+                    if !pages.is_empty() {
+                        return Ok(pages);
+                    }
+                    tried.push(format!("{tool}（跑完了但没产出图片）"));
+                }
+                Err(error) => tried.push(format!("{tool}（{error}）")),
+            }
+        }
+        Err(format!(
+            "这台机器上没有可用的 PDF 渲染器：试过 {}。装 poppler-utils（pdftoppm）或 ghostscript 即可；\
+             也可以直接把 PDF 拖进会话 —— 那条路由前端渲染，不依赖系统组件。",
+            tried.join("、")
+        ))
+    }
+
+    fn run(tool: &str, args: &[String]) -> Result<(), String> {
+        let output = Command::new(tool)
+            .args(args)
+            .output()
+            .map_err(|error| format!("启动失败：{error}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("退出码 {}：{}", output.status, stderr.trim()))
+    }
+
+    /// 收产物。三种工具的命名规则不同（page-1.jpg / page-01.jpg / page-1.png），
+    /// 一律按「page*」捡，按文件名排序就是页序（零填充与否都成立）
+    fn collect(dir: &Path, max_pages: usize) -> Result<Vec<PageImage>, String> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map_err(|error| format!("读临时目录失败：{error}"))?
+            .filter_map(|entry| entry.ok().map(|item| item.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("page") && name != "page")
+            })
+            .collect();
+        files.sort();
+        files.truncate(max_pages);
+
+        let mut pages = Vec::with_capacity(files.len());
+        for path in files {
+            let jpeg = std::fs::read(&path).map_err(|error| format!("读渲染结果失败：{error}"))?;
+            let (width, height) =
+                image::image_dimensions(&path).map_err(|error| format!("解析渲染结果失败：{error}"))?;
+            pages.push(PageImage {
+                jpeg,
+                width,
+                height,
+            });
+        }
+        Ok(pages)
+    }
 }
 
 /// 任意字节 → data URL。渲染出来的页面用 jpeg，材料里的原图各按自己的 mime。
@@ -195,6 +344,28 @@ mod tests {
         // 1240 是「小四号字看得清、单页约 2000 token」的折中，改动要同步改注释
         assert_eq!(DEFAULT_WIDTH, 1240);
         assert!(MAX_PAGES >= 1);
+    }
+
+    /// 命令行退路：一个工具都没装时要说人话（macOS / Linux 上最常见的失败）
+    #[cfg(any(not(windows), test))]
+    #[test]
+    fn cli_backend_reports_missing_tools() {
+        use std::process::Command;
+        let any_installed = ["pdftoppm", "gs", "mutool"]
+            .iter()
+            .any(|tool| Command::new(tool).arg("-v").output().is_ok());
+        if any_installed {
+            return;
+        }
+        let error = super::cli::pdf_pages(&[1, 2, 3], 1, DEFAULT_WIDTH).unwrap_err();
+        assert!(error.contains("没有可用的 PDF 渲染器"), "{error}");
+        assert!(error.contains("拖进会话"), "要给出退路：{error}");
+    }
+
+    #[cfg(any(not(windows), test))]
+    #[test]
+    fn cli_backend_rejects_empty_input() {
+        assert!(super::cli::pdf_pages(&[], 1, DEFAULT_WIDTH).is_err());
     }
 
     #[cfg(windows)]

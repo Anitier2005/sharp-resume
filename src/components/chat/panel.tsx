@@ -15,6 +15,7 @@ import {
   ensureOcrText,
   isImage,
   pdfPageImages,
+  pdfOcrText,
 } from "@/lib/attach";
 import { attachAtEnd } from "@/lib/inline-tokens";
 import { diff, flatten, renderDelta, type Flat } from "@/lib/changes";
@@ -460,9 +461,17 @@ export function ChatPanel() {
             const pages = file.ext === "pdf" && vision ? await pdfPageImages(file.id) : [];
             images.push(...pages);
             const note = pages.length ? `\n（另附前 ${pages.length} 页的图片，版式看图片）` : "";
+            // 扫描件没有文字层。看不了图的模型这时等于收到一个空文件 ——
+            // 只能把页面渲染出来逐页 OCR，再长也总比「什么都没有」强
+            const unreadable = !body || body.startsWith("（这份 PDF 读不出来");
+            const scanned =
+              file.ext === "pdf" && !vision && unreadable ? await pdfOcrText(file.id) : "";
+            const text = scanned || body;
             blocks.push(
-              body
-                ? `──── ${file.name} ────\n${body.trim()}${note}\n──── 文件结束 ────`
+              text
+                ? `──── ${file.name} ────\n${
+                    scanned ? "（这份 PDF 没有文字层，下面是页面 OCR 出来的）\n" : ""
+                  }${text.trim()}${note}\n──── 文件结束 ────`
                 : `（附件 ${file.name}：读不到内容${isImage(file.ext) ? "，图片没能转成文字" : ""}）`,
             );
           }
