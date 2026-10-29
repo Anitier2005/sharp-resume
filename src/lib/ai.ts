@@ -241,14 +241,18 @@ export interface ChatMsg {
  * 连通性测试：走 Rust 发一句最短请求，把回复原样带回来。
  *
  * 以前这里还有一条 fetch 通道（浏览器调试模式用，会被 CORS 拦）。
- * 那个模式已经删掉了，桌面对话也不该绕过 Rust 通讯层 —— 密钥只在 Rust 手里。
+ * 那个模式已经删掉了：请求一律由 Rust 发出，不经 WebView，也就没有跨域问题。
  */
 export async function testConnection(settings: AiSettings): Promise<string> {
   return invoke<string>("chat_once", { req: wire(settings, [{ role: "user", content: "ping" }]) });
 }
 
 /* ==========================================================================
-   通讯层：全部走 Rust（不经过 WebView，因此没有 CORS，密钥也不进 JS 侧）
+   通讯层：全部走 Rust（不经过 WebView，因此没有 CORS）
+
+   注意别把这句话读成「密钥不经过前端」：密钥存在 localStorage，由 `loadAi()`
+   读进内存再随请求交给 Rust。想真正做到「密钥只在受信侧」，得把它搬进
+   Rust 侧的配置文件 —— 那是独立的一件事，见 README 的待办。
    ========================================================================== */
 
 /** 前端设置 → Rust 侧 AiRequest（camelCase，和 net.rs 的 serde 对齐） */
