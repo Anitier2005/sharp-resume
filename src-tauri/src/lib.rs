@@ -1,5 +1,6 @@
 mod agent;
 mod assets;
+mod attach;
 mod db;
 mod docx;
 mod export;
@@ -646,7 +647,8 @@ pub fn run() {
             pool::pool_get,
             pool::pool_list,
             extract::extract_pdf,
-            pdfimage::pdf_page_images,
+            attach::attach_put,
+            attach::attach_get,
             extract::ocr_image,
             extract::ocr_api,
             knowledge::knowledge_libraries,

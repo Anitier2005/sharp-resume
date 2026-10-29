@@ -274,34 +274,6 @@ pub fn data_url(jpeg: &[u8]) -> String {
     data_url_of("image/jpeg", jpeg)
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PageImageOut {
-    pub data_url: String,
-    pub width: u32,
-    pub height: u32,
-}
-
-/// 前端把 PDF 字节传过来，拿回前几页的图片。
-///
-/// 为什么要给前端一条命令：视觉模型拿到的图片必须由前端塞进消息里
-/// （Rust 组消息时只有字符串），所以渲染完要交回前端一份 data URL。
-#[tauri::command]
-pub fn pdf_page_images(
-    bytes: Vec<u8>,
-    max_pages: Option<usize>,
-) -> Result<Vec<PageImageOut>, String> {
-    let take = max_pages.unwrap_or(3).clamp(1, MAX_PAGES);
-    Ok(pdf_pages(&bytes, take, DEFAULT_WIDTH)?
-        .into_iter()
-        .map(|page| PageImageOut {
-            data_url: data_url(&page.jpeg),
-            width: page.width,
-            height: page.height,
-        })
-        .collect())
-}
-
 /// WinRT 要求当前线程初始化过 COM。聊天在 tokio 的工作线程上跑，
 /// 那里没人替我们初始化；返回码里 `RPC_E_CHANGED_MODE`（已按别的模式初始化）
 /// 不算失败，其余也一律放过 —— 真有问题会在下一步的 API 调用上暴露得更清楚。

@@ -457,10 +457,13 @@ pub struct SendArgs {
     /// 用户可在模型配置里调，缺省 `DEFAULT_RESERVE`。
     #[serde(default)]
     pub reserve: Option<usize>,
-    /// 本轮的图片（附件截图、PDF 渲染出来的页面），data URL。
-    /// 只挂在本轮用户消息上，历史不重放 —— 图片只服务「这轮要我看着什么」。
+    /// 本轮附件（inbox 里的 stored 名 + 原名）。
+    /// 正文、OCR、页面渲染都在后端做，前端只负责说「哪几个附件」。
     #[serde(default)]
-    pub images: Vec<String>,
+    pub attachments: Vec<crate::attach::AttachRef>,
+    /// 设置里配的 OCR 接口。缺省表示只有内置 OCR（lite 构建则等于没有）
+    #[serde(default)]
+    pub ocr: Option<crate::attach::OcrConf>,
     /// 当前模型能不能看图。决定「PDF 转图片」这类工具能不能给出图，
     /// 也决定工具层要不要白跑一趟渲染。
     #[serde(default)]
@@ -491,8 +494,23 @@ pub async fn chat_send(
         running.insert(args.key.clone(), flag.clone());
     }
 
+    // 附件解析全在这里：取字、OCR、PDF 渲染都是 Rust 的活，
+    // 前端只传「哪几个附件」，拿不到字节也拿不到正文
+    let root = crate::data_dir(&app).ok();
+    let (attach_section, attach_images) = match (&root, args.attachments.is_empty()) {
+        (Some(dir), false) => {
+            crate::attach::materials(dir, &args.attachments, args.vision, args.ocr.as_ref()).await
+        }
+        _ => (String::new(), Vec::new()),
+    };
+    let mut materials = args.context.clone();
+    if !attach_section.is_empty() {
+        materials.push_str("\n\n");
+        materials.push_str(&attach_section);
+    }
+
     // 组装：模板 + 材料 + 定位头，历史按预算裁剪
-    let mut system = SYSTEM_TEMPLATE.replace("{{context}}", &args.context);
+    let mut system = SYSTEM_TEMPLATE.replace("{{context}}", &materials);
     system.push_str("\n\n");
     system.push_str(&crate::agent::context::locate(
         &args.workspace,
@@ -534,9 +552,9 @@ pub async fn chat_send(
         });
     }
 
-    if !args.images.is_empty() {
+    if !attach_images.is_empty() {
         if let Some(last) = messages.iter_mut().rev().find(|item| item.role == "user") {
-            *last = ChatMessage::user_with_images(last.text(), &args.images);
+            *last = ChatMessage::user_with_images(last.text(), &attach_images);
         }
     }
 
@@ -557,7 +575,6 @@ pub async fn chat_send(
     out.vision = args.vision;
     // 数据目录给图片转化这类要碰文件的工具用；拿不到就传 None，
     // 工具会明确告诉模型「当前环境不支持」，而不是静默失败
-    let root = crate::data_dir(&app).ok();
     let ctx = crate::tools::ToolCtx {
         workspace: &args.workspace,
         person_id: &args.key,

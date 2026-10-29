@@ -3,7 +3,7 @@ import type { Asset, Attachment, ChatAction, ChatMessage, Person } from "@/types
 import { Check, FileIcon, Plus } from "@/components/ui/icons";
 import { ImagePeek, ImageView } from "@/components/ui/image-view";
 import { resolveStored, resolveUrl } from "@/lib/assets";
-import { attachmentImage, isImage } from "@/lib/attach";
+import { attachmentSrc, isImage } from "@/lib/attach";
 import { segmentText } from "@/lib/inline-tokens";
 import { Markdown } from "@/lib/markdown";
 import { cx } from "@/lib/cx";
@@ -39,7 +39,7 @@ function hasImage(file: Attachment, person: Person | null): boolean {
   if (!isImage(file.ext)) return false;
   if (file.preview) return true;
   if (assetOf(person, file.assetId)?.kind === "image") return true;
-  return Boolean(attachmentImage(file.id));
+  return Boolean(file.stored);
 }
 
 function resolveAttachmentSrc(file: Attachment, person: Person | null): Promise<string | null> {
@@ -59,7 +59,7 @@ function resolveAttachmentSrc(file: Attachment, person: Person | null): Promise<
       const url = await resolveUrl(asset);
       if (url) return url;
     }
-    return attachmentImage(file.id) ?? null;
+    return attachmentSrc(file);
   })().then(
     (value) => {
       srcPending.delete(key);

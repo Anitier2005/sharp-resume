@@ -9,7 +9,7 @@ import { cx } from "@/lib/cx";
 import { listAllModels, listProfiles } from "@/lib/model-config";
 import { segmentText, tokenRanges, uniqueToken } from "@/lib/inline-tokens";
 import styles from "./composer.module.css";
-import { attachmentImage, isImage, toAttachment } from "@/lib/attach";
+import { isImage, toAttachment } from "@/lib/attach";
 
 /** 输入框高度偏好在本地记住：不同人写东西的姿势不一样 */
 const HEIGHT_KEY = "sharp-resume:composer:h";
@@ -150,7 +150,7 @@ export function Composer({
   }, [text, files, onFilesChange]);
 
   /** 粘贴：图片/文件一律变成行内标记；纯文本粘贴交回浏览器默认行为 */
-  const onPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const onPaste = async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = Array.from(event.clipboardData?.items ?? []);
     const picked: Attachment[] = [];
     for (const item of items) {
@@ -165,7 +165,7 @@ export function Composer({
               `粘贴-${Date.now()}.${(file.type.split("/")[1] || "png").replace("jpeg", "jpg")}`,
               { type: file.type },
             );
-      picked.push(toAttachment(named));
+      picked.push(await toAttachment(named));
     }
     if (!picked.length) return;
     event.preventDefault();
@@ -264,7 +264,7 @@ export function Composer({
                 const file = part.file;
                 if (!file) return <span key={index}>{part.text}</span>;
                 // 只有图片才有「看一眼 / 点开」的意义；其余附件保持纯标记
-                const image = isImage(file.ext) ? (file.preview ?? attachmentImage(file.id)) : undefined;
+                const image = isImage(file.ext) ? file.preview : undefined;
                 if (!image) {
                   return (
                     <span className={styles.token} key={index}>
@@ -277,7 +277,7 @@ export function Composer({
                     key={`${file.id}:${index}`}
                     className={cx(styles.token, styles.tokenImage)}
                     title={file.name}
-                    resolve={() => file.preview ?? attachmentImage(file.id) ?? null}
+                    resolve={() => file.preview ?? null}
                   >
                     {part.text}
                   </ImagePeek>
@@ -363,8 +363,8 @@ export function Composer({
             multiple
             hidden
             onChange={(event) => {
-              const picked = Array.from(event.target.files ?? []).map(toAttachment);
-              addFiles(picked);
+              const files = Array.from(event.target.files ?? []);
+              void Promise.all(files.map(toAttachment)).then((picked) => addFiles(picked));
               event.target.value = "";
             }}
           />

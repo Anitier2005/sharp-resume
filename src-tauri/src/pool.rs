@@ -111,7 +111,8 @@ pub fn pool_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 /// 旧版本把材料放在 `assets/`；`read_at` 读的时候两个目录都找，写只进 `pool/`
-fn safe_stored(stored: &str) -> Result<String, String> {
+/// 只取文件名部分：调用方给的是「池内存储名」，绝不允许带路径
+pub(crate) fn safe_stored(stored: &str) -> Result<String, String> {
     let name = Path::new(stored)
         .file_name()
         .map(|value| value.to_string_lossy().to_string())

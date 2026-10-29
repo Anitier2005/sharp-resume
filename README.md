@@ -175,14 +175,14 @@ npm run package:clean  # 把 exe 放进 ../release-clean（清空、自检、单
 
 ### PDF 转图片：三个平台怎么走
 
-「让视觉模型看 PDF 原件」需要把页面渲染成图片，渲染器按平台挑，不绑死 Windows：
+「让视觉模型看 PDF 原件」需要把页面渲染成图片。**解析全在后端**（`src-tauri/src/attach.rs`
+负责取字、OCR、渲染），前端只上传文件、只说「哪几个附件」，不碰字节也不碰正文。
 
-| 场景 | 用的是什么 | 需要装东西吗 |
+| 平台 | 渲染器 | 要装东西吗 |
 |---|---|---|
-| 会话里拖进 PDF（主路径） | `pdf.js` 跑在 WebView 里（`src/lib/pdf-render.ts`） | 不需要，三个平台同一份代码 |
-| 工具 `view_asset`，Windows | 系统自带的 `Windows.Data.Pdf` | 不需要（Win10+ 都有） |
-| 工具 `view_asset`，macOS / Linux | 依次试 `pdftoppm`（poppler）、`gs`、`mutool` | 有一个就行；`brew install poppler` / `apt install poppler-utils` |
-| 工具 `view_asset`，一个都没有 | 报错并提示「直接把 PDF 拖进会话」 | — |
+| Windows | 系统自带的 `Windows.Data.Pdf` | 不需要（Win10+ 都有） |
+| macOS / Linux | 依次试 `pdftoppm`（poppler）、`gs`、`mutool` | 有一个就行；`brew install poppler` / `apt install poppler-utils` |
+| 一个都没有 | 报错并退回「只给文字」 | — |
 
 为什么不打包 pdfium / mupdf：前者要按架构分发 10MB+ 的 dll，后者要 cmake 整包编译。
 「系统接口 + 用户已装工具」在桌面场景里够用，实在都不可用时，附件那条路仍然能出图。

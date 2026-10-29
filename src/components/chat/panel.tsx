@@ -6,24 +6,14 @@ import { useToast } from "@/components/ui/toast-context";
 import { ChevronDown, ChevronRight } from "@/components/ui/icons";
 import { Composer } from "./composer";
 import { Disclosure } from "@/components/ui";
-import {
-  toAttachment,
-  stripPreview,
-  attachmentReady,
-  attachmentText,
-  attachmentImage,
-  ensureOcrText,
-  isImage,
-  pdfPageImages,
-  pdfOcrText,
-} from "@/lib/attach";
+import { attachRefs, stripPreview, toAttachment } from "@/lib/attach";
 import { attachAtEnd } from "@/lib/inline-tokens";
 import { diff, flatten, renderDelta, type Flat } from "@/lib/changes";
 import { entriesOf } from "@/lib/blocks";
 import { skillsPrompt } from "@/lib/skills";
 import { AiSettingsSheet } from "./ai-settings";
 import { AssistantTurn, EmptyTurn, SystemTurn, TypingTurn, UserTurn } from "./message";
-import { aiReady, loadAi, saveAi, slotAi, streamChat, type AiSettings } from "@/lib/ai";
+import { aiReady, loadAi, loadAux, saveAi, slotAi, streamChat, type AiSettings } from "@/lib/ai";
 import { DEFAULT_RESERVE, findModel, listProfiles } from "@/lib/model-config";
 import { buildContext, buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
 import { isTauri } from "@/lib/storage";
@@ -56,6 +46,22 @@ interface SendOptions {
 
 /** 压缩点分隔线的标签：一句话说清「这条之前，模型只看得见摘要」 */
 const DIGEST_LABEL = "压缩点 · 此处之前的对话已压成摘要";
+
+/**
+ * 发给后端的 OCR 接口配置。
+ *
+ * 地址/密钥留空表示沿用对话模型那把，与设置页的说明一致；
+ * 没配 OCR 模型就返回 null —— 后端这时只有内置 OCR 可用（lite 构建等于没有）。
+ */
+function ocrConf(ai: AiSettings) {
+  const aux = loadAux().ocr;
+  if (!aux || !aux.model.trim()) return null;
+  return {
+    baseUrl: aux.baseUrl.trim() || ai.baseUrl,
+    apiKey: aux.apiKey.trim() || ai.apiKey,
+    model: aux.model,
+  };
+}
 
 export function ChatPanel() {
   const { state, person, resume, page, dispatch, setActivePageId, applyOps, openPerson, openResume } =
@@ -288,6 +294,9 @@ export function ChatPanel() {
       const current = flatten(person, targetPage);
       const deltas = baseRef.current?.key === sceneKey ? diff(baseRef.current.flat, current) : [];
       baseRef.current = { key: sceneKey, flat: current };
+      // 模型能不能看图：决定附件是直传图片还是先 OCR。
+      // 用 findModel 而不是 modelById —— 后者只查内置清单，自建模型会被当成看不了图
+      const vision = findModel(ai.model)?.vision === true;
       const context = [buildContext(person, targetPage), renderDelta(deltas)]
         .filter(Boolean)
         .join("\n\n");
@@ -347,24 +356,11 @@ export function ChatPanel() {
         let acc = "";
         void (async () => {
           try {
-            // 图片的两条通道在这里分流：
-            //   模型有视觉 → data URL 直传（走协议的 image_url 段）
-            //   没有视觉   → OCR 转文字混进附件正文（慢几秒，只对图片跑）
-            const modelHasVision = findModel(ai.model)?.vision === true;
-            const imageUrls = modelHasVision
-              ? attachments
-                  .filter((file) => isImage(file.ext))
-                  .map((file) => attachmentImage(file.id))
-                  .filter((url): url is string => Boolean(url))
-              : [];
-            const attachmentBlocks = await Promise.all(
-              attachments.map(async (file) => ({
-                name: file.name,
-                text:
-                  attachmentText(file.id) ??
-                  (!modelHasVision && isImage(file.ext) ? await ensureOcrText(file.id) : undefined),
-              })),
-            );
+            // 浏览器调试模式没有后端，附件内容不解析 —— 只有桌面端才读得到
+            const attachmentBlocks = attachments.map((file) => ({
+              name: file.name,
+              text: "（浏览器调试模式不解析附件内容；桌面端才会读正文和图片）",
+            }));
             await streamChat({
               settings: ai,
               messages: toApiMessages(
@@ -372,7 +368,7 @@ export function ChatPanel() {
                 person.messages.map((item) => ({ role: item.role, content: item.content })),
                 text,
                 attachmentBlocks,
-                imageUrls,
+                [],
               ),
               signal: controller.signal,
               onDelta: (delta) => {
@@ -423,64 +419,9 @@ export function ChatPanel() {
           await invoke("chat_push", { key: person.id, message: userMessage });
 
           /**
-           * 附件 → 材料段 + 图片。
-           *
-           * Rust 侧只接收 `context` 这一条字符串；会话里存的 attachments 只是
-           * 元数据（名字/大小/存储名），模型读不到内容 —— 于是拖进来的 PDF
-           * 在它眼里等于不存在，只会回一句「请把内容贴给我」。
-           *
-           * 三条通道按「模型能不能看图」分流：
-           *   能看图 → 图片与 PDF 页面直接作为视觉段附上（PDF 的文字也一起给）
-           *   看不了 → 图片走 OCR 转文字；PDF 用提取出来的正文
-           *   都拿不到 → 明写读不到，别让模型猜用户传了什么
+           * 附件只报名字：正文、OCR、PDF 页面都由后端在组上下文时现取。
+           * 前端不再读字节，也就不存在「刷新一次缓存就没了」这回事。
            */
-          // 用 findModel 而不是 modelById：后者只查内置清单，用户自建的模型会被当成「看不了图」
-          const vision = findModel(ai.model)?.vision === true;
-          await Promise.all(attachments.map((file) => attachmentReady(file.id)));
-
-          const blocks: string[] = [];
-          const images: string[] = [];
-          for (const file of attachments) {
-            const body = attachmentText(file.id);
-            if (isImage(file.ext)) {
-              const url = vision ? attachmentImage(file.id) : undefined;
-              if (url) {
-                images.push(url);
-                blocks.push(`──── ${file.name} ────\n（图片已作为视觉输入附上，说明文字只描述版式，不要复述画面内容）\n──── 文件结束 ────`);
-                continue;
-              }
-              const ocr = await ensureOcrText(file.id);
-              blocks.push(
-                ocr
-                  ? `──── ${file.name} ────\n${ocr.trim()}\n──── 文件结束 ────`
-                  : `（附件 ${file.name}：图片没能转成文字 —— 当前模型看不了图，也没配 OCR）`,
-              );
-              continue;
-            }
-            // PDF：文字照给，能看图的模型再补上前几页的版面
-            const pages = file.ext === "pdf" && vision ? await pdfPageImages(file.id) : [];
-            images.push(...pages);
-            const note = pages.length ? `\n（另附前 ${pages.length} 页的图片，版式看图片）` : "";
-            // 扫描件没有文字层。看不了图的模型这时等于收到一个空文件 ——
-            // 只能把页面渲染出来逐页 OCR，再长也总比「什么都没有」强
-            const unreadable = !body || body.startsWith("（这份 PDF 读不出来");
-            const scanned =
-              file.ext === "pdf" && !vision && unreadable ? await pdfOcrText(file.id) : "";
-            const text = scanned || body;
-            blocks.push(
-              text
-                ? `──── ${file.name} ────\n${
-                    scanned ? "（这份 PDF 没有文字层，下面是页面 OCR 出来的）\n" : ""
-                  }${text.trim()}${note}\n──── 文件结束 ────`
-                : `（附件 ${file.name}：读不到内容${isImage(file.ext) ? "，图片没能转成文字" : ""}）`,
-            );
-          }
-          // 视觉段有上限：一次塞十几张图，token 和请求体都会炸
-          const picked = images.slice(0, 4);
-          const fullContext = blocks.length
-            ? `${context}\n\n【本次附件】\n${blocks.join("\n\n")}`
-            : context;
-
           const channel = new Channel<{
             kind: string;
             delta?: string;
@@ -517,9 +458,11 @@ export function ChatPanel() {
           const sent = await invoke<{ id: string; actions: unknown[]; assets?: Asset[] }>("chat_send", {
             args: {
               key: person.id,
-              context: fullContext,
-              // 视觉输入：本轮的图片（附件截图、PDF 页面）。Rust 侧挂到本轮用户消息上
-              images: picked,
+              context,
+              // 附件引用（inbox 存储名）：后端按它取字、OCR、渲染页面
+              attachments: attachRefs(attachments),
+              // 设置里配的 OCR 接口；没配就只有内置 OCR（lite 构建等于没有）
+              ocr: ocrConf(ai),
               // 工具层据此判断「PDF 转图片给自己看」做不做、发不发
               vision,
               extra: skillsPrompt(),
@@ -784,13 +727,15 @@ export function ChatPanel() {
   const onDrop = (event: React.DragEvent) => {
     event.preventDefault();
     setDragging(false);
-    const dropped = Array.from(event.dataTransfer.files ?? []).map(toAttachment);
-    if (!dropped.length) return;
-    // 拖放没有光标位置，追加到正文末尾（附件要以行内标记的形式存在）
-    setFiles((list) => {
-      const merged = attachAtEnd(input, list, dropped);
-      setInput(merged.text);
-      return merged.files;
+    const files = Array.from(event.dataTransfer.files ?? []);
+    if (!files.length) return;
+    void Promise.all(files.map(toAttachment)).then((dropped) => {
+      // 拖放没有光标位置，追加到正文末尾（附件要以行内标记的形式存在）
+      setFiles((list) => {
+        const merged = attachAtEnd(input, list, dropped);
+        setInput(merged.text);
+        return merged.files;
+      });
     });
   };
 

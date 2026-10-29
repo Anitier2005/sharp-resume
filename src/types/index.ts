@@ -42,6 +42,13 @@ export interface Field {
    * 是把一个结构问题推给人去绕。
    */
   assetId?: string;
+  /**
+   * 附件在 `<数据目录>/inbox/` 里的存储名（内容寻址）。
+   *
+   * 正文解析、OCR、PDF 拆页都由后端按这个名字现取；前端只拿它取缩略图。
+   * 浏览器调试模式没有后端，这个字段为空。
+   */
+  stored?: string;
 }
 
 /** 人的一级：这个人是谁，完全由字段描述 */
@@ -224,6 +231,13 @@ export interface Attachment {
    * 必须能从材料池取回字节 —— 只靠 `preview` 那个 object URL，刷新就没了。
    */
   assetId?: string;
+  /**
+   * 附件在 `<数据目录>/inbox/` 里的存储名（内容寻址）。
+   *
+   * 正文解析、OCR、PDF 拆页都由后端按这个名字现取，前端碰不到内容；
+   * 它同时用来取缩略图（刷新之后 `preview` 已经没了）。
+   */
+  stored?: string;
 }
 
 /** AI 给出的一处改写 */
