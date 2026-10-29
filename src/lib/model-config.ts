@@ -1,4 +1,5 @@
 import raw from "../../config/models.json";
+import { onSettingsRefresh, readSetting, writeSetting } from "@/lib/settings-store";
 
 /**
  * 模型配置：来自 `config/models.json`，用静态 import 引入，
@@ -59,11 +60,11 @@ export const modelById = (id: string): ModelConfig | undefined =>
    自定义模型
 
    内置清单是构建期 JSON，打包后写不回去 —— 用户自己加的模型只能另存一处。
-   选 localStorage 与 ai 设置同域同策略：只在本机，不随工作区同步（密钥、网关
-   地址这类东西跟着简历走反而是负担）。
+   与 ai 设置同一处（`app.db` 的 settings 表）：只在本机，不随简历导出，
+   但跟着数据目录走 —— 换台机器拷过去就能继续用。
    ========================================================================== */
 
-const STORE_KEY = "sharp-resume:models:v1";
+const STORE_KEY = "models:v1";
 
 /** 自定义模型只填「名字 + 模型名 + 网关」，其余按最常见档位兜底 */
 const CUSTOM_PROVIDER = "自定义";
@@ -73,7 +74,7 @@ const CUSTOM_TEMPERATURE = 0.4;
 
 /**
  * 读一次就缓存在内存里：`listModels()` 会被渲染期调用（下拉、底栏），
- * 每次都 JSON.parse 一遍 localStorage 属于纯浪费。写入口只有本文件两个函数，
+ * 每次都 JSON.parse 一遍存下来的 JSON 属于纯浪费。写入口只有本文件两个函数，
  * 它们会同步刷新这份缓存，所以不存在「缓存比磁盘旧」的窗口。
  */
 let cache: ModelConfig[] | null = null;
@@ -82,7 +83,7 @@ function readCustom(): ModelConfig[] {
   if (cache) return cache;
   cache = [];
   try {
-    const text = localStorage.getItem(STORE_KEY);
+    const text = readSetting(STORE_KEY);
     if (!text) return cache;
     const parsed: unknown = JSON.parse(text);
     if (!Array.isArray(parsed)) return cache;
@@ -107,15 +108,11 @@ function writeCustom(list: ModelConfig[]): void {
   // 与内置同 id 的项一律不写：内置排在前，写进去也永远选不到
   const clean = list.filter((item) => !MODELS.some((builtin) => builtin.id === item.id));
   cache = clean;
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(clean));
-  } catch {
-    // 隐私模式或配额满：本次会话里仍按内存中的清单生效
-  }
+  writeSetting(STORE_KEY, JSON.stringify(clean));
 }
 
 /**
- * 清洗外部数据：localStorage 里的东西可能是手改的、旧版本写的，
+ * 清洗外部数据：库里的东西可能是手改的、旧版本写的，
  * 缺字段就补缺省值而不是整条丢弃 —— 用户加过的模型不该因为一个字段消失。
  */
 function normalizeCustom(input: unknown): ModelConfig | null {
@@ -230,7 +227,7 @@ export function removeCustomModel(id: string): void {
    临时借来的 key。以前这些字段直接挂在模型上，换一次就得重填一遍；拆成
    「模型 → 若干配置」之后，切换只换指针，字段各归各的。
 
-   存在 localStorage 的 `sharp-resume:profiles:v1`，形如 `{ [modelId]: Profile[] }`。
+   存在 settings 表的 `profiles:v1`，形如 `{ [modelId]: Profile[] }`。
    内置模型也要能加配置，所以这张表按 modelId 索引、与自定义模型清单分开存。
    ========================================================================== */
 
@@ -249,7 +246,7 @@ export interface ModelProfile {
   reserve?: number;
 }
 
-const PROFILE_KEY = "sharp-resume:profiles:v1";
+const PROFILE_KEY = "profiles:v1";
 
 /** 与模型清单同理：渲染期会被反复读，缓存在内存里，写入口同步刷新 */
 let profileCache: Record<string, ModelProfile[]> | null = null;
@@ -258,7 +255,7 @@ function readProfiles(): Record<string, ModelProfile[]> {
   if (profileCache) return profileCache;
   const map: Record<string, ModelProfile[]> = {};
   try {
-    const text = localStorage.getItem(PROFILE_KEY);
+    const text = readSetting(PROFILE_KEY);
     if (text) {
       const parsed: unknown = JSON.parse(text);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -280,11 +277,7 @@ function readProfiles(): Record<string, ModelProfile[]> {
 
 function writeProfiles(map: Record<string, ModelProfile[]>): void {
   profileCache = map;
-  try {
-    localStorage.setItem(PROFILE_KEY, JSON.stringify(map));
-  } catch {
-    // 配额满/隐私模式：本次会话里仍按内存生效
-  }
+  writeSetting(PROFILE_KEY, JSON.stringify(map));
 }
 
 function normalizeProfile(input: unknown): ModelProfile | null {
@@ -427,3 +420,12 @@ export const LOCAL_AI: LocalAiDraft | undefined = import.meta.env.DEV
       ...pick(Object.values(secretModules)[0]?.default),
     }
   : undefined;
+
+/**
+ * 设置窗改完模型清单 / 配置组之后，主窗的这两层内存缓存必须作废：
+ * 它们是从 settings 表派生出来的，表变了缓存不会自己动。
+ */
+onSettingsRefresh(() => {
+  cache = null;
+  profileCache = null;
+});

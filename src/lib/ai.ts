@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { readSetting, writeSetting } from "@/lib/settings-store";
 import {
   LOCAL_AI,
   MODELS,
@@ -11,7 +12,8 @@ import {
 
 /**
  * 模型接入：任何 OpenAI 兼容接口（DeepSeek / OpenAI / 本地 ollama / 自建网关）都能用。
- * 密钥只留在本机 localStorage，不写进工作区、不随简历同步。
+ * 配置与密钥存在 `app.db` 的 settings 表（见 lib/settings-store）：跟着数据目录走，
+ * 不写进工作区、不随简历导出。
  * 模型清单与能力参数来自 config/models.json（打包时硬编码）。
  */
 
@@ -30,7 +32,7 @@ export interface AiSettings {
   profileId?: string;
 }
 
-const STORE_KEY = "sharp-resume:ai:v1";
+const STORE_KEY = "ai:v1";
 
 /** 默认值：优先用 testdata 里的测试配置 + 本机密钥（仅开发期），否则取模型清单第一条 */
 export const DEFAULT_AI: AiSettings = {
@@ -50,7 +52,7 @@ export const AI_PRESETS: { label: string; baseUrl: string; model: string }[] = M
 
 export function loadAi(): AiSettings {
   try {
-    const raw = localStorage.getItem(STORE_KEY);
+    const raw = readSetting(STORE_KEY);
     if (!raw) return DEFAULT_AI;
     const parsed = JSON.parse(raw) as Partial<AiSettings>;
     return { ...DEFAULT_AI, ...parsed };
@@ -60,7 +62,7 @@ export function loadAi(): AiSettings {
 }
 
 export function saveAi(settings: AiSettings): void {
-  localStorage.setItem(STORE_KEY, JSON.stringify(settings));
+  writeSetting(STORE_KEY, JSON.stringify(settings));
 }
 
 /**
@@ -107,7 +109,7 @@ export interface AuxSettings {
   ocr: AuxModelChoice | null;
 }
 
-const AUX_KEY = "sharp-resume:aux:v1";
+const AUX_KEY = "aux:v1";
 const EMPTY_AUX: AuxSettings = { embedding: null, ocr: null };
 
 function pickChoice(value: unknown): AuxModelChoice | null {
@@ -124,7 +126,7 @@ function pickChoice(value: unknown): AuxModelChoice | null {
 
 export function loadAux(): AuxSettings {
   try {
-    const raw = localStorage.getItem(AUX_KEY);
+    const raw = readSetting(AUX_KEY);
     if (!raw) return EMPTY_AUX;
     const parsed = JSON.parse(raw) as Partial<AuxSettings>;
     return { embedding: pickChoice(parsed.embedding), ocr: pickChoice(parsed.ocr) };
@@ -135,7 +137,7 @@ export function loadAux(): AuxSettings {
 
 export function saveAux(patch: Partial<AuxSettings>): void {
   const next = { ...loadAux(), ...patch };
-  localStorage.setItem(AUX_KEY, JSON.stringify(next));
+  writeSetting(AUX_KEY, JSON.stringify(next));
 }
 
 /* ==========================================================================
@@ -154,12 +156,12 @@ export interface SlotSettings {
   chunk: AuxModelChoice | null;
 }
 
-const SLOTS_KEY = "sharp-resume:slots:v1";
+const SLOTS_KEY = "slots:v1";
 const EMPTY_SLOTS: SlotSettings = { compact: null, layout: null, chunk: null };
 
 export function loadSlots(): SlotSettings {
   try {
-    const raw = localStorage.getItem(SLOTS_KEY);
+    const raw = readSetting(SLOTS_KEY);
     if (!raw) return EMPTY_SLOTS;
     const parsed = JSON.parse(raw) as Partial<SlotSettings>;
     return {
@@ -174,7 +176,7 @@ export function loadSlots(): SlotSettings {
 
 export function saveSlot(kind: SlotKind, choice: AuxModelChoice | null): void {
   const next = { ...loadSlots(), [kind]: choice };
-  localStorage.setItem(SLOTS_KEY, JSON.stringify(next));
+  writeSetting(SLOTS_KEY, JSON.stringify(next));
 }
 
 /**
@@ -250,9 +252,9 @@ export async function testConnection(settings: AiSettings): Promise<string> {
 /* ==========================================================================
    通讯层：全部走 Rust（不经过 WebView，因此没有 CORS）
 
-   注意别把这句话读成「密钥不经过前端」：密钥存在 localStorage，由 `loadAi()`
-   读进内存再随请求交给 Rust。想真正做到「密钥只在受信侧」，得把它搬进
-   Rust 侧的配置文件 —— 那是独立的一件事，见 README 的待办。
+   注意别把这句话读成「密钥不经过前端」：密钥存在 app.db 里，由 `loadAi()`
+   读进内存再随请求交给 Rust。想真正做到「密钥不出受信侧」，下一步是让 Rust
+   自己按 key 名取，前端只拿到掩码。
    ========================================================================== */
 
 /** 前端设置 → Rust 侧 AiRequest（camelCase，和 net.rs 的 serde 对齐） */

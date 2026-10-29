@@ -355,6 +355,28 @@ fn write_state(
     Ok(())
 }
 
+/* ---------- 应用设置：模型接入 / 密钥 / 槽位 / 自定义模型 ---------- */
+
+/// 启动时一次取全：前端要用它同步渲染，异步逐个读会让每个组件都得有 loading 态。
+#[tauri::command]
+fn settings_load(state: tauri::State<'_, db::Shared>) -> Result<Vec<(String, String)>, String> {
+    state.with(|conn| db::settings_all(conn))
+}
+
+#[tauri::command]
+fn settings_put(
+    state: tauri::State<'_, db::Shared>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    state.with(|conn| db::settings_put(conn, &key, &value))
+}
+
+#[tauri::command]
+fn settings_drop(state: tauri::State<'_, db::Shared>, key: String) -> Result<(), String> {
+    state.with(|conn| db::settings_drop(conn, &key))
+}
+
 /// 在文件管理器里打开数据目录，方便用户备份 / 拷走。
 #[tauri::command]
 fn reveal_data_dir(app: tauri::AppHandle) -> Result<(), String> {
@@ -625,6 +647,9 @@ pub fn run() {
             text_scale,
             read_state,
             write_state,
+            settings_load,
+            settings_put,
+            settings_drop,
             reveal_data_dir,
             save_text_file,
             save_binary_file,

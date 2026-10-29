@@ -55,6 +55,17 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
+/// 只增不改的结构：不升 schema version 也能装到任何已有的库上。
+fn ensure_additive(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS settings (
+             key   TEXT PRIMARY KEY,
+             value TEXT NOT NULL
+         );",
+    )
+    .map_err(|error| format!("创建设置表失败：{error}"))
+}
+
 /// 常驻数据库连接。所有命令共用一份，避免每次读写都重新 open + migrate。
 ///
 /// `Mutex<Option<Connection>>` 而不是 `Connection`：Connection 不是 Sync，
@@ -88,6 +99,11 @@ impl Shared {
 }
 
 fn migrate(conn: &Connection) -> Result<(), String> {
+    // 纯新增的表放在版本门前面：版本门是为「改动既有结构」设的。
+    // 把它当建表开关用，每加一张表就得升版本、让所有老库跑一遍完整迁移 —— 代价不对等；
+    // 而 IF NOT EXISTS 对老库、新库、测试库都是同一句话。
+    ensure_additive(conn)?;
+
     let current: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|error| format!("读取数据库版本失败：{error}"))?;
@@ -137,6 +153,7 @@ fn migrate(conn: &Connection) -> Result<(), String> {
              key   TEXT PRIMARY KEY,
              value TEXT NOT NULL
          );
+
          -- 知识库是三层：库 → 条目 → chunk。
          --   库：一个主题（「电商行业口径」「这家公司的岗位要求」），用户可增删改
          --   条目：库下面的一篇（标题 + 标签 + 正文），保存时按固定规则切块
@@ -573,6 +590,36 @@ pub fn version(conn: &Connection) -> Result<u32, String> {
         .unwrap_or(model::VERSION as u64) as u32)
 }
 
+/* ---------- 应用设置（模型 / 密钥 / 槽位 / 自定义模型） ---------- */
+
+/// 一次把全部设置读出来：前端启动时要同步用它们渲染，分五次 IPC 不如一次。
+pub fn settings_all(conn: &Connection) -> Result<Vec<(String, String)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM settings")
+        .map_err(|error| format!("读取设置失败：{error}"))?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|error| format!("读取设置失败：{error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("读取设置失败：{error}"))
+}
+
+pub fn settings_put(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )
+    .map_err(|error| format!("写入设置失败：{error}"))?;
+    Ok(())
+}
+
+pub fn settings_drop(conn: &Connection, key: &str) -> Result<(), String> {
+    conn.execute("DELETE FROM settings WHERE key = ?1", params![key])
+        .map_err(|error| format!("删除设置失败：{error}"))?;
+    Ok(())
+}
+
 fn meta(conn: &Connection, key: &str) -> Result<Option<Value>, String> {
     let mut stmt = conn
         .prepare("SELECT value FROM meta WHERE key = ?1")
@@ -877,6 +924,30 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         migrate(&conn).unwrap();
         conn
+    }
+
+    /// 设置存 settings 表，**不能**被工作区保存顺手清掉 ——
+    /// 它和 meta（工作区快照的一部分）是两件事，混在一起会丢密钥。
+    #[test]
+    fn settings_survive_a_workspace_save() {
+        let mut conn = memory();
+        settings_put(&conn, "ai:v1", r#"{"model":"x"}"#).unwrap();
+        save(&mut conn, &sample()).unwrap();
+        assert_eq!(
+            settings_all(&conn).unwrap(),
+            vec![("ai:v1".to_string(), r#"{"model":"x"}"#.to_string())]
+        );
+        settings_drop(&conn, "ai:v1").unwrap();
+        assert!(settings_all(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn settings_put_overwrites_in_place() {
+        let conn = memory();
+        settings_put(&conn, "slots:v1", "{}").unwrap();
+        settings_put(&conn, "slots:v1", "{\"layout\":null}").unwrap();
+        assert_eq!(settings_all(&conn).unwrap().len(), 1);
+        assert_eq!(settings_all(&conn).unwrap()[0].1, "{\"layout\":null}");
     }
 
     fn sample() -> Workspace {

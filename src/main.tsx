@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './styles/index.css'
 import App from './App.tsx'
 import { SettingsRoot } from './settings'
+import { hydrateSettings } from '@/lib/settings-store'
 
 /**
  * 同一个入口有三种下落：
@@ -14,6 +15,14 @@ import { SettingsRoot } from './settings'
  */
 const view = new URLSearchParams(window.location.search).get('view')
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>{view ? <SettingsRoot /> : <App />}</StrictMode>,
-)
+/**
+ * 设置存在 app.db（settings 表）。`loadAi()` 这类读取是同步的（组件初始化就要用），
+ * 所以启动先把它整张灌进内存，再挂载界面 —— 挂载后才读会读到默认值，
+ * 那一瞬间用户会看到「模型被重置」。
+ */
+void (async () => {
+  await hydrateSettings()
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>{view ? <SettingsRoot /> : <App />}</StrictMode>,
+  )
+})()

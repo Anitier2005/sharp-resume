@@ -14,6 +14,7 @@ import { skillsPrompt } from "@/lib/skills";
 import { AiSettingsSheet } from "./ai-settings";
 import { AssistantTurn, EmptyTurn, SystemTurn, TypingTurn, UserTurn } from "./message";
 import { aiReady, loadAi, loadAux, saveAi, slotAi, type AiSettings } from "@/lib/ai";
+import { refreshSettings } from "@/lib/settings-store";
 import { DEFAULT_RESERVE, findModel, listProfiles } from "@/lib/model-config";
 import { buildContext, splitReply } from "@/lib/prompt";
 import { applyAgentActions, askSessionFromLayout, registerChatBridge, type AskQuestion } from "@/lib/agent-actions";
@@ -92,7 +93,8 @@ export function ChatPanel() {
   useEffect(() => {
     let off: (() => void) | undefined;
     void listen<SettingsChanged>("settings:changed", (event) => {
-      if (event.payload.kind === "ai") setAi(loadAi());
+      // 设置窗写的是它自己那份缓存 + 数据库，这里必须重读，否则还拿着旧模型
+      if (event.payload.kind === "ai") void refreshSettings().then(() => setAi(loadAi()));
     }).then((fn) => {
       off = fn;
     });
