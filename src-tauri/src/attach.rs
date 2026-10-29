@@ -69,10 +69,34 @@ pub struct Materials {
     pub origin: Option<crate::agent::facts::Origin>,
 }
 
-/// 解析结果缓存。键是内容寻址的 stored 名，同一份内容永远不会读出错的结果
+/// 解析结果缓存。
+///
+/// 键必须同时含 `stored` 与 `ext`：`parse` 的走向完全由 ext 决定（pdf 走
+/// pdf-extract，空/未知扩展走「不认识」那条分支），只用 stored 做键的话，
+/// 任何一次空 ext 的解析都会把「空正文」钉死在这份内容上 —— 之后每一轮都拿不到
+/// 正文，而抽图是直接读字节的，于是表现成「图抽得出来、文字永远没有」。
 fn cache() -> &'static Mutex<HashMap<String, Parsed>> {
     static CACHE: OnceLock<Mutex<HashMap<String, Parsed>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cache_key(stored: &str, ext: &str) -> String {
+    format!("{stored}\0{ext}")
+}
+
+/// 扩展名归一化：小写、去掉前导点与空白；拿不到就从 `stored` 的后缀补。
+///
+/// 解析走向与缓存键都取决于它，所以只留这一处算法 —— 两侧各算一遍迟早对不上
+/// （上传侧按文件名算、材料侧按存储名算，正是上一版「空 ext 污染缓存」的入口）。
+fn normalize_ext(raw: &str, stored: &str) -> String {
+    let ext = raw.trim().trim_start_matches('.').to_ascii_lowercase();
+    if !ext.is_empty() {
+        return ext;
+    }
+    stored
+        .rsplit_once('.')
+        .map(|(_, tail)| tail.trim().to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 /// 单个附件进上下文的字数上限：200KB 字符足够一份简历，
@@ -123,11 +147,14 @@ pub fn attach_put(
     let dir = inbox_dir(&root);
     std::fs::create_dir_all(&dir).map_err(|error| format!("建附件目录失败：{error}"))?;
 
-    let ext = name
+    let raw_ext = name
         .rsplit_once('.')
         .map(|(_, tail)| tail.to_ascii_lowercase())
         .unwrap_or_default();
-    let stored = crate::snapshot::pool_name(&crate::pool::sha256_hex(&data), Some(&ext))?;
+    let stored = crate::snapshot::pool_name(&crate::pool::sha256_hex(&data), Some(&raw_ext))?;
+    // 归一化要拿 stored 兜底：文件名没有扩展名时，池里那份是 `<sha>.bin`，
+    // 这也正是「上传侧按文件名算、材料侧按存储名算」会打架的那一格
+    let ext = normalize_ext(&raw_ext, &stored);
     let path = dir.join(&stored);
     if !path.exists() {
         crate::storage::atomic_write(&path, &data)?;
@@ -138,13 +165,13 @@ pub fn attach_put(
     let info = AttachInfo {
         stored: stored.clone(),
         name,
-        ext,
+        ext: ext.clone(),
         kind,
         chars: parsed.text.chars().count(),
         scanned: parsed.scanned,
     };
     if let Ok(mut map) = cache().lock() {
-        map.insert(stored, parsed);
+        map.insert(cache_key(&stored, &ext), parsed);
     }
     Ok(info)
 }
@@ -248,11 +275,7 @@ pub async fn materials(
             continue;
         };
         let name = if file.name.is_empty() { stored } else { &file.name };
-        let ext = if file.ext.is_empty() {
-            stored.rsplit_once('.').map(|(_, tail)| tail).unwrap_or_default().to_string()
-        } else {
-            file.ext.to_ascii_lowercase()
-        };
+        let ext = normalize_ext(&file.ext, stored);
         let bytes = match read(root, stored) {
             Ok(bytes) => bytes,
             Err(error) => {
@@ -383,8 +406,10 @@ pub async fn materials(
 }
 
 fn cached(stored: &str, ext: &str, bytes: &[u8]) -> Parsed {
+    let ext = normalize_ext(ext, stored);
+    let key = cache_key(stored, &ext);
     if let Ok(map) = cache().lock() {
-        if let Some(hit) = map.get(stored) {
+        if let Some(hit) = map.get(&key) {
             return Parsed {
                 text: hit.text.clone(),
                 scanned: hit.scanned,
@@ -393,7 +418,7 @@ fn cached(stored: &str, ext: &str, bytes: &[u8]) -> Parsed {
             };
         }
     }
-    let parsed = parse(ext, bytes);
+    let parsed = parse(&ext, bytes);
     let cloned = Parsed {
         text: parsed.text.clone(),
         scanned: parsed.scanned,
@@ -401,7 +426,7 @@ fn cached(stored: &str, ext: &str, bytes: &[u8]) -> Parsed {
         pages: parsed.pages,
     };
     if let Ok(mut map) = cache().lock() {
-        map.insert(stored.to_string(), cloned);
+        map.insert(key, cloned);
     }
     parsed
 }
@@ -597,6 +622,43 @@ mod tests {
         let parsed = parse("pdf", b"not a pdf at all");
         assert!(parsed.scanned);
         assert!(parsed.text.is_empty());
+    }
+
+    /// 缓存 key 必须带 ext：`parse` 的走向完全由 ext 决定。
+    /// 只按 stored 做键时，一次空 ext 的解析会把「空正文」钉死在这份内容上 ——
+    /// 之后每轮都拿不到正文，而抽图直接读字节，于是表现成「图抽得出、字永远没有」。
+    #[test]
+    fn the_cache_key_must_include_the_extension() {
+        let bytes = crate::pdfembed::fixtures::pdf_with_pages(1);
+        let stored = crate::snapshot::pool_name(&crate::pool::sha256_hex(&bytes), Some("bin")).unwrap();
+
+        // 先以「没有扩展名」解析一次：走的是「不认识这个扩展名」那条分支
+        let unknown = cached(&stored, "", &bytes);
+        assert!(unknown.pages.is_none(), "空 ext 不该当 PDF 解析");
+        assert!(!unknown.scanned);
+
+        // 再来一次真扩展名：必须重新解析，拿到 PDF 的走向
+        let as_pdf = cached(&stored, "pdf", &bytes);
+        assert_eq!(as_pdf.pages, Some(1), "换了 ext 必须重解析，不能吃上次的空结果");
+        assert_ne!(as_pdf.note, unknown.note, "两条分支的 note 不一样");
+
+        // 反向：先按 pdf 解析过的内容，再用空 ext 问，也不许拿到 pdf 的结果
+        let other = crate::snapshot::pool_name(&crate::pool::sha256_hex(b"another-content"), Some("bin")).unwrap();
+        assert_eq!(cached(&other, "pdf", &bytes).pages, Some(1));
+        assert!(
+            cached(&other, "", &bytes).pages.is_none(),
+            "空 ext 不该复用 pdf 的解析结果"
+        );
+    }
+
+    /// ext 归一化：大小写、前导点、空白、以及「文件名没扩展名 → 用存储名的后缀」
+    #[test]
+    fn extension_is_normalized_from_the_name_or_the_stored_name() {
+        assert_eq!(normalize_ext("PDF", "a.pdf"), "pdf");
+        assert_eq!(normalize_ext(" .Pdf ", "a.pdf"), "pdf");
+        assert_eq!(normalize_ext("", "a3f19c04b2e6.pdf"), "pdf");
+        assert_eq!(normalize_ext("", "a3f19c04b2e6.bin"), "bin");
+        assert_eq!(normalize_ext("", "no-dot"), "");
     }
 
     #[test]
