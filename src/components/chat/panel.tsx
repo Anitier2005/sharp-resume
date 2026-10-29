@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Asset, Attachment, ChatAction, ChatMessage } from "@/types";
 import { useWorkspace } from "@/store/workspace";
 import { uid } from "@/lib/uid";
@@ -44,6 +44,9 @@ interface SendOptions {
   /** 这一轮是冲着哪一块问的：答复回投给排版 agent 时要带上它，否则对不上号 */
   blockId?: string;
 }
+
+/** 压缩点分隔线的标签：一句话说清「这条之前，模型只看得见摘要」 */
+const DIGEST_LABEL = "压缩点 · 此处之前的对话已压成摘要";
 
 export function ChatPanel() {
   const { state, person, resume, page, dispatch, setActivePageId, applyOps, openPerson, openResume } =
@@ -92,10 +95,13 @@ export function ChatPanel() {
   >(null);
   /** 上一轮发出时的页面快照（摊平后），用来算「这一轮之前你手改了什么」 */
   const baseRef = useRef<{ key: string; flat: Flat } | null>(null);
-  /** 消息真相源在 Rust（chat_history 拉投影）；浏览器调试模式才退回工作区 */
+  /** 消息真相源在 Rust（chat_history 拉全量投影）；浏览器调试模式才退回工作区 */
   const [remote, setRemote] = useState<ChatMessage[]>([]);
-  /** 因为窗口装不下而被折叠掉的条数（消息还在库里，不是删除） */
-  const [folded, setFolded] = useState(0);
+  /**
+   * 压缩点：`upto` 是最后一条被压进摘要的消息 id。
+   * 模型侧照旧按 token 预算裁上下文，这里只负责让用户看见「从哪一条开始模型只看到摘要」。
+   */
+  const [digest, setDigest] = useState<{ upto: string; text: string } | null>(null);
   const [reasoning, setReasoning] = useState("");
   const desktop = isTauri();
 
@@ -158,34 +164,32 @@ export function ChatPanel() {
 
   const personId = person?.id ?? null;
 
-  // 切人/启动时从 Rust 拉一次（只给要显示的那一段，Rust 按「配置窗口 − 压缩预留」裁过）
-  // 窗口或预留变了也要重拉：换了小窗口的模型，看见的历史本来就该变短
+  // 切人/启动时从 Rust 拉一次：现在拿的是全部消息，不再随模型窗口变
   useEffect(() => {
     if (!desktop || !personId) {
       setRemote([]);
-      setFolded(0);
+      setDigest(null);
       return;
     }
     let alive = true;
-    void invoke<{ messages: ChatMessage[]; dropped: number }>("chat_history", {
-      key: personId,
-      window: ai.contextWindow ?? null,
-      reserve: ai.reserve ?? null,
-    })
+    void invoke<{ messages: ChatMessage[]; digest: { upto: string; text: string } | null }>(
+      "chat_history",
+      { key: personId },
+    )
       .then((slice) => {
         if (!alive) return;
         setRemote(slice.messages);
-        setFolded(slice.dropped);
+        setDigest(slice.digest);
       })
       .catch(() => {
         if (!alive) return;
         setRemote([]);
-        setFolded(0);
+        setDigest(null);
       });
     return () => {
       alive = false;
     };
-  }, [desktop, personId, ai.contextWindow, ai.reserve]);
+  }, [desktop, personId]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -490,18 +494,14 @@ export function ChatPanel() {
             },
           });
 
-          // 用 Rust 的历史覆盖本地投影：draft 换成正式消息，顺手拿到裁剪后的列表
+          // 用 Rust 的历史覆盖本地投影：draft 换成正式消息，顺手把压缩点一起刷新
           {
-            const slice = await invoke<{ messages: ChatMessage[]; dropped: number }>(
-              "chat_history",
-              {
-                key: person.id,
-                window: ai.contextWindow ?? null,
-                reserve: ai.reserve ?? null,
-              },
-            );
+            const slice = await invoke<{
+              messages: ChatMessage[];
+              digest: { upto: string; text: string } | null;
+            }>("chat_history", { key: person.id });
             setRemote(slice.messages);
-            setFolded(slice.dropped);
+            setDigest(slice.digest);
           }
 
           // 答复必须回到排版 agent 手里，否则这一轮只是白白花掉一次调用
@@ -757,22 +757,27 @@ export function ChatPanel() {
 
       <div className={styles.thread} ref={scrollRef}>
         <div className={styles.threadIn}>
-          {/* 折叠提示：消息本身没删，只是这次窗口装不下；模型仍可用检索翻回去 */}
-          {folded > 0 && (
-            <div className={styles.folded}>
-              更早的 {folded} 条消息超出当前上下文窗口，已折叠；模型需要时会自己检索
-            </div>
-          )}
           {messages.length === 0 && !busy && <EmptyTurn name={resume.title} onPick={setInput} />}
-          {messages.map((message) =>
-            message.system ? (
-              <SystemTurn key={message.id} message={message} />
-            ) : message.role === "user" ? (
-              <UserTurn key={message.id} message={message} />
-            ) : (
-              <AssistantTurn key={message.id} message={message} onAction={(action) => handleAction(message, action)} />
-            ),
-          )}
+          {messages.map((message) => (
+            <Fragment key={message.id}>
+              {message.system ? (
+                <SystemTurn message={message} />
+              ) : message.role === "user" ? (
+                <UserTurn message={message} />
+              ) : (
+                <AssistantTurn message={message} onAction={(action) => handleAction(message, action)} />
+              )}
+              {/* 压缩点：这条之后的历史模型只看到摘要。upto 不在当前列表里（会话被清过）
+                  就什么都不插 —— 找不到锚点时分隔线只会莫名其妙地贴在末尾 */}
+              {digest && message.id === digest.upto && (
+                <div className={styles.digest}>
+                  <Disclosure summary={DIGEST_LABEL} className={styles.digestMark}>
+                    <span className={styles.digestText}>{digest.text}</span>
+                  </Disclosure>
+                </div>
+              )}
+            </Fragment>
+          ))}
           {/* 内部轮（排版 ↔ 会话）不渲染任何「正在发生」：用户看到的对话里
               根本没有这一轮，冒出一个打字体反而像是卡住了 */}
           {busy && !silentBusy && reasoning && (

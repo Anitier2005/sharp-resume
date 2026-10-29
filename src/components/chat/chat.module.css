@@ -74,15 +74,32 @@
   gap: 22px;
 }
 
-/* 折叠提示：一句话说清「没丢，只是超窗口了」，别做成可点的入口 */
-.folded {
-  align-self: center;
-  padding: 3px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  font-size: 0.625rem;
-  color: var(--fg-4);
+/* 现在渲染的是全部消息，长会话一口气几百个节点：离屏的直接跳过布局与绘制。
+   intrinsic-size 给个典型高度做占位，滚回去时才真正渲染（auto 会记住上次实测值） */
+.threadIn > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
+/* 压缩点分隔线：横线画成背景，标签用会话底色把它在中间切断 ——
+   比左边一条线右边一条线省事，标签展开正文时也不会被两侧的线挤窄。
+   8px 是 Disclosure 折叠头的文字中线（2px 内边距 + 半行高） */
+.digest {
+  min-width: 0;
+  text-align: center;
+  background: linear-gradient(var(--line), var(--line)) center 8px / 100% 1px no-repeat;
+}
+.digestMark {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0 10px;
   background: var(--bg-elev);
+  text-align: left;
+}
+/* 摘要正文是模型写的长段落：等宽小字 + 灰一档，读得出「这是旁注」 */
+.digestText {
+  font-family: var(--mono);
+  color: var(--fg-3);
 }
 
 /* 拖拽悬停提示 */

@@ -2,14 +2,16 @@
 //!
 //! 为什么把会话搬到 Rust：
 //!   1. **内存**：长对话如果整份留在 WebView 里（React state + JSON），内存只涨不落。
-//!      这里按 token 预算裁剪，前端只拿到「要显示的那一段」。
+//!      这里只在需要时把消息投影给前端，前端不持有全量副本。
 //!   2. **一致性**：上下文窗口、裁剪策略、system 模板都在一处，换模型不用改前端。
 //!   3. **可恢复**：消息落盘在 SharpResumeData/sessions.json，崩溃不丢。
 //!
-//! 裁剪策略（务实版）：
-//!   - system 模板与材料永远保留
-//!   - 历史从最新往回留，直到用掉约 60% 的上下文窗口（给回复和输出留余量）
-//!   - 至少保留最近一条 user 消息，否则模型会答非所问
+//! 两套窗口，别混在一起：
+//!   - **模型侧**（`chat_send`）：按 token 预算从最新往回裁，用掉约 60% 的上下文窗口
+//!     给回复留余量；被裁掉的那段压成摘要接在 system 后面。至少留最近一条 user 消息，
+//!     否则模型会答非所问。
+//!   - **界面侧**（`chat_history`）：全量返回。用户要能翻到自己说过的话，
+//!     压缩只体现为一条「压缩点」分隔线（`digest`），提示此处之前已压成摘要。
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -25,11 +27,6 @@ use crate::net::{AiRequest, ChatMessage, StreamChunk};
 /// system 模板随包硬编码：改 `prompts/system.md` 重新打包即可生效
 const SYSTEM_TEMPLATE: &str = include_str!("../../prompts/system.md");
 
-/// 历史能用多少 token，由「模型配置里的上下文 − 压缩预留」推出来，不再按条数拍。
-/// 下限/上限只是护栏：下限保证小窗口也能翻到上一轮，上限是 DOM 与滚动的保护，
-/// 正常配置（≤200K）碰不到它。真正的窗口永远是配置说了算。
-const HISTORY_FLOOR: usize = 30;
-const HISTORY_CEIL: usize = 400;
 /// 用户没在模型配置里填「压缩预留」时的默认值：够放一轮摘要提示词 + 被摘要的那几段
 pub(crate) const DEFAULT_RESERVE: usize = 2_000;
 /// 历史只占窗口的一部分，剩下的留给模型输出（prompt + completion 共享同一个窗口）
@@ -222,8 +219,7 @@ pub(crate) fn trim_history(history: &[Value], budget: usize) -> Vec<Value> {
 
 /// 历史预算：窗口减去预留给压缩提示词与 system 的那部分，再按 `HISTORY_SHARE` 折算。
 ///
-/// 一个算式给发送与渲染共用 —— 界面显示的窗口和模型看到的窗口必须是同一个，
-/// 否则用户会看到「我明明说了」而模型说没收到。
+/// 只给模型侧用（会话与页排版各一处）：界面显示全量历史，不再拿它裁渲染。
 pub(crate) fn history_budget(window: usize, reserved: usize) -> usize {
     window.saturating_sub(reserved) * HISTORY_SHARE / 100
 }
@@ -343,45 +339,40 @@ fn snippet_chars(text: &str, max: usize) -> String {
 
 /* ---------- 命令 ---------- */
 
-/// 会话投影：显示用的那一段 + 折叠了多少条。
-/// 折叠不是删除 —— 消息仍在库里，模型能用 `search_history` 翻回去。
+/// 会话投影：该会话的全部消息 + 压缩点。
+///
+/// 折叠那套已经反转：用户要看完整历史，压缩只在列表里留一条标记，
+/// 让人一眼看出「这条之前的对话，模型手里只剩摘要」。
 #[derive(Serialize)]
 pub struct HistorySlice {
     messages: Vec<Value>,
-    dropped: usize,
+    /// 压缩点：`upto` 是最后一条被压进摘要的消息 id，前端据此在这条后面画分隔线
+    digest: Option<DigestMark>,
 }
 
-/// 前端进来先拉一次当前会话。
+#[derive(Serialize)]
+struct DigestMark {
+    upto: String,
+    text: String,
+}
+
+/// 前端进来先拉一次当前会话，全量返回。
 ///
-/// 返回「要显示的那一段」+ 折叠了多少条：窗口由调用方按当前模型的配置传进来，
-/// 这里不再有 300 条这种拍出来的数。
+/// 不再接窗口参数：显示范围不该随模型配置变化 —— 用户翻不到自己说过的话，
+/// 会觉得对话被吞了。窗口只约束模型侧（见 `chat_send`）。
 #[tauri::command]
-pub fn chat_history(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Sessions>,
-    key: String,
-    window: Option<usize>,
-    reserve: Option<usize>,
-) -> HistorySlice {
+pub fn chat_history(app: tauri::AppHandle, state: tauri::State<'_, Sessions>, key: String) -> HistorySlice {
     state.ensure_loaded(&app, &key);
-    let all = state.list(&key);
-    let budget = history_budget(
-        window.unwrap_or(64_000),
-        reserve.unwrap_or(DEFAULT_RESERVE),
-    );
-    let mut picked = trim_history(&all, budget);
-    // 护栏只在极端配置下起作用：窗口大到 1M 时别把整段历史都甩给 DOM，
-    // 窗口小到 8K 时也别只剩一句「好的」
-    if picked.len() > HISTORY_CEIL {
-        picked = picked.split_off(picked.len() - HISTORY_CEIL);
-    }
-    if picked.len() < HISTORY_FLOOR && all.len() > picked.len() {
-        let keep = HISTORY_FLOOR.min(all.len());
-        picked = all[all.len() - keep..].to_vec();
-    }
+    // 摘要读失败当作没有：显示历史比显示摘要重要，不能因为读它的库出问题就白屏
+    let digest = state
+        .with_db(&app, |conn| crate::db::chat_digest_get(conn, &key))
+        .ok()
+        .flatten()
+        .filter(|(_, text)| !text.trim().is_empty())
+        .map(|(upto, text)| DigestMark { upto, text });
     HistorySlice {
-        dropped: all.len().saturating_sub(picked.len()),
-        messages: picked,
+        messages: state.list(&key),
+        digest,
     }
 }
 
