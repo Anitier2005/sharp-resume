@@ -459,6 +459,8 @@ UI 常驻提示：`这是一份由 {n} 个原件组成的简历，不可编辑`�
 | **BE-domain** | `src-tauri/src/tools/mod.rs`、`src-tauri/src/tools/page.rs`、`src-tauri/src/tools/layout.rs`、`src-tauri/src/agent/layout.rs`、`prompts/*.md` |
 | **BE-domain** | `src-tauri/src/pdfembed.rs`(新)、`src-tauri/src/agent/facts.rs`(新)、`src-tauri/src/tools/extract.rs`(新) |
 | **FE** | `src/types/index.ts`、`src/store/workspace/*`、`src/lib/agent-actions.ts`、`src/components/ui/confirm*`、`src/components/chat/*`、`src/components/resume/paper.tsx`、`src/components/resume/panel.tsx` |
+| **BE-domain** | `src-tauri/src/capability.rs`(新)、`src-tauri/src/render/sanitize.rs`(新) |
+| **FE** | `src/styles/page-setup.ts`(新)、`src/lib/capability.ts`(新) |
 | **Render** | `src-tauri/src/render/mod.rs`、`src-tauri/src/render/paper.css` |
 
 `src-tauri/src/tools/edit.rs` 只被 BE-domain 在 `mod.rs` 里 `mod` + 注册，两边都别动对方的文件。

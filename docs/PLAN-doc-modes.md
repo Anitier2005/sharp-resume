@@ -155,7 +155,7 @@ pub struct Resume {
 ///
 /// 为什么单独一个结构而不是塞 4 个 extra 键：页边距要三处同源
 /// （预览 px / 打印 @page / docx twips），必须有**一处**能拿到完整四值，
-/// 而不是在三个地方各自 `resume.marginTop ?? 16`。
+/// 而不是在三个地方各自 `resume.marginTop ?? 20`。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Paper {
@@ -164,8 +164,10 @@ pub struct Paper {
 
 impl Default for Paper {
     fn default() -> Self {
-        // 16mm：与 print.css 原来的 @page margin 一致，升级后打印结果不变
-        Self { margin: [16.0; 4] }
+        // 20mm：与 Word 的默认页边距一致（docx.rs 的 1134 twips 就是 20mm）。
+        // 16mm 只是当年 print.css 里打印用的，不是产品默认。
+        // 最终形状见 §15.3 / 契约 §2：还多了 size / widthMm / heightMm。
+        Self { margin: [20.0; 4] }
     }
 }
 
@@ -216,7 +218,7 @@ pub fn normalize(&mut self) {
 **`Resume::normalize` 的三条规则（顺序固定、单次幂等）**：
 
 ```
-1) paper：每个值 clamp 到 [5, 50]（NaN/负数 → 16）
+1) paper：每个值 clamp 到 [5, 50]（NaN/负数 → 20，0 → clamp 到 5，那是「我要贴边」的意图）
    然后若 (上+下) > 297-20 或 (左+右) > 210-20，按比例缩到上限（等比，不动比例关系）
    —— 缩完正好等于上限，第二次调用不再变 → 幂等
 
@@ -1232,7 +1234,7 @@ freeform 的安全兜底还有 4 个未定项，原样保留：**F1** ammonia �
 +
 +/// 纸张与页边距。毫米，顺序 `[上,右,下,左]`，与 CSS margin 简写同序。
 +/// 三处同源的唯一来源：预览 --pad-*、打印 @page、docx twips。
-+pub paper: Paper,          // Paper { margin: [f64; 4] }，默认 [16.0; 4]
++pub paper: Paper,          // Paper { size, width_mm, height_mm, margin: [f64; 4] }，默认 A4 + [20.0; 4]
 +```
 +
 +`Resume.extra` 上再记一个"已看过"标记：
