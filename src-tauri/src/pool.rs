@@ -287,7 +287,9 @@ fn trash(app: &tauri::AppHandle, stored: &str) -> Result<(), String> {
 ///
 /// 只看 stored 不看 id：同一个文件可能被三处引用，换任何一处 id 都不该影响判定。
 pub fn sync(app: &tauri::AppHandle, state: &Shared, workspace: &Workspace) -> Result<usize, String> {
-    let used = used_stored(workspace);
+    // 知识库图片也躺在同一个池里：只算工作区，会把「简历里删了、知识库里还留着」的那份回收掉
+    let mut used = used_stored(workspace);
+    used.extend(state.with(|conn| db::knowledge_asset_stored(conn))?);
     let rows = state.with(|conn| db::asset_all(conn))?;
     let mut reclaimed = 0usize;
 

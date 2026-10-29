@@ -42,7 +42,7 @@ export async function openSettingsWindow(
    ========================================================================== */
 
 /** 设置窗改了模型：主窗口据此重新读 localStorage 里的当前模型 */
-export type SettingsChanged = { kind: "ai" | "aux" };
+export type SettingsChanged = { kind: "ai" | "aux" | "slots" };
 
 /** 外观窗改了一项：主窗口立刻应用到 `.win` 上 */
 export interface UiPatch {

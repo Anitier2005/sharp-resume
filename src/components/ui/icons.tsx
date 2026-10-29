@@ -237,3 +237,12 @@ export const EyeOff = (p: IconProps) => (
     <path d="M6.4 7.8A16.6 16.6 0 0 0 2.5 11.6s3.5 6 9.5 6a9.4 9.4 0 0 0 3.3-.6" />
   </svg>
 );
+
+/** 上传/导入：托盘 + 向上的箭头 */
+export const Upload = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 1.9, ...p })}>
+    <path d="M12 15.5V4.5" />
+    <path d="M8 8l4-3.5L16 8" />
+    <path d="M4.5 15v3a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3" />
+  </svg>
+);

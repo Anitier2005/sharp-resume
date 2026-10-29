@@ -527,18 +527,28 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "search_knowledge",
-        description: "查知识库：项目细节、行业口径、术语、模板规则这些「可核对的事实」。\
-                      写简历里的数字、时间、职责之前先查一次 —— 查到就照着写，查不到就照实说不知道，\
-                      不要用记忆里的印象补。返回的是命中条目的摘要与 id，需要细节再用 read_knowledge 读全文。",
+        description: "查知识库：客观的求职知识 —— 行业口径、岗位要求、术语、常见面试问法。\
+                      写简历里的数字、时间、职责之前先查一次：查到就照着写，查不到就照实说不知道，\
+                      不要用记忆里的印象补。返回的是命中的「块」，带摘要与 chunkId；需要原文再 read_knowledge。",
         params: knowledge_params,
         run: crate::knowledge::search_tool,
         scopes: &[Scope::Session],
         writes: false,
     },
     Tool {
+        name: "search_history",
+        description: "翻这段对话的旧记录。上下文窗口装不下全部历史，早先说过的事会被挤出去 ——\
+                      用户提到「之前说过的」「上次那个数」而你没印象时，用它按关键词检索原文，\
+                      不要凭猜测补。命中的是原话摘录，可直接引用。",
+        params: history_params,
+        run: crate::history::search_tool,
+        scopes: &[Scope::Session],
+        writes: false,
+    },
+    Tool {
         name: "read_knowledge",
-        description: "按 id 读一条知识库条目的完整正文。只在 search_knowledge 命中、\
-                      且摘要不足以回答时用 —— 它会把整条正文塞进上下文，读太多条会挤掉真正要改的内容。",
+        description: "读知识库原文。传 chunkId 只读那一块，传 entryId 读整篇。\
+                      只在 search_knowledge 的摘要不足以回答时用 —— 整篇很长，读多了会挤掉真正要改的内容。",
         params: knowledge_read_params,
         run: crate::knowledge::read_tool,
         scopes: &[Scope::Session],
@@ -562,11 +572,33 @@ fn knowledge_params() -> Value {
     })
 }
 
+fn history_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "要找的内容，用当时提到的名词或数字（如「QPS」「薪资」「第三轮」）"
+            },
+            "role": {
+                "type": "string",
+                "enum": ["user", "assistant"],
+                "description": "可选：只在用户说的话或只说助手说过的话里找"
+            },
+            "limit": { "type": "integer", "description": "返回几条，默认 6" }
+        },
+        "required": ["query"]
+    })
+}
+
 fn knowledge_read_params() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "id": { "type": "string", "description": "search_knowledge 返回的条目 id" }
+            "id": {
+                "type": "string",
+                "description": "search_knowledge 返回的 chunkId（读一块）或 entryId（读整篇）"
+            }
         },
         "required": ["id"]
     })
@@ -656,7 +688,7 @@ mod tests {
 
         // 工具数就是能力边界的快照：少一个说明注册时漏了，多一个说明有人偷偷
         // 给某个角色开了口子，两者都该在这里被看见
-        assert_eq!(session.len(), 36, "会话 agent 的工具数变了：{session:?}");
+        assert_eq!(session.len(), 37, "会话 agent 的工具数变了：{session:?}");
         assert_eq!(layout.len(), 9, "排版 agent 的工具数变了：{layout:?}");
 
         // 会话 agent：能读、能转交、能转图，但不能自己动版面
@@ -665,6 +697,9 @@ mod tests {
         // 知识库是只读检索：会话能查、排版不能（排版不改内容，查事实没有落点）
         assert!(session.contains(&"search_knowledge"));
         assert!(session.contains(&"read_knowledge"));
+        // 历史检索是会话独有的：排版 agent 没有对话可翻
+        assert!(session.contains(&"search_history"));
+        assert!(!layout.contains(&"search_history"));
         assert!(!layout.contains(&"search_knowledge"));
         assert!(!session.contains(&"set_page_layout"));
         assert!(!session.contains(&"read_layout_guide"));
@@ -686,6 +721,7 @@ mod tests {
         assert!(readers.contains(&"read_layout_guide"));
         assert!(readers.contains(&"list_people"), "列候选人不动任何数据");
         assert!(readers.contains(&"search_knowledge"), "查知识库不改任何状态");
+        assert!(readers.contains(&"search_history"), "翻历史不改任何状态");
         assert!(!readers.contains(&"set_page_layout"));
         assert!(!readers.contains(&"convert_image"));
         // 内容工具全部有副作用（改的是本轮暂存区，轮末才落地，但仍然是写）

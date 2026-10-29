@@ -1,5 +1,12 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { LOCAL_AI, MODELS, type ModelConfig } from "@/lib/model-config";
+import {
+  LOCAL_AI,
+  MODELS,
+  findModel,
+  listProfiles,
+  type ModelConfig,
+  type ModelProfile,
+} from "@/lib/model-config";
 
 /**
  * 模型接入：任何 OpenAI 兼容接口（DeepSeek / OpenAI / 本地 ollama / 自建网关）都能用。
@@ -123,6 +130,88 @@ export function loadAux(): AuxSettings {
 export function saveAux(patch: Partial<AuxSettings>): void {
   const next = { ...loadAux(), ...patch };
   localStorage.setItem(AUX_KEY, JSON.stringify(next));
+}
+
+/* ==========================================================================
+   其余三类用途：压缩 / 排版 / 知识库分片
+   ========================================================================== */
+
+/**
+ * 这三类同样不是「当前对话用哪个模型」，而是「某件事用哪个模型」。
+ * 存在独立键里，缺省 = 沿用会话模型（用户不配也能用）。
+ */
+export type SlotKind = "compact" | "layout" | "chunk";
+
+export interface SlotSettings {
+  compact: AuxModelChoice | null;
+  layout: AuxModelChoice | null;
+  chunk: AuxModelChoice | null;
+}
+
+const SLOTS_KEY = "sharp-resume:slots:v1";
+const EMPTY_SLOTS: SlotSettings = { compact: null, layout: null, chunk: null };
+
+export function loadSlots(): SlotSettings {
+  try {
+    const raw = localStorage.getItem(SLOTS_KEY);
+    if (!raw) return EMPTY_SLOTS;
+    const parsed = JSON.parse(raw) as Partial<SlotSettings>;
+    return {
+      compact: pickChoice(parsed.compact),
+      layout: pickChoice(parsed.layout),
+      chunk: pickChoice(parsed.chunk),
+    };
+  } catch {
+    return EMPTY_SLOTS;
+  }
+}
+
+export function saveSlot(kind: SlotKind, choice: AuxModelChoice | null): void {
+  const next = { ...loadSlots(), [kind]: choice };
+  localStorage.setItem(SLOTS_KEY, JSON.stringify(next));
+}
+
+/**
+ * 把「模型 + 配置」解析成一次真实请求需要的参数。
+ *
+ * 规则：配置里存的 baseUrl / apiKey 优先；为空就沿用会话模型那把网关与密钥 ——
+ * 同一家网关的多个用途通常共用一把 key，不该逼用户填四遍。
+ */
+export function slotAi(kind: SlotKind): AiSettings {
+  const base = loadAi();
+  const slot = loadSlots()[kind];
+  if (!slot || !slot.model.trim()) return base;
+  const spec = findModel(slot.model);
+  return {
+    ...base,
+    baseUrl: slot.baseUrl.trim() || base.baseUrl,
+    apiKey: slot.apiKey.trim() || base.apiKey,
+    model: slot.model,
+    profileId: slot.profileId,
+    temperature: spec?.defaultTemperature ?? base.temperature,
+    reasoning: spec?.reasoning[0] ?? base.reasoning,
+    contextWindow: spec?.contextWindow ?? base.contextWindow,
+  };
+}
+
+/** 会话模型某一条配置对应的完整接入参数（模型 id 取配置所属的模型） */
+export function choiceOf(modelId: string, profile: ModelProfile): AuxModelChoice {
+  const spec = findModel(modelId);
+  return {
+    model: modelId,
+    profileId: profile.id,
+    baseUrl: profile.baseUrl.trim() || spec?.baseUrl || "",
+    apiKey: profile.apiKey,
+  };
+}
+
+/** 某个模型当前的默认配置（用于首次选模型时给一个合理的初值） */
+export function defaultChoiceOf(modelId: string): AuxModelChoice | null {
+  const spec = findModel(modelId);
+  if (!spec) return null;
+  const profile = listProfiles(spec)[0];
+  if (!profile) return { model: modelId, baseUrl: spec.baseUrl, apiKey: "" };
+  return choiceOf(modelId, profile);
 }
 
 export const aiReady = (settings: AiSettings): boolean =>

@@ -12,10 +12,11 @@
 - 两个来源，一个检索入口：
   - **预置（只读）**：本目录的 `manifest.json`，编译期嵌进二进制，安装目录里看不到、
     界面里改不了。由人收集清洗，经外部工作流产出。
-  - **用户自建（可改）**：应用内「知识库」面板里写，落在 app.db 的 `knowledge` 表，
-    跟着数据目录走。预置条目可以「复制为我的条目」再改。
+  - **用户自建（可改）**：应用内「知识库」窗口里维护，落在 app.db 的三张表
+    （`knowledge_library` / `knowledge_entry` / `knowledge_chunk`），跟着数据目录走。
 - 模型只能读：`search_knowledge(query, tags?, limit?)`、`read_knowledge(id)`。
-  写入只发生在用户自己操作面板时，模型没有写工具。
+  写入只发生在用户自己操作界面时，模型没有写工具 —— 知识库里放的是**客观求职知识**，
+  不该被模型在对话中悄悄改写。
 
 ## 2. 目录结构
 
@@ -95,14 +96,23 @@ knowledge/
 - `["session", "layout"]`：两者都能。**谨慎使用**——排版 agent 每轮都跑，
   给它检索能力会明显增加延迟与花费。
 
-## 4. 用户自建条目
+## 4. 用户自建：库 → 条目 → chunk
 
-- 存储：`app.db` 的 `knowledge(id, title, tags, body, updated_at)`，`tags` 存 JSON 数组文本。
-- 切块：写入时不切，检索索引构建时按空行分段、超过 400 字再按句子切（与第 3 节同口径）。
-- id：`k-user-<毫秒时间戳>`；带这个前缀的 id 不可能与预置冲突（预置形如 `k-<slug>-001`）。
-- 与预置的唯一区别：不能被预置清单覆盖、可删可改；检索时一视同仁。
-- 向量：用户条目**没有**向量（写入时不算），只参与词项通道 —— 这是有意的：
-  在保存按钮里同步调一次嵌入接口会让「保存」变成可能失败的慢操作。
+三层，缺一层都会让「管理」和「检索」打架：库是主题边界（删库=整块不要），
+条目是人写人读的单位，chunk 才是检索单位。
+
+- 表：
+  - `knowledge_library(id, name, note, ord, updated_at)`
+  - `knowledge_entry(id, library_id, title, tags, body, ord, updated_at)`
+  - `knowledge_chunk(id, entry_id, ord, heading, text, summary, questions, updated_at)`
+- 切块：保存条目时**后端立即切**（`split_chunks`，与第 3 节同口径），
+  块的 id = `<entryId>#<序号>`。切块规则内置、不可配 —— 召回率依赖它稳定。
+- 摘要与关联问题：切完由模型生成（`knowledge_entry_enrich`），
+  `summary` ≤60 字，`questions` 3 条「别人可能怎么问」。它们参与词项打分（权重 ×2），
+  这样「并发能力」也能命中正文只写「QPS」的块。
+- 文本没变的块在重存时保留原摘要，避免「改一个标点全库重算」。
+- id：条目 `k-<毫秒时间戳>`；带这个形态的 id 不会与预置冲突（预置形如 `k-<slug>-001`）。
+- 向量：用户条目**没有**向量（写入时不算），只参与词项通道；预置块的向量仍来自 `vectors.bin`。
 
 ## 5. 应用侧怎么用（实现契约）
 
@@ -110,12 +120,13 @@ knowledge/
    校验结构后 `include_str!` 进二进制；`vectors.bin` 用 `include_bytes!`。
    - 校验失败：`dev` 打印警告并当作空库；`release` 直接构建失败（避免带着坏库发版）。
 2. **启动**：解析 manifest → 建 BM25 索引（中文二元组 + 英文/数字按词；`k1=1.2, b=0.75`，
-   标题 ×3、tags ×2、正文 ×1）→ 若存在 `embedding` 段则把向量表读进内存。
+   标题 ×3、tags ×2、小标题/摘要/关联问题 ×2、正文 ×1）→ 若存在 `embedding` 段则把向量表读进内存。
 3. **检索**：`search_knowledge` 先按 `agents` 过滤 → 词项召回 top 20；
    有向量且当前配置了 embedding 接口时再算 query 向量、取 top 20；
    两路用 **RRF（k=60）** 融合 → 取 top `limit`（默认 5，上限 10）。
-   返回：`id`、`title`、`tags`、`heading`、≤120 字摘要、命中分数（便于模型判断要不要展开）。
-4. **读取**：`read_knowledge(id)` 返回该条目的全部 chunk 正文（按序拼接，带小标题）。
+   返回：`chunkId`、`entryId`、`library`、`title`、`tags`、`heading`、
+   摘要（模型写过就用它，否则截正文 120 字）、命中分数。
+4. **读取**：`read_knowledge(id)` —— 传 `chunkId` 只读那一块，传 `entryId` 读整篇。
 5. **注入策略**：不把知识库内容自动塞进上下文；系统提示里只加一句
    「写具体事实前先用 search_knowledge 查；查不到就说不知道，不要编」。
 6. **降级**：没有 `embedding` 段、或运行时没有配置 embedding 接口、或模型名不一致 →
@@ -140,3 +151,14 @@ knowledge/
 - 检索：BM25 全量打分 + 向量暴力点积（`3000 × 1024` 次乘加）都在 10ms 级，
   **不引入 ANN 索引**（HNSW 这类依赖不值得）。
 - 超过 1 万 chunk 再考虑分片/缓存，届时先改本规范。
+
+## 8. 向量化（v5 起）
+
+- **默认不向量化**：导入与保存只分片，不调嵌入接口 —— 避免"先存着"也要付一次调用费。
+- **每个库一个嵌入模型**：`knowledge_library.embedding_model / embedding_dim` 记录当初用的是谁；
+  用户点「向量化」时全库重算并覆盖。
+- **模型不一致就退回词频检索**：运行时配置的嵌入模型与库上记的不一致时，
+  向量通道整段失效，只用 BM25（hash）——不拿两套模型的向量算余弦。
+- **硬编码（预置）知识不写向量**：`manifest.vectors` 字段已不再读取；预置库按词频检索。
+- **图片块**：`kind = 'image'`，`asset` 存材料池存储名，正文是一句
+  `![名称](asset:<stored>)`；摘要来源记在 `annotation`（model / ocr / 空）。

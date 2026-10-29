@@ -28,7 +28,9 @@ use crate::model::{self, Workspace};
 ///   1 → v4 表骨架
 ///   2 → asset 索引表 + chat 会话表
 ///   3 → knowledge 表（用户自建知识库；预置条目走编译期嵌入，不进库）
-const SCHEMA_VERSION: i64 = 3;
+///   4 → 知识库改成「库 → 条目 → chunk」三层，另加会话滚动摘要表
+///   5 → 知识库支持向量化（库记住嵌入模型、chunk 存向量）与图片块
+const SCHEMA_VERSION: i64 = 5;
 
 
 /// 打开（必要时创建）数据库。
@@ -135,15 +137,58 @@ fn migrate(conn: &Connection) -> Result<(), String> {
              key   TEXT PRIMARY KEY,
              value TEXT NOT NULL
          );
-         -- 用户自建知识库条目。预置条目是编译期嵌入的（knowledge/manifest.json），
-         -- 不进这张表 —— 两者在检索时合成一个索引，界面上才分「预置/我的」。
-         CREATE TABLE IF NOT EXISTS knowledge (
+         -- 知识库是三层：库 → 条目 → chunk。
+         --   库：一个主题（「电商行业口径」「这家公司的岗位要求」），用户可增删改
+         --   条目：库下面的一篇（标题 + 标签 + 正文），保存时按固定规则切块
+         --   chunk：检索的最小单位，带摘要与关联问题（由模型生成，方便换说法也能命中）
+         -- 预置知识走编译期嵌入的 manifest，不进这些表；两者在检索时合成一个索引。
+         CREATE TABLE IF NOT EXISTS knowledge_library (
              id         TEXT PRIMARY KEY,
+             name       TEXT NOT NULL,
+             note       TEXT NOT NULL DEFAULT '',
+             ord        INTEGER NOT NULL DEFAULT 0,
+             updated_at INTEGER NOT NULL,
+             -- 这个库做向量化时用的嵌入模型名：每个库只认一个模型，
+             -- 运行时的嵌入模型与它不一致就退回词项检索（宁可降级，不要拿错向量算余弦）
+             embedding_model TEXT NOT NULL DEFAULT '',
+             embedding_dim   INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE TABLE IF NOT EXISTS knowledge_entry (
+             id         TEXT PRIMARY KEY,
+             library_id TEXT NOT NULL,
              title      TEXT NOT NULL,
              tags       TEXT NOT NULL DEFAULT '[]',
              body       TEXT NOT NULL,
+             ord        INTEGER NOT NULL DEFAULT 0,
              updated_at INTEGER NOT NULL
          );
+         CREATE TABLE IF NOT EXISTS knowledge_chunk (
+             id         TEXT PRIMARY KEY,
+             entry_id   TEXT NOT NULL,
+             ord        INTEGER NOT NULL,
+             heading    TEXT NOT NULL DEFAULT '',
+             text       TEXT NOT NULL,
+             summary    TEXT NOT NULL DEFAULT '',
+             questions  TEXT NOT NULL DEFAULT '[]',
+             updated_at INTEGER NOT NULL,
+             -- int8 量化后的向量（L2 归一化 × 127），没有就是 NULL
+             vector       BLOB,
+             vector_model TEXT NOT NULL DEFAULT '',
+             kind         TEXT NOT NULL DEFAULT 'text',
+             asset        TEXT NOT NULL DEFAULT '',
+             asset_name   TEXT NOT NULL DEFAULT '',
+             annotation   TEXT NOT NULL DEFAULT ''
+         );
+         -- 会话滚动摘要：历史超预算时，被挤掉的那部分压成摘要，随窗口带下去。
+         -- upto 记「已经摘要到哪条消息」，同一条不重复生成。
+         CREATE TABLE IF NOT EXISTS chat_digest (
+             scope      TEXT PRIMARY KEY,
+             upto       TEXT NOT NULL,
+             text       TEXT NOT NULL,
+             updated_at INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_kentry_lib ON knowledge_entry(library_id, ord);
+         CREATE INDEX IF NOT EXISTS idx_kchunk_entry ON knowledge_chunk(entry_id, ord);
          -- 资产索引：文件本体在 pool/ 下（哈希命名），这里只记「它是什么」
          CREATE TABLE IF NOT EXISTS asset (
              id       TEXT PRIMARY KEY,
@@ -171,6 +216,83 @@ fn migrate(conn: &Connection) -> Result<(), String> {
          CREATE INDEX IF NOT EXISTS idx_asset_sha ON asset(sha256);",
     )
     .map_err(|error| format!("建表失败：{error}"))?;
+
+    // v5：给已有的知识库表补列（新库在上面建表时就已经是完整结构）
+    for statement in [
+        "ALTER TABLE knowledge_library ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE knowledge_library ADD COLUMN embedding_dim INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE knowledge_chunk ADD COLUMN vector BLOB",
+        "ALTER TABLE knowledge_chunk ADD COLUMN vector_model TEXT NOT NULL DEFAULT ''",
+        // text = 文字块；image = 图片块（一张图一块，保留原格式）
+        "ALTER TABLE knowledge_chunk ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'",
+        // 图片块：材料池里的存储名 + 原始文件名
+        "ALTER TABLE knowledge_chunk ADD COLUMN asset TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE knowledge_chunk ADD COLUMN asset_name TEXT NOT NULL DEFAULT ''",
+        // 图片摘要来源：model（多模态）/ ocr / none（没有摘要）
+        "ALTER TABLE knowledge_chunk ADD COLUMN annotation TEXT NOT NULL DEFAULT ''",
+    ] {
+        // 已经加过就报 duplicate column，忽略即可
+        let _ = conn.execute(statement, []);
+    }
+
+    // v3 的平坦 knowledge 表 → v4 的「库 → 条目」。
+    // 只在升级时搬一次：老表留着不动（不删用户数据），但之后的读写都走新表。
+    if current < 4 {
+        let legacy: i64 = conn
+            .query_row("SELECT COUNT(*) FROM knowledge", [], |row| row.get(0))
+            .unwrap_or(0);
+        if legacy > 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            conn.execute(
+                "INSERT OR IGNORE INTO knowledge_library (id, name, note, ord, updated_at)
+                 VALUES ('lib-default', '求职知识', '', 0, ?1)",
+                params![now],
+            )
+            .map_err(|error| format!("建默认知识库失败：{error}"))?;
+            conn.execute(
+                "INSERT OR IGNORE INTO knowledge_entry
+                     (id, library_id, title, tags, body, ord, updated_at)
+                 SELECT id, 'lib-default', title, tags, body, 0, updated_at FROM knowledge",
+                [],
+            )
+            .map_err(|error| format!("迁移旧知识条目失败：{error}"))?;
+
+            // 旧条目只有正文，没有 chunk。不补的话迁移完就检索不到了 ——
+            // 这里按同一套规则（knowledge::split_chunks）先切一遍，
+            // 摘要留给用户在面板里点「生成摘要」。
+            let mut stmt = conn
+                .prepare("SELECT id, body FROM knowledge")
+                .map_err(|error| format!("读取旧知识条目失败：{error}"))?;
+            let rows: Vec<(String, String)> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|error| format!("读取旧知识条目失败：{error}"))?
+                .flatten()
+                .collect();
+            drop(stmt);
+            for (id, body) in rows {
+                for (index, piece) in crate::knowledge::split_chunks(&body).iter().enumerate() {
+                    let (heading, text) = crate::knowledge::split_heading(piece);
+                    conn.execute(
+                        "INSERT OR IGNORE INTO knowledge_chunk
+                             (id, entry_id, ord, heading, text, summary, questions, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, '', '[]', ?6)",
+                        params![
+                            format!("{id}#{}", index + 1),
+                            id,
+                            index as i64 + 1,
+                            heading,
+                            text,
+                            now
+                        ],
+                    )
+                    .map_err(|error| format!("迁移旧知识切片失败：{error}"))?;
+                }
+            }
+        }
+    }
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|error| format!("写入数据库版本失败：{error}"))?;
@@ -551,6 +673,40 @@ fn ord_of(conn: &Connection, scope: &str, id: &str) -> Result<i64, String> {
 pub fn chat_clear(conn: &Connection, scope: &str) -> Result<(), String> {
     conn.execute("DELETE FROM chat WHERE scope = ?1", params![scope])
         .map_err(|error| format!("清空会话失败：{error}"))?;
+    // 摘要也要跟着清：留着它，新对话第一句就会被旧摘要污染
+    conn.execute("DELETE FROM chat_digest WHERE scope = ?1", params![scope])
+        .map_err(|error| format!("清空会话摘要失败：{error}"))?;
+    Ok(())
+}
+
+/// 读滚动摘要：(已经摘要到哪条消息, 摘要正文)
+pub fn chat_digest_get(conn: &Connection, scope: &str) -> Result<Option<(String, String)>, String> {
+    conn.query_row(
+        "SELECT upto, text FROM chat_digest WHERE scope = ?1",
+        params![scope],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .map(Some)
+    .or_else(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+        other => Err(format!("读取会话摘要失败：{other}")),
+    })
+}
+
+pub fn chat_digest_set(
+    conn: &Connection,
+    scope: &str,
+    upto: &str,
+    text: &str,
+    at: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO chat_digest (scope, upto, text, updated_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(scope) DO UPDATE SET upto = excluded.upto, text = excluded.text,
+                                          updated_at = excluded.updated_at",
+        params![scope, upto, text, at],
+    )
+    .map_err(|error| format!("写入会话摘要失败：{error}"))?;
     Ok(())
 }
 
@@ -694,6 +850,23 @@ pub fn asset_remove(conn: &Connection, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 知识库图片块引用到的池文件名。
+///
+/// 为什么回收前必须问一次：池是内容寻址的，同一份图片先进简历、再进知识库时
+/// 存的是同一个文件。只按工作区算「还在不在用」，用户把简历里那份删掉，
+/// 知识库里那张图会被一起挪进回收站 —— 图片块立刻变成一行读不出来的 markdown。
+pub fn knowledge_asset_stored(conn: &Connection) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT asset FROM knowledge_chunk WHERE kind = 'image' AND asset <> ''")
+        .map_err(|error| format!("读取知识库图片引用失败：{error}"))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("查询知识库图片引用失败：{error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("读取知识库图片引用行失败：{error}"))?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -770,6 +943,32 @@ mod tests {
     fn empty_db_loads_as_none() {
         let conn = memory();
         assert!(load(&conn).unwrap().is_none());
+    }
+
+    /// 材料池回收要知道知识库图片在引用谁：只报图片块、去重、空 asset 不算
+    #[test]
+    fn knowledge_images_are_reported_as_pool_refs() {
+        let conn = memory();
+        conn.execute(
+            "INSERT INTO knowledge_entry (id, library_id, title, body, updated_at)
+             VALUES ('e1', 'lib-default', '门店', '![门店](asset:ab.png)', 0)",
+            [],
+        )
+        .unwrap();
+        for (id, kind, asset) in [
+            ("c1", "image", "ab.png"),
+            ("c2", "image", "ab.png"),
+            ("c3", "text", "cd.png"),
+            ("c4", "image", ""),
+        ] {
+            conn.execute(
+                "INSERT INTO knowledge_chunk (id, entry_id, ord, text, updated_at, kind, asset)
+                 VALUES (?1, 'e1', 0, '', 0, ?2, ?3)",
+                params![id, kind, asset],
+            )
+            .unwrap();
+        }
+        assert_eq!(knowledge_asset_stored(&conn).unwrap(), vec!["ab.png".to_string()]);
     }
 
     #[test]

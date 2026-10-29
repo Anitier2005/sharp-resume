@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Person, ResumePage, Workspace } from "@/types";
-import { aiReady, loadAi } from "@/lib/ai";
+import { aiReady, slotAi } from "@/lib/ai";
 import { isTauri } from "@/lib/storage";
 
 /**
@@ -27,7 +27,8 @@ export async function submitLayout(input: {
   text: string;
 }): Promise<boolean> {
   if (!isTauri()) return false;
-  const ai = loadAi();
+  // 排版是独立用途：它可以用一个便宜快模型，不必占着会话那把
+  const ai = slotAi("layout");
   if (!aiReady(ai)) return false;
 
   await invoke("layout_submit", {

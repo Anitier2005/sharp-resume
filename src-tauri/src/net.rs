@@ -407,7 +407,8 @@ mod tests {
     use super::*;
 
     fn live_request() -> Option<AiRequest> {
-        // 只在本机存在 testdata 配置时跑，CI 上没有就跳过
+        // 真联网的用例默认不跑：密钥可能在、但配额可能没了（402），
+        // 那时红的不是代码。要验 TLS/代理就显式 `SHARP_LIVE=1 cargo test`。
         let (base_url, api_key, model) = live_settings()?;
         Some(AiRequest {
             base_url,
@@ -421,8 +422,12 @@ mod tests {
         })
     }
 
-    /// 公开配置 + 本机密钥，和 scripts/package.mjs 里那套目录约定一致
+    /// 公开配置 + 本机密钥，和 scripts/package.mjs 里那套目录约定一致。
+    /// 同时把「默认不联网」的开关收在这里，两条用例都走它。
     fn live_settings() -> Option<(String, String, String)> {
+        if std::env::var("SHARP_LIVE").is_err() {
+            return None;
+        }
         let base: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string("../testdata/ai.json").ok()?).ok()?;
         let secret: serde_json::Value =

@@ -1,8 +1,8 @@
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Asset, Attachment, ChatAction, ChatMessage, Person } from "@/types";
 import { Check, FileIcon, Plus } from "@/components/ui/icons";
-import { ImagePeek } from "@/components/ui/image-view";
-import { resolveUrl } from "@/lib/assets";
+import { ImagePeek, ImageView } from "@/components/ui/image-view";
+import { resolveStored, resolveUrl } from "@/lib/assets";
 import { attachmentImage, isImage } from "@/lib/attach";
 import { segmentText } from "@/lib/inline-tokens";
 import { Markdown } from "@/lib/markdown";
@@ -113,6 +113,180 @@ function InlineAsset({ file, person }: { file: Attachment; person: Person | null
   );
 }
 
+/**
+ * 正文里的知识库图片引用。
+ *
+ * 知识库的图片块被模型引用时只是一行 `![门店照片](asset:ab12.png)`，直接交给
+ * markdown 渲染就是一行字（`asset:` 不是有效协议，图片加载必失败）。这里把它
+ * 切成「文字段 / 图片段」，图片段换成真图。两种写法都认：带 `![]()` 的，和
+ * 模型漏写包裹的裸 `asset:xxx.png`。
+ *
+ * 裸写法必须带扩展名，否则 `asset:abc` 后面的中文标点会被一起吞进存储名。
+ */
+const ASSET_REF =
+  /!\[([^\]]*)\]\(\s*asset:([^)\s]+?)\s*\)|(?<![\w])asset:([A-Za-z0-9][\w.-]*\.[A-Za-z0-9]{2,5})/g;
+
+/** 代码围栏：围栏里的 `asset:xxx` 是示例文本，不该变图片 */
+const FENCE_OPEN = /^\s{0,3}(`{3,}|~{3,})/;
+const FENCE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+
+type Block =
+  | { kind: "text"; text: string }
+  | { kind: "image"; stored: string; raw: string; alt: string };
+
+function splitAssetBlocks(text: string): Block[] {
+  const blocks: Block[] = [];
+  let buf = "";
+  let fence: { char: string; len: number } | null = null;
+
+  // 纯空白的片段（图片前后那半个换行）丢掉，否则会在图片两侧多出空段落
+  const takeText = () => {
+    if (buf.trim()) blocks.push({ kind: "text", text: buf });
+    buf = "";
+  };
+
+  for (const line of text.split("\n")) {
+    if (fence) {
+      buf += `${line}\n`;
+      const close = FENCE_CLOSE.exec(line);
+      if (close && close[1][0] === fence.char && close[1].length >= fence.len) fence = null;
+      continue;
+    }
+    const open = FENCE_OPEN.exec(line);
+    if (open) {
+      fence = { char: open[1][0], len: open[1].length };
+      buf += `${line}\n`;
+      continue;
+    }
+
+    let cursor = 0;
+    // 全局正则会记住 lastIndex，逐行用之前必须归零
+    ASSET_REF.lastIndex = 0;
+    for (let match = ASSET_REF.exec(line); match; match = ASSET_REF.exec(line)) {
+      buf += line.slice(cursor, match.index);
+      takeText();
+      blocks.push({
+        kind: "image",
+        stored: (match[2] ?? match[3]).trim(),
+        raw: match[0],
+        alt: (match[1] ?? "").trim(),
+      });
+      cursor = match.index + match[0].length;
+    }
+    buf += `${line.slice(cursor)}\n`;
+  }
+
+  takeText();
+  // 整段都被切成图片时 blocks 非空；这里只兜「全是空白」的极端情况
+  return blocks.length ? blocks : [{ kind: "text", text }];
+}
+
+/**
+ * 图片地址缓存。
+ *
+ * 同一条消息会因为滚动、切会话、重新渲染反复挂载，每挂一次就读一遍盘的话，
+ * 一屏图能把池子读爆。解析失败的也记下来（记成 null）：缺图是内容问题，
+ * 重试也不会自己变好，反而会拖慢消息流。
+ */
+const assetSrcCache = new Map<string, string | null>();
+const assetPending = new Map<string, Promise<string | null>>();
+
+function loadAssetSrc(stored: string): Promise<string | null> {
+  if (assetSrcCache.has(stored)) return Promise.resolve(assetSrcCache.get(stored) ?? null);
+  const running = assetPending.get(stored);
+  if (running) return running;
+
+  const task = resolveStored(stored).then(
+    (url) => {
+      assetPending.delete(stored);
+      assetSrcCache.set(stored, url);
+      return url;
+    },
+    () => {
+      assetPending.delete(stored);
+      assetSrcCache.set(stored, null);
+      return null;
+    },
+  );
+  assetPending.set(stored, task);
+  return task;
+}
+
+/** 一张知识库图片：缩略图，点击看大图；读不到就老老实实显示原来那行文本 */
+function AssetImage({ stored, raw, alt }: { stored: string; raw: string; alt: string }) {
+  const known = assetSrcCache.has(stored);
+  const [src, setSrc] = useState<string | null>(known ? assetSrcCache.get(stored) ?? null : null);
+  const [settled, setSettled] = useState(known);
+  // 地址拿到了但字节解不开（不是图片、文件被换过）也要退到原文，别留个破图图标
+  const [broken, setBroken] = useState(false);
+  const [zoom, setZoom] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void loadAssetSrc(stored).then((url) => {
+      // 异步回来时这一块可能已经被换掉（消息重排），别往旧组件里塞地址
+      if (!alive) return;
+      setSrc(url);
+      setSettled(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [stored]);
+
+  if (!settled) return <span className={styles.assetPending} aria-busy="true" />;
+  if (!src || broken) return <span className={styles.assetMissing}>{raw}</span>;
+
+  const label = alt || stored;
+  return (
+    <>
+      <button
+        type="button"
+        className={styles.assetThumb}
+        onClick={() => setZoom(true)}
+        aria-label={`放大「${label}」`}
+      >
+        <img
+          className={styles.assetImg}
+          src={src}
+          alt={label}
+          draggable={false}
+          onError={() => setBroken(true)}
+        />
+      </button>
+      {zoom && <ImageView src={src} name={label} onClose={() => setZoom(false)} />}
+    </>
+  );
+}
+
+/**
+ * 助手正文：按图片段切开后，文字段仍走原来的 Markdown 组件。
+ *
+ * 不重写整条 Markdown 链路（表格、代码块、脚注都靠它），只是把图片引用从
+ * 文本里摘出来单独渲染 —— markdown 自己渲染 `asset:` 只会得到一张破图。
+ */
+function AssistantBody({ text }: { text: string }) {
+  const blocks = useMemo(() => splitAssetBlocks(text), [text]);
+  if (blocks.length === 1 && blocks[0].kind === "text") return <Markdown text={text} />;
+
+  return (
+    <>
+      {blocks.map((block, index) =>
+        block.kind === "image" ? (
+          <AssetImage
+            key={`${block.stored}#${index}`}
+            stored={block.stored}
+            raw={block.raw}
+            alt={block.alt}
+          />
+        ) : (
+          <Markdown key={`text#${index}`} text={block.text} />
+        ),
+      )}
+    </>
+  );
+}
+
 export function UserTurn({ message }: { message: ChatMessage }) {
   // person 不去改 panel.tsx 的调用签名：消息本来就属于这个人，直接从工作区取
   const { person } = useWorkspace();
@@ -162,7 +336,7 @@ export function AssistantTurn({
           {message.tool}
         </div>
       )}
-      {message.content && <Markdown text={message.content} />}
+      {message.content && <AssistantBody text={message.content} />}
 
       {message.changes?.map((change, index) => (
         <div className={styles.change} key={index}>

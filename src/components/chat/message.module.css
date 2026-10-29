@@ -274,3 +274,66 @@
   line-height: 1.7;
   color: var(--fg-4);
 }
+
+/* ---------- 正文里的知识库图片 ---------- */
+/* 缩略图自己排一块：图片段和前后文字段是并列的兄弟节点，
+   inline 元素会在中间挤出一行行高，看起来像断句 */
+.assetThumb {
+  display: flex;
+  align-self: flex-start;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.14s ease;
+}
+.assetThumb:hover {
+  border-color: var(--acc-line-2);
+}
+.assetThumb:focus-visible {
+  outline: 2px solid var(--acc-line-2);
+  outline-offset: 2px;
+}
+
+/* 缩到 260×180 的框里：等比裁切，别让长图把消息流撑成一条竖线 */
+.assetImg {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 260px;
+  max-height: 180px;
+  object-fit: cover;
+}
+
+/* 解析中的占位：尺寸与缩略图同量级，避免读盘回来时整条消息跳一下 */
+.assetPending {
+  display: block;
+  align-self: flex-start;
+  width: 160px;
+  height: 108px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  animation: assetPulse 1.2s ease-in-out infinite;
+}
+@keyframes assetPulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 读不到字节：原样把引用文本露出来，比一块永远转圈的空白诚实 */
+.assetMissing {
+  align-self: flex-start;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  line-height: 1.7;
+  color: var(--fg-4);
+  word-break: break-all;
+}

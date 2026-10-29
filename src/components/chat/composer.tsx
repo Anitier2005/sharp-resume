@@ -6,7 +6,7 @@ import { ImagePeek } from "@/components/ui/image-view";
 import { Dropdown, MenuItem } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui";
 import { cx } from "@/lib/cx";
-import { listModels } from "@/lib/model-config";
+import { listAllModels, listProfiles } from "@/lib/model-config";
 import { segmentText, tokenRanges, uniqueToken } from "@/lib/inline-tokens";
 import styles from "./composer.module.css";
 import { attachmentImage, isImage, toAttachment } from "@/lib/attach";
@@ -241,8 +241,15 @@ export function Composer({
     deleteTokenRange(from, to);
   };
 
-  // 自定义模型存在 localStorage 里，数量很少；每次渲染重建比维护一份"什么时候失效"的缓存更省心
-  const options = listModels().map((item) => ({ id: item.id, label: item.label }));
+  // 下拉里列的是「模型：配置」而不是裸模型名 —— 同一个模型可能有好几套网关，
+  // 只写模型名时用户不知道自己正在用哪把 key。
+  // 数量很少（模型 × 配置），每次渲染重建比维护失效缓存更省心。
+  const options = listAllModels().flatMap((item) =>
+    listProfiles(item).map((profile) => ({
+      id: `${item.id}|${profile.id}`,
+      label: `${item.label}：${profile.label}`,
+    })),
+  );
   const areaHeight = manual == null ? undefined : Math.max(MIN_H, manual);
   const segments = useMemo(() => segmentText(text, files), [text, files]);
 

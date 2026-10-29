@@ -14,7 +14,8 @@ import { entriesOf } from "@/lib/blocks";
 import { skillsPrompt } from "@/lib/skills";
 import { AiSettingsSheet } from "./ai-settings";
 import { AssistantTurn, EmptyTurn, SystemTurn, TypingTurn, UserTurn } from "./message";
-import { aiReady, loadAi, saveAi, streamChat, type AiSettings } from "@/lib/ai";
+import { aiReady, loadAi, saveAi, slotAi, streamChat, type AiSettings } from "@/lib/ai";
+import { findModel, listProfiles } from "@/lib/model-config";
 import { buildContext, buildSystemPrompt, splitReply, toApiMessages } from "@/lib/prompt";
 import { isTauri } from "@/lib/storage";
 import { applyAgentActions, askSessionFromLayout, registerChatBridge, type AskQuestion } from "@/lib/agent-actions";
@@ -97,23 +98,46 @@ export function ChatPanel() {
   const desktop = isTauri();
 
   const configured = aiReady(ai);
-  const modelLabel = configured ? ai.model : "未配置模型 · 点此设置";
+  /**
+   * 显示「模型名：配置名」。
+   * 老数据没有 profileId：那时每个模型只有一套配置，把第一条当作它。
+   */
+  const activeSpec = findModel(ai.model);
+  const activeProfile = activeSpec
+    ? (listProfiles(activeSpec).find((item) => item.id === ai.profileId) ??
+      listProfiles(activeSpec)[0])
+    : undefined;
+  const modelLabel = configured
+    ? `${activeSpec?.label ?? ai.model}：${activeProfile?.label ?? "默认"}`
+    : "未配置模型 · 点此设置";
 
-  /** 底栏直接换模型：baseUrl / 上下文窗口 / 温度都跟着清单里的默认值走 */
-  const pickModel = (id: string) => {
-    const config = modelById(id);
-    if (!config) return;
+  /** 压缩摘要的接入参数（没单独配就是主模型，后端也会兜一层） */
+  const compactFor = () => {
+    const slot = slotAi("compact");
+    return { baseUrl: slot.baseUrl, apiKey: slot.apiKey, model: slot.model };
+  };
+
+  /** 底栏直接换「模型 + 配置」：网关、密钥、温度都跟着那套配置走 */
+  const pickModel = (packed: string) => {
+    const [modelId, profileId] = packed.split("|");
+    const spec = findModel(modelId);
+    if (!spec) return;
+    const list = listProfiles(spec);
+    const profile = list.find((item) => item.id === profileId) ?? list[0];
+    if (!profile) return;
     const next = {
       ...ai,
-      model: id,
-      baseUrl: config.baseUrl,
-      contextWindow: config.contextWindow,
-      temperature: config.defaultTemperature,
-      reasoning: config.reasoning[0] ?? undefined,
+      model: modelId,
+      profileId: profile.id,
+      baseUrl: profile.baseUrl.trim() || spec.baseUrl,
+      apiKey: profile.apiKey || ai.apiKey,
+      contextWindow: profile.contextWindow ?? spec.contextWindow,
+      temperature: profile.temperature ?? spec.defaultTemperature,
+      reasoning: profile.reasoning ?? spec.reasoning[0] ?? undefined,
     };
     setAi(next);
     saveAi(next);
-    toast(`已切换到 ${config.label}`);
+    toast(`已切换到 ${spec.label}：${profile.label}`);
   };
 
   const messages = useMemo(
@@ -411,6 +435,8 @@ export function ChatPanel() {
               temperature: ai.temperature,
               reasoning: ai.reasoning ?? null,
               contextWindow: ai.contextWindow ?? null,
+              // 压缩摘要用「压缩」用途的模型；没配时后端自动沿用主模型
+              compact: compactFor(),
               resumeId: resume.id,
               pageId: targetPage.id,
               view: state.ui.view ?? "edit",

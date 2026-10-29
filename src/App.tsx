@@ -74,6 +74,19 @@ function Shell() {
     return () => off?.();
   }, [dispatch, setTextScale]);
 
+  // TEMP-VERIFY
+  useEffect(() => {
+    void import("@/lib/settings-window").then((m) =>
+      m.openSettingsWindow("knowledge", {
+        accent: "pine",
+        hex: "",
+        mode: "light",
+        scale: "",
+        sys: "1.2",
+      }),
+    );
+  }, []);
+
   const { accent, mode } = state.ui;
 
   const accentHex = state.ui.accentHex;

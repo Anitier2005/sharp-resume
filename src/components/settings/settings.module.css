@@ -276,3 +276,16 @@
   flex: none;
   color: var(--acc-text);
 }
+
+/* ---------- 模型选择页 ---------- */
+/* 六类用途纵向排列：每一组是「模型 + 配置」两个下拉。
+   不分栏、不加卡片边框 —— 这一页要的是一眼扫完，不是六张漂亮卡片 */
+.pickList {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 16px 20px;
+}

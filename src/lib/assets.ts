@@ -15,7 +15,8 @@ import { uid } from "@/lib/uid";
  */
 
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif", "svg"]);
-const extOf = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
+/** 文件名 → 扩展名（小写、不带点；没有扩展名就是空串） */
+export const extOf = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
 
 /** 已解析过的显示地址：同一个文件不重复读盘，也不重复造 blob URL */
 const urlCache = new Map<string, string>();
@@ -67,6 +68,28 @@ export function addLink(url: string, name?: string): Asset {
 }
 
 /**
+ * 存储名 → 显示地址。
+ *
+ * `resolveUrl` 与 `resolveStored` 共用这一份读盘 + 缓存：消息里直接写着
+ * `asset:xxx.png` 时手上没有 Asset，但读的是同一批文件，缓存也必须同源，
+ * 否则同一张图会造出两个 blob URL，谁也不知道该 revoke 哪个。
+ */
+async function urlOfStored(stored: string): Promise<string | null> {
+  const cached = urlCache.get(stored);
+  if (cached) return cached;
+
+  try {
+    const bytes = await invoke<number[]>("pool_get", { stored });
+    const blob = new Blob([new Uint8Array(bytes)]);
+    const url = URL.createObjectURL(blob);
+    urlCache.set(stored, url);
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 取一个可以直接放进 <img src> 或 <a href> 的地址。
  * 读不出来返回 null（界面显示占位，不炸）。
  */
@@ -74,18 +97,24 @@ export async function resolveUrl(asset: Asset): Promise<string | null> {
   if (asset.kind === "link") return asset.stored;
   if (!isTauri() || asset.stored.startsWith("data:")) return asset.stored;
 
-  const cached = urlCache.get(asset.stored);
-  if (cached) return cached;
+  return urlOfStored(asset.stored);
+}
 
-  try {
-    const bytes = await invoke<number[]>("pool_get", { stored: asset.stored });
-    const blob = new Blob([new Uint8Array(bytes)]);
-    const url = URL.createObjectURL(blob);
-    urlCache.set(asset.stored, url);
-    return url;
-  } catch {
-    return null;
-  }
+/**
+ * 按材料池里的存储名取显示地址；读不到返回 null（不抛）。
+ *
+ * 模型引用知识库图片时只会写 `asset:<stored>`，拿不到 Asset（也就没有 kind）。
+ * 浏览器调试模式没有池，直接判失败让调用方退回显示原文 —— 这里不报错也不 toast：
+ * 「池里没有这张图」是内容问题，不是操作失误。
+ */
+export async function resolveStored(stored: string): Promise<string | null> {
+  const name = stored.trim();
+  if (!name) return null;
+  // 浏览器里存的就是 data URL；链接型材料也直接可用
+  if (name.startsWith("data:") || name.startsWith("blob:")) return name;
+  if (!isTauri()) return null;
+
+  return urlOfStored(name);
 }
 
 /**

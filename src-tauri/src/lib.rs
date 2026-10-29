@@ -4,6 +4,7 @@ mod db;
 mod docx;
 mod export;
 mod extract;
+mod history;
 mod knowledge;
 mod model;
 mod net;
@@ -176,7 +177,7 @@ async fn open_settings(
 ) -> Result<(), String> {
     let (label, title, width, height, key) = match view.as_str() {
         "look" => ("settings-look", "外观", 500.0, 470.0, "look"),
-        "knowledge" => ("settings-knowledge", "知识库", 840.0, 640.0, "knowledge"),
+        "knowledge" => ("settings-knowledge", "知识库", 1080.0, 700.0, "knowledge"),
         _ => ("settings-model", "模型", 720.0, 620.0, "model"),
     };
 
@@ -210,12 +211,13 @@ async fn open_settings(
     )
     .title(title)
     .inner_size(width, height)
+    // 知识库是三列、内容长度不定，允许拉伸；模型/外观字段固定，拉了反而变丑
+    .resizable(view == "knowledge")
     // 与主窗口一致：这台机器上不关 GPU sandbox 时，新的 WebView2 窗口会白屏
     .additional_browser_args(
         "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu-sandbox",
     )
-    // 固定尺寸：内容长度是确定的，允许拉伸只会把字段拉成一行一个字
-    .resizable(false)
+    // 模型/外观是固定尺寸：内容长度确定，允许拉伸只会把字段拉成一行一个字
     .maximizable(false)
     .minimizable(false)
     // 不要系统边框：主窗口是自绘标题栏，设置窗露出白底系统边框就不是同一套设计语言了
@@ -645,12 +647,24 @@ pub fn run() {
             extract::extract_pdf,
             extract::ocr_image,
             extract::ocr_api,
-            knowledge::knowledge_list,
-            knowledge::knowledge_get,
-            knowledge::knowledge_upsert,
-            knowledge::knowledge_delete,
+            knowledge::knowledge_libraries,
+            knowledge::knowledge_library_save,
+            knowledge::knowledge_library_delete,
+            knowledge::knowledge_entries,
+            knowledge::knowledge_entry_get,
+            knowledge::knowledge_entry_save,
+            knowledge::knowledge_entry_delete,
+            knowledge::knowledge_entry_enrich,
+            knowledge::knowledge_vectorize,
+            knowledge::knowledge_import_text,
+            knowledge::knowledge_import_image,
+            knowledge::knowledge_image_annotate,
+            knowledge::knowledge_image_update,
+            knowledge::knowledge_chunk_delete,
+            knowledge::ingest_file,
             knowledge::knowledge_search,
-            knowledge::knowledge_configure
+            knowledge::knowledge_configure,
+            history::history_search
         ])
         .manage(session::Sessions::default())
         // 排版信箱：每页一份，跨命令存活。放在 manage 里而不是每次新建，

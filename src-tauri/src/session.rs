@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::Channel;
 
@@ -24,8 +25,13 @@ use crate::net::{AiRequest, ChatMessage, StreamChunk};
 /// system 模板随包硬编码：改 `prompts/system.md` 重新打包即可生效
 const SYSTEM_TEMPLATE: &str = include_str!("../../prompts/system.md");
 
-/// 前端最多拿到多少条消息用于渲染（再往上滚就不给了，避免 DOM 无限长）
-const DISPLAY_LIMIT: usize = 80;
+/// 消息全部落盘（一条不丢）；这里只限制「一次渲染多少条」。
+/// 300 条足够覆盖正常的一次求职季，又不会让 DOM 大到滚动发涩。
+const DISPLAY_LIMIT: usize = 300;
+
+/// 被挤出上下文的历史至少这么多 token 才值得生成一次摘要 ——
+/// 少了就生成，等于每轮都多一次模型调用，换来的信息却很有限。
+const DIGEST_TRIGGER: usize = 1_200;
 
 #[derive(Default)]
 pub struct Sessions {
@@ -208,6 +214,119 @@ pub(crate) fn trim_history(history: &[Value], budget: usize) -> Vec<Value> {
     picked
 }
 
+/// 把被挤出窗口的历史压成要点。
+///
+/// 为什么不是「直接丢掉」：聊到第 30 轮时，第 3 轮定下的口径（「QPS 只写 3000」）
+/// 会被静默丢弃，模型随后就可能给出前后矛盾的稿子。摘要保住主线；
+/// 精确细节由 `search_history` 工具按需回原文捞。
+///
+/// 失败一律静默（返回 None）：摘要只是优化，不能因为它挂了就让这一轮对话发不出去。
+async fn digest_for_dropped(
+    app: &tauri::AppHandle,
+    state: &Sessions,
+    args: &SendArgs,
+    dropped: &[Value],
+) -> Option<String> {
+    let existing = state
+        .with_db(app, |conn| crate::db::chat_digest_get(conn, &args.key))
+        .ok()
+        .flatten();
+
+    if dropped.is_empty() {
+        return existing.map(|(_, text)| text).filter(|text| !text.trim().is_empty());
+    }
+
+    let fresh_tokens: usize = dropped
+        .iter()
+        .map(|message| estimate_tokens(message.get("content").and_then(Value::as_str).unwrap_or("")))
+        .sum();
+    if existing.is_some() && fresh_tokens < 400 {
+        // 只多挤出来一点点：沿用上一份摘要，别为了两句话再花一次调用
+        return existing.map(|(_, text)| text);
+    }
+    if fresh_tokens < DIGEST_TRIGGER && existing.is_none() {
+        // 第一次触发也要求够长，否则短会话会被无谓地摘要
+        return None;
+    }
+
+    let mut transcript = String::new();
+    if let Some((_, text)) = &existing {
+        transcript.push_str("（以下是更早的摘要）\n");
+        transcript.push_str(text.trim());
+        transcript.push_str("\n\n（以下是新增的对话）\n");
+    }
+    for message in dropped {
+        if message.get("internal").and_then(Value::as_bool).unwrap_or(false) {
+            continue;
+        }
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+        let content = message.get("content").and_then(Value::as_str).unwrap_or("").trim();
+        if content.is_empty() {
+            continue;
+        }
+        let speaker = if role == "assistant" { "助手" } else { "用户" };
+        // 单条截断：一轮回答可能上千字，全文塞进去等于没省
+        transcript.push_str(&format!("{speaker}：{}\n", snippet_chars(content, 700)));
+    }
+
+    // 摘要用「压缩」用途的模型；没配就沿用本轮主模型
+    let (base_url, api_key, model) = match &args.compact {
+        Some(conf) if !conf.model.trim().is_empty() => {
+            (conf.base_url.clone(), conf.api_key.clone(), conf.model.clone())
+        }
+        _ => (args.base_url.clone(), args.api_key.clone(), args.model.clone()),
+    };
+    let request = AiRequest {
+        base_url,
+        api_key,
+        model,
+        messages: vec![
+            ChatMessage::system(
+                "把下面的对话压成一份要点，供后续继续对话时当背景。\
+                 必须保留：用户定下的口径与偏好、具体数字与时间、已确认的结论、还没做完的事。\
+                 不要写客套话，不要复述过程，不要评价。用第三人称陈述，不超过 400 字。",
+            ),
+            ChatMessage::user(transcript),
+        ],
+        temperature: Some(0.1),
+        reasoning: None,
+        max_tokens: Some(700),
+        tools: None,
+    };
+    let text = crate::net::chat_once(request).await.ok()?;
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+
+    // upto = 最后一条被摘要的消息：同一条不重复摘要
+    let upto = dropped
+        .last()
+        .and_then(|message| message.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if !upto.is_empty() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let _ = state.with_db(app, |conn| {
+            crate::db::chat_digest_set(conn, &args.key, &upto, &text, stamp)
+        });
+    }
+    Some(text)
+}
+
+/// 按字符截断（不切坏汉字），用于摘要输入
+fn snippet_chars(text: &str, max: usize) -> String {
+    let mut out: String = text.chars().take(max).collect();
+    if text.chars().count() > max {
+        out.push('…');
+    }
+    out
+}
+
 /* ---------- 命令 ---------- */
 
 /// 前端进来先拉一次当前会话（只给要显示的一段）
@@ -293,6 +412,18 @@ pub struct SendArgs {
     /// 工作区快照：工具层的只读镜像。前端每次发送时推一份，不改变数据归属。
     #[serde(default)]
     pub workspace: Value,
+    /// 「压缩」用途的模型（设置里单独配）。不给就沿用本轮主模型。
+    #[serde(default)]
+    pub compact: Option<CompactConfig>,
+}
+
+/// 压缩历史摘要用的接入参数
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactConfig {
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
 }
 
 /// 发一轮对话：Rust 组上下文 → 流式回推 → 把 assistant 消息写进历史
@@ -326,7 +457,16 @@ pub async fn chat_send(
     }
     let window = args.context_window.unwrap_or(64_000);
     let budget = window.saturating_sub(estimate_tokens(&system) + 2_000) * 6 / 10;
-    let history = trim_history(&state.list(&args.key), budget);
+    let all = state.list(&args.key);
+    let history = trim_history(&all, budget);
+
+    // 被挤出窗口的那一段：压成摘要接在 system 后面（失败就当作没有）
+    let dropped = &all[..all.len().saturating_sub(history.len())];
+    if let Some(digest) = digest_for_dropped(&app, &state, &args, dropped).await {
+        system.push_str("\n\n【更早对话的摘要】\n");
+        system.push_str(&digest);
+        system.push_str("\n（需要原话或其中的具体数字时，用 search_history 工具检索旧消息）");
+    }
 
     let mut messages = vec![ChatMessage::system(system)];
     for message in &history {

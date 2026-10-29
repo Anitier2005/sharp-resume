@@ -1,20 +1,26 @@
 import { useMemo, useState, type ChangeEvent } from "react";
 import {
   aiFromModel,
+  choiceOf,
   loadAi,
   loadAux,
+  loadSlots,
   saveAi,
   saveAux,
+  saveSlot,
   type AiSettings,
   type AuxModelChoice,
+  type SlotSettings,
 } from "@/lib/ai";
 import {
   CONTEXT_PRESETS,
+  MODEL_KINDS,
   defaultProfile,
   findModel,
   isCustomModel,
-  listModels,
+  kindLabel,
   kindOf,
+  listAllModels,
   listProfiles,
   removeCustomModel,
   removeProfile,
@@ -35,20 +41,18 @@ import styles from "./settings.module.css";
 /**
  * 模型设置（独立窗口）。
  *
- * 三层：**三个 tab（按用途）→ 该用途的模型列表 → 单个模型的设置**。
+ * 两个 tab，对应两件不同的事：
+ *   1. **模型选择**：六类用途（会话 / 压缩 / 排版 / 知识库分片 / 嵌入 / OCR）
+ *      各自「用哪个模型的哪套配置」。这是「指针」，改一次就能换掉。
+ *   2. **模型配置**：模型清单本身 —— 模型 item → 配置 item（网关 + 密钥 + 参数）。
  *
- * 列表里「点行 = 选中这个模型」，「行尾齿轮 = 进它的设置」——
- * 这两件事以前挤在同一个点击上：想看看某条配置，一点就把当前模型换掉了。
+ * 为什么拆开：选型是高频、轻量（换一家试试）；配置是低频、重（填网关和 key）。
+ * 混在一页时，想「换个模型试试」会被一堆字段挡住。
  *
- * 每个模型下可以有若干**配置**（官方 / 公司代理 / 临时 key）。配置是一组
- * 「网关 + 密钥 + 参数」，切换只换指针，不用重填。字段改完即写，没有保存按钮。
+ * 勾永远在最左边：它表示「当前生效」，是行状态而不是行内容。
  */
 
-const TABS: { key: ModelKind; label: string }[] = [
-  { key: "chat", label: "对话" },
-  { key: "embedding", label: "嵌入" },
-  { key: "ocr", label: "OCR" },
-];
+type Tab = "pick" | "manage";
 
 function blank(kind: ModelKind, baseUrl: string): ModelConfig {
   return {
@@ -66,132 +70,120 @@ function blank(kind: ModelKind, baseUrl: string): ModelConfig {
 }
 
 export function ModelSettings() {
-  const [tab, setTab] = useState<ModelKind>("chat");
+  const [tab, setTab] = useState<Tab>("pick");
   const [ai, setAi] = useState(loadAi);
   const [aux, setAux] = useState(loadAux);
-  /**
-   * 详情页显示哪个模型；null = 停在列表。
-   * 支持 `?open=<modelId>` 直接落到某个模型的详情（窗口可以被外部指到具体一条）。
-   */
+  const [slots, setSlots] = useState<SlotSettings>(loadSlots);
+  /** 详情页显示哪个模型；null = 停在列表。支持 `?open=<id>` 直接落进去 */
   const [openId, setOpenId] = useState<string | null>(() =>
     new URLSearchParams(window.location.search).get("open"),
   );
-  /** 新建草稿：还没落盘的模型 */
   const [draft, setDraft] = useState<ModelConfig | null>(null);
   const [dropModel, setDropModel] = useState<ModelConfig | null>(null);
   const [dropProfile, setDropProfile] = useState<ModelProfile | null>(null);
-  /** 模型与配置都存在 localStorage，写完之后用它触发一次重读 */
+  /** localStorage 写完之后用它触发重读 */
   const [tick, setTick] = useState(0);
 
-  const models = useMemo(() => listModels(tab), [tab, tick]);
-  const activeId = tab === "chat" ? ai.model : (aux[tab]?.model ?? "");
-  const activeProfileId = tab === "chat" ? ai.profileId : aux[tab]?.profileId;
-
+  const models = useMemo(() => listAllModels(), [tick]);
   const editing = draft ?? (openId ? (findModel(openId) ?? null) : null);
   const isDraft = draft !== null;
   const custom = editing !== null && (isDraft || isCustomModel(editing.id));
+
   const profiles = useMemo(
     () => (editing && !isDraft ? listProfiles(editing) : []),
     // tick 变了说明磁盘上的配置变了，必须重算
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [editing, tick, isDraft],
   );
-  const current = profiles.find((item) => item.id === activeProfileId) ?? profiles[0] ?? null;
+
+  /* ---------------- 读取当前指针 ---------------- */
+
+  const choiceFor = (kind: ModelKind): AuxModelChoice | null => {
+    if (kind === "chat") {
+      if (!ai.model) return null;
+      return {
+        model: ai.model,
+        profileId: ai.profileId,
+        baseUrl: ai.baseUrl,
+        apiKey: ai.apiKey,
+      };
+    }
+    if (kind === "embedding" || kind === "ocr") return aux[kind];
+    return slots[kind as keyof SlotSettings] ?? null;
+  };
+
+  /** 某个模型被哪几类用途在用：勾与「会话 · 压缩」小字都靠它 */
+  const usedBy = (modelId: string): ModelKind[] =>
+    MODEL_KINDS.map((item) => item.kind).filter((kind) => choiceFor(kind)?.model === modelId);
+
+  const profileUsedBy = (modelId: string, profileId: string): ModelKind[] =>
+    MODEL_KINDS.map((item) => item.kind).filter((kind) => {
+      const choice = choiceFor(kind);
+      return choice?.model === modelId && checkProfile(choice, modelId, profileId);
+    });
 
   /* ---------------- 写入 ---------------- */
 
-  const writeAi = (next: AiSettings) => {
+  const writeAiSettings = (next: AiSettings) => {
     setAi(next);
     saveAi(next);
     void notifySettingsChanged("ai");
   };
 
-  const writeAux = (kind: "embedding" | "ocr", choice: AuxModelChoice | null) => {
-    const next = { ...aux, [kind]: choice };
-    setAux(next);
-    saveAux({ [kind]: choice });
-    if (kind === "embedding") configureKnowledge(choice);
-    void notifySettingsChanged("aux");
-  };
-
-  /** 把某套配置落到运行时设置上（对话写 ai，嵌入/OCR 写 aux） */
-  const applyToRuntime = (model: ModelConfig, profile: ModelProfile) => {
-    if (tab === "chat") {
-      writeAi({
+  const writeChoice = (kind: ModelKind, choice: AuxModelChoice | null) => {
+    if (kind === "chat") {
+      if (!choice) return;
+      const spec = findModel(choice.model);
+      writeAiSettings({
         ...ai,
-        model: model.id,
-        profileId: profile.id,
-        baseUrl: profile.baseUrl || model.baseUrl,
-        apiKey: profile.apiKey,
-        temperature: profile.temperature ?? model.defaultTemperature,
-        reasoning: profile.reasoning ?? model.reasoning[0],
-        contextWindow: profile.contextWindow ?? model.contextWindow,
+        model: choice.model,
+        profileId: choice.profileId,
+        baseUrl: choice.baseUrl.trim() || spec?.baseUrl || ai.baseUrl,
+        apiKey: choice.apiKey,
+        temperature: spec?.defaultTemperature ?? ai.temperature,
+        reasoning: spec?.reasoning[0],
+        contextWindow: spec?.contextWindow ?? ai.contextWindow,
       });
-    } else {
-      writeAux(tab, {
-        model: model.id,
-        profileId: profile.id,
-        baseUrl: profile.baseUrl,
-        apiKey: profile.apiKey,
-      });
+      return;
     }
+    if (kind === "embedding" || kind === "ocr") {
+      const next = { ...aux, [kind]: choice };
+      setAux(next);
+      saveAux({ [kind]: choice });
+      if (kind === "embedding") configureKnowledge(choice);
+      void notifySettingsChanged("aux");
+      return;
+    }
+    saveSlot(kind, choice);
+    setSlots(loadSlots());
+    void notifySettingsChanged("slots");
   };
 
-  /** 点列表一行 = 选中这个模型（用它当前生效的那套配置） */
-  const choose = (model: ModelConfig) => {
-    const list = listProfiles(model);
-    let profile = list.find((item) => item.id === activeProfileId) ?? list[0];
+  const pickModel = (kind: ModelKind, modelId: string) => {
+    if (!modelId) {
+      writeChoice(kind, null);
+      return;
+    }
+    const profile = listProfiles(findModel(modelId) ?? blank(kind, ""))[0];
     if (!profile) {
       // 配置被删光了的模型：选中时补一套默认的，否则选中了也没有可用网关
-      profile = defaultProfile(model);
-      saveProfile(model.id, profile);
+      const spec = findModel(modelId);
+      if (!spec) return;
+      const fresh = defaultProfile(spec);
+      saveProfile(spec.id, fresh);
       setTick((value) => value + 1);
+      writeChoice(kind, choiceOf(modelId, fresh));
+      return;
     }
-    applyToRuntime(model, profile);
+    writeChoice(kind, choiceOf(modelId, profile));
   };
 
-  /**
-   * 正在看配置是否就是当前生效的那套。
-   *
-   * 老数据里 `ai` 没有 profileId（那时还没有「配置」这个概念），
-   * 这时把第一条当作生效的那条 —— 否则第一次打开时没有任何一条打勾，
-   * 用户会以为「当前配置」是空的。
-   */
-  const liveProfileId =
-    editing && activeId === editing.id ? (activeProfileId ?? profiles[0]?.id) : null;
-  const isLive = (profile: ModelProfile) =>
-    editing !== null && activeId === editing.id && liveProfileId === profile.id;
-
-  /** 改配置字段：写盘；如果它正在生效，同时同步到运行时 */
-  const patchProfile = (profile: ModelProfile, patch: Partial<ModelProfile>) => {
-    if (!editing) return;
-    const next = { ...profile, ...patch };
-    saveProfile(editing.id, next);
-    setTick((value) => value + 1);
-    if (isLive(profile)) applyToRuntime(editing, next);
-  };
-
-  /** 选中某套配置 */
-  const activate = (profile: ModelProfile) => {
-    if (!editing) return;
-    applyToRuntime(editing, profile);
-  };
-
-  const addProfile = () => {
-    if (!editing) return;
-    const profile: ModelProfile = {
-      id: `p-${Date.now().toString(36)}`,
-      label: `配置 ${profiles.length + 1}`,
-      baseUrl: editing.baseUrl,
-      apiKey: "",
-      temperature: editing.defaultTemperature,
-      reasoning: editing.reasoning[0],
-      contextWindow: editing.contextWindow,
-    };
-    saveProfile(editing.id, profile);
-    setTick((value) => value + 1);
-    // 新加的这套直接生效：用户点「添加配置」就是想马上用它
-    applyToRuntime(editing, profile);
+  const pickProfile = (kind: ModelKind, modelId: string, profileId: string) => {
+    const spec = findModel(modelId);
+    if (!spec) return;
+    const profile = listProfiles(spec).find((item) => item.id === profileId);
+    if (!profile) return;
+    writeChoice(kind, choiceOf(modelId, profile));
   };
 
   /* ---------------- 模型本身 ---------------- */
@@ -218,7 +210,6 @@ export function ModelSettings() {
     setDraft(null);
     setTick((value) => value + 1);
     setOpenId(model.id);
-    applyToRuntime(model, profile);
   };
 
   const drop = (model: ModelConfig) => {
@@ -226,14 +217,46 @@ export function ModelSettings() {
     removeCustomModel(model.id);
     setOpenId(null);
     setTick((value) => value + 1);
-    if (tab === "chat" && ai.model === model.id) {
-      const fallback = listModels("chat").find((item) => !isCustomModel(item.id));
-      if (fallback) {
-        const first = listProfiles(fallback)[0];
-        if (first) writeAi(aiFromModel(fallback, ai));
+    // 被它占着的用途全部回退：会话回到第一条内置，其余回到「不使用」
+    MODEL_KINDS.forEach((item) => {
+      if (choiceFor(item.kind)?.model !== model.id) return;
+      if (item.kind === "chat") {
+        const fallback = listAllModels().find((entry) => !isCustomModel(entry.id));
+        if (fallback) writeAiSettings(aiFromModel(fallback, ai));
+      } else {
+        writeChoice(item.kind, null);
       }
-    } else if (tab !== "chat" && aux[tab]?.model === model.id) {
-      writeAux(tab, null);
+    });
+  };
+
+  const addProfile = () => {
+    if (!editing) return;
+    const profile: ModelProfile = {
+      id: `p-${Date.now().toString(36)}`,
+      label: `配置 ${profiles.length + 1}`,
+      baseUrl: editing.baseUrl,
+      apiKey: "",
+      temperature: editing.defaultTemperature,
+      reasoning: editing.reasoning[0],
+      contextWindow: editing.contextWindow,
+    };
+    saveProfile(editing.id, profile);
+    setTick((value) => value + 1);
+  };
+
+  const patchProfile = (profile: ModelProfile, patch: Partial<ModelProfile>) => {
+    if (!editing) return;
+    const next = { ...profile, ...patch };
+    saveProfile(editing.id, next);
+    setTick((value) => value + 1);
+    // 它正被某几类用途引用：同步把新参数写进去，否则改了不生效
+    const used = profileUsedBy(editing.id, profile.id);
+    if (used.length > 0) {
+      used.forEach((kind) => {
+        const current = choiceFor(kind);
+        if (!current) return;
+        writeChoice(kind, { ...current, baseUrl: next.baseUrl, apiKey: next.apiKey });
+      });
     }
   };
 
@@ -245,7 +268,6 @@ export function ModelSettings() {
   /* ---------------- 详情 ---------------- */
 
   if (editing) {
-    const kindLabel = editing.kind === "embedding" ? "嵌入" : editing.kind === "ocr" ? "OCR" : "对话";
     return (
       <div className={styles.page}>
         <header className={styles.head}>
@@ -261,7 +283,7 @@ export function ModelSettings() {
         </header>
 
         <section className={styles.group}>
-          <span className={styles.groupTitle}>模型 · {kindLabel}</span>
+          <span className={styles.groupTitle}>模型</span>
           <div className={styles.fields}>
             <Field label="显示名称">
               <Input
@@ -272,18 +294,26 @@ export function ModelSettings() {
                 onChange={(event) => patchModel({ label: event.target.value })}
               />
             </Field>
-            <Field label="模型名">
+            <Field label="模型名 · 接口里的 model 字段">
               <Input
                 value={editing.id}
                 placeholder="qwen3-32b"
                 spellCheck={false}
-                // 保存后的自定义模型不允许改 id：改 id 等于另建一条，会留下孤儿配置
+                // 保存后不允许改 id：改 id 等于另建一条，会留下孤儿配置
                 disabled={!isDraft}
                 onChange={(event) => patchModel({ id: event.target.value })}
               />
             </Field>
-            {editing.kind !== "ocr" && custom && (
-              <Field label="思维强度档位 · 逗号分隔" wide>
+            <Field label="用途 · 只影响它出现在哪些清单里">
+              <Select
+                ariaLabel="用途"
+                value={kindOf(editing)}
+                options={MODEL_KINDS.map((item) => ({ value: item.kind, label: item.label }))}
+                onChange={(value) => patchModel({ kind: value as ModelKind })}
+              />
+            </Field>
+            {kindOf(editing) !== "ocr" && custom && (
+              <Field label="思维强度档位 · 逗号分隔">
                 <Input
                   value={editing.reasoning.join(", ")}
                   placeholder="low, medium, high"
@@ -315,19 +345,28 @@ export function ModelSettings() {
               </div>
               <div className={styles.list}>
                 {profiles.map((profile) => {
-                  const live = isLive(profile);
+                  const used = profileUsedBy(editing.id, profile.id);
                   return (
-                    <div
-                      key={profile.id}
-                      className={cx(styles.row, styles.rowStatic, live && styles.rowOn)}
-                    >
+                    <div key={profile.id} className={cx(styles.row, styles.rowStatic)}>
+                      {/* 勾在最左：它是「这一行正在被用」的状态，不是内容 */}
+                      <span className={styles.rowCheck}>
+                        {used.length > 0 && <Check size={10} />}
+                      </span>
                       <button
                         type="button"
                         className={styles.rowMain}
-                        onClick={() => activate(profile)}
+                        onClick={() => {
+                          const first = used[0] ?? "chat";
+                          pickProfile(first, editing.id, profile.id);
+                        }}
                       >
                         <span className={styles.rowName}>{profile.label}</span>
-                        {live && <Check size={10} className={styles.rowCheck} />}
+                        <span className={styles.rowMeta}>{profile.baseUrl || "沿用网关"}</span>
+                        {used.length > 0 && (
+                          <span className={styles.rowMeta}>
+                            {used.map(kindLabel).join(" · ")}
+                          </span>
+                        )}
                       </button>
                       <Tooltip label="删除这组配置">
                         <Button
@@ -347,82 +386,15 @@ export function ModelSettings() {
               </div>
             </section>
 
-            {current && (
-              <section className={styles.group}>
-                <span className={styles.groupTitle}>
-                  配置内容{isLive(current) ? " · 正在使用" : ""}
-                </span>
-                <div className={styles.fields}>
-                  <Field label="配置名称">
-                    <Input
-                      value={current.label}
-                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                        patchProfile(current, { label: event.target.value })
-                      }
-                    />
-                  </Field>
-                  <Field label="上下文长度">
-                    <Select
-                      ariaLabel="上下文长度"
-                      value={String(current.contextWindow ?? editing.contextWindow)}
-                      options={contextOptions(current.contextWindow ?? editing.contextWindow)}
-                      onChange={(value) =>
-                        patchProfile(current, { contextWindow: Number(value) })
-                      }
-                    />
-                  </Field>
-                  <Field label="接口地址" wide>
-                    <Input
-                      value={current.baseUrl}
-                      spellCheck={false}
-                      placeholder="https://your-gateway/v1"
-                      onChange={(event) => patchProfile(current, { baseUrl: event.target.value })}
-                    />
-                  </Field>
-                  <Field label="API Key" wide>
-                    <PasswordInput
-                      value={current.apiKey}
-                      spellCheck={false}
-                      placeholder={tab === "chat" ? "sk-…" : "留空沿用对话模型"}
-                      onChange={(event) => patchProfile(current, { apiKey: event.target.value })}
-                    />
-                  </Field>
-                  {kindOf(editing) === "chat" && (
-                    <>
-                      <Field label="温度">
-                        <Input
-                          value={String(current.temperature ?? editing.defaultTemperature)}
-                          inputMode="decimal"
-                          onChange={(event) => {
-                            const next = Number(event.target.value.replace(/[^\d.]/g, ""));
-                            // 空输入时先不写：写 0 会把用户正在输入的「0.7」变成 0
-                            if (event.target.value.trim() === "") return;
-                            patchProfile(current, {
-                              temperature: Number.isFinite(next)
-                                ? Math.min(2, Math.max(0, next))
-                                : undefined,
-                            });
-                          }}
-                        />
-                      </Field>
-                      {editing.reasoning.length > 0 && (
-                        <Field label="思维强度">
-                          <Select
-                            ariaLabel="思维强度"
-                            value={current.reasoning ?? editing.reasoning[0] ?? ""}
-                            options={editing.reasoning.map((level) => ({
-                              value: level,
-                              label: level,
-                            }))}
-                            onChange={(value) => patchProfile(current, { reasoning: value })}
-                          />
-                        </Field>
-                      )}
-                    </>
-                  )}
-                </div>
-              </section>
-            )}
+            {profiles.map((profile) => (
+              <ProfileFields
+                key={profile.id}
+                model={editing}
+                profile={profile}
+                live={profileUsedBy(editing.id, profile.id).length > 0}
+                onPatch={(patch) => patchProfile(profile, patch)}
+              />
+            ))}
           </>
         )}
 
@@ -430,7 +402,7 @@ export function ModelSettings() {
           <Confirm
             open
             title={`删除模型「${dropModel.label}」？`}
-            description="模型和它下面的所有配置都会从这台机器上移除。"
+            description="模型和它下面的所有配置都会从这台机器上移除；用到它的用途会回退。"
             onCancel={() => setDropModel(null)}
             onConfirm={() => drop(dropModel)}
           />
@@ -453,53 +425,110 @@ export function ModelSettings() {
     );
   }
 
-  /* ---------------- 列表 ---------------- */
+  /* ---------------- 模型选择 ---------------- */
+
+  if (tab === "pick") {
+    return (
+      <div className={styles.page}>
+        <nav className={styles.tabs} role="tablist">
+          <button type="button" role="tab" aria-selected onClick={() => setTab("pick")}>
+            模型选择
+          </button>
+          <button type="button" role="tab" aria-selected={false} onClick={() => setTab("manage")}>
+            模型配置
+          </button>
+        </nav>
+
+        <div className={styles.pickList}>
+          {MODEL_KINDS.map((item) => {
+            const choice = choiceFor(item.kind);
+            const spec = choice ? findModel(choice.model) : null;
+            const list = spec ? listProfiles(spec) : [];
+            const profile = choice
+              ? list.find((entry) => entry.id === choice.profileId) ?? list[0]
+              : undefined;
+            return (
+              <section key={item.kind} className={styles.group}>
+                <div className={styles.groupHead}>
+                  <span className={styles.groupTitle}>{item.label}</span>
+                  <span className={styles.groupNote}>{item.note}</span>
+                </div>
+                <div className={styles.fields}>
+                  <Field label="模型">
+                    <Select
+                      ariaLabel={`${item.label}模型`}
+                      value={choice?.model ?? ""}
+                      options={[
+                        ...(item.kind === "chat"
+                          ? []
+                          : [{ value: "", label: "不使用" }]),
+                        ...models.map((model) => ({
+                          value: model.id,
+                          label: `${model.label} · ${model.provider}`,
+                        })),
+                      ]}
+                      onChange={(value) => pickModel(item.kind, value)}
+                    />
+                  </Field>
+                  <Field label="配置">
+                    <Select
+                      ariaLabel={`${item.label}配置`}
+                      value={profile?.id ?? ""}
+                      options={
+                        list.length > 0
+                          ? list.map((entry) => ({ value: entry.id, label: entry.label }))
+                          : [{ value: "", label: "—" }]
+                      }
+                      onChange={(value) =>
+                        spec && pickProfile(item.kind, spec.id, value)
+                      }
+                    />
+                  </Field>
+                </div>
+                <span className={styles.hint}>
+                  {spec ? `${spec.label}：${profile?.label ?? "默认"}` : "沿用会话模型"}
+                </span>
+              </section>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  /* ---------------- 模型配置（清单） ---------------- */
 
   return (
     <div className={styles.page}>
       <nav className={styles.tabs} role="tablist">
-        {TABS.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            role="tab"
-            aria-selected={tab === item.key}
-            onClick={() => {
-              setTab(item.key);
-              setOpenId(null);
-              setDraft(null);
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
+        <button type="button" role="tab" aria-selected={false} onClick={() => setTab("pick")}>
+          模型选择
+        </button>
+        <button type="button" role="tab" aria-selected onClick={() => setTab("manage")}>
+          模型配置
+        </button>
       </nav>
 
       <div className={styles.list}>
-        {tab !== "chat" && (
-          <button
-            type="button"
-            className={cx(styles.row, !activeId && styles.rowOn)}
-            onClick={() => {
-              writeAux(tab, null);
-              setOpenId(null);
-            }}
-          >
-            <span className={styles.rowName}>不使用</span>
-          </button>
-        )}
-
         {models.map((model) => {
-          const on = model.id === activeId;
-          const count = listProfiles(model).length;
+          const used = usedBy(model.id);
           return (
-            <div key={model.id} className={cx(styles.row, styles.rowStatic, on && styles.rowOn)}>
-              {/* 点主体 = 选中；右侧齿轮 = 进设置。两件事不能挤在同一个点击上 */}
-              <button type="button" className={styles.rowMain} onClick={() => choose(model)}>
+            <div key={model.id} className={cx(styles.row, styles.rowStatic, used.length > 0 && styles.rowOn)}>
+              {/* 勾在最左：见本文件顶部说明 */}
+              <span className={styles.rowCheck}>{used.length > 0 && <Check size={10} />}</span>
+              <button
+                type="button"
+                className={styles.rowMain}
+                onClick={() => {
+                  setDraft(null);
+                  setOpenId(model.id);
+                }}
+              >
                 <span className={styles.rowName}>{model.label}</span>
                 <span className={styles.rowMeta}>{model.provider}</span>
-                {count > 1 && <span className={styles.rowMeta}>{count} 组配置</span>}
-                {on && <Check size={10} className={styles.rowCheck} />}
+                <span className={styles.rowMeta}>
+                  {used.length > 0 ? used.map(kindLabel).join(" · ") : kindLabel(kindOf(model))}
+                </span>
               </button>
               <Tooltip label="设置">
                 <Button
@@ -519,19 +548,118 @@ export function ModelSettings() {
           );
         })}
 
-        {/* 添加是列表的最后一项：这一页就是「模型清单」，加东西当然在清单末尾 */}
+        {/* 添加是列表的最后一项：这一页就是「模型清单」 */}
         <button
           type="button"
           className={`${styles.row} ${styles.rowAdd}`}
           onClick={() => {
             setOpenId(null);
-            setDraft(blank(tab, tab === "chat" ? ai.baseUrl : (aux[tab]?.baseUrl ?? ai.baseUrl)));
+            setDraft(blank("chat", ai.baseUrl));
           }}
         >
           <span className={styles.rowName}>添加模型</span>
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * 某套配置是否就是某个用途正在用的那套。
+ *
+ * 老数据没有 profileId：那时每个模型只有一套配置，把它当作生效的那条。
+ */
+function checkProfile(choice: AuxModelChoice, modelId: string, profileId: string): boolean {
+  if (choice.model !== modelId) return false;
+  if (choice.profileId) return choice.profileId === profileId;
+  const spec = findModel(modelId);
+  if (!spec) return false;
+  const first = listProfiles(spec)[0];
+  return first?.id === profileId;
+}
+
+/* ==========================================================================
+   一组配置的字段
+   ========================================================================== */
+
+function ProfileFields({
+  model,
+  profile,
+  live,
+  onPatch,
+}: {
+  model: ModelConfig;
+  profile: ModelProfile;
+  live: boolean;
+  onPatch: (patch: Partial<ModelProfile>) => void;
+}) {
+  const kind = kindOf(model);
+  return (
+    <section className={styles.group}>
+      <span className={styles.groupTitle}>
+        配置内容 · {profile.label}
+        {live ? " · 正在使用" : ""}
+      </span>
+      <div className={styles.fields}>
+        <Field label="配置名称">
+          <Input
+            value={profile.label}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              onPatch({ label: event.target.value })
+            }
+          />
+        </Field>
+        <Field label="上下文长度">
+          <Select
+            ariaLabel="上下文长度"
+            value={String(profile.contextWindow ?? model.contextWindow)}
+            options={contextOptions(profile.contextWindow ?? model.contextWindow)}
+            onChange={(value) => onPatch({ contextWindow: Number(value) })}
+          />
+        </Field>
+        <Field label="接口地址" wide>
+          <Input
+            value={profile.baseUrl}
+            spellCheck={false}
+            placeholder="https://your-gateway/v1"
+            onChange={(event) => onPatch({ baseUrl: event.target.value })}
+          />
+        </Field>
+        <Field label="API Key" wide>
+          <PasswordInput
+            value={profile.apiKey}
+            spellCheck={false}
+            placeholder="sk-…"
+            onChange={(event) => onPatch({ apiKey: event.target.value })}
+          />
+        </Field>
+        {kind !== "ocr" && (
+          <Field label="温度">
+            <Input
+              value={String(profile.temperature ?? model.defaultTemperature)}
+              inputMode="decimal"
+              onChange={(event) => {
+                if (event.target.value.trim() === "") return;
+                const next = Number(event.target.value.replace(/[^\d.]/g, ""));
+                onPatch({
+                  temperature: Number.isFinite(next) ? Math.min(2, Math.max(0, next)) : undefined,
+                });
+              }}
+            />
+          </Field>
+        )}
+        {kind !== "ocr" && model.reasoning.length > 0 && (
+          <Field label="思维强度">
+            <Select
+              ariaLabel="思维强度"
+              value={profile.reasoning ?? model.reasoning[0] ?? ""}
+              options={model.reasoning.map((level) => ({ value: level, label: level }))}
+              onChange={(value) => onPatch({ reasoning: value })}
+            />
+          </Field>
+        )}
+      </div>
+    </section>
   );
 }
 
