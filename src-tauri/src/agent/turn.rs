@@ -36,6 +36,11 @@ pub struct TurnResult {
     /// 它**不改 content**：正文原样保留（哪怕是半句旁白），
     /// 给用户的诊断单独挂在消息的 `note` 上 —— 后者不参与模型上下文。
     pub unfinished: Option<Unfinished>,
+    /// 本轮（跨多次请求累加）思考链字数。
+    ///
+    /// 只进请求日志，不进消息：`reasoning=1200 字 / 正文 0 字` 一眼就能区分
+    /// 「想了很久没输出」和「什么都没想就交了白卷」——这正是白卷最难诊断的地方。
+    pub reasoning_chars: usize,
 }
 
 /// 一轮怎么收尾的。判据只有一个来源：服务端的 `finish_reason`。
@@ -67,8 +72,8 @@ fn classify(reason: Option<&str>, reply: &str, has_calls: bool) -> Stop {
     }
 }
 
-/// 没有正常收尾的三种情况。文案是给人看的诊断，不是给模型看的上下文。
-#[derive(Debug, Clone, Copy)]
+/// 没有正常收尾的四种情况。文案是给人看的诊断，不是给模型看的上下文。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unfinished {
     /// 提醒过一次，仍然只调工具、不给正文
     EmptyAfterNudge,
@@ -76,6 +81,8 @@ pub enum Unfinished {
     Truncated,
     /// 轮次用尽还没收尾。`repeat` 表示是被「同工具同参连调」护栏掐断的
     RoundLimit { repeat: bool },
+    /// 被安全过滤拦截：不是模型抽风，也不是白卷，换个说法还能救
+    Filtered,
 }
 
 impl Unfinished {
@@ -94,7 +101,22 @@ impl Unfinished {
                 "模型连续 {MAX_ROUNDS} 轮都在调用工具，没有收尾。已执行 {} 次工具操作，改动已生效。",
                 used.len()
             ),
+            // 用户看到的是一片空白；不写这一句，他分不清是「被安全过滤」还是「模型抽风」
+            Unfinished::Filtered => {
+                "这一轮内容被安全过滤拦截了，没有正文。换个说法或删掉可能触发拦截的表述再试。"
+                    .to_string()
+            }
         }
+    }
+}
+
+/// 白卷的收尾要按事实名字：**真的发出过提醒**才叫「提醒过还是白卷」。
+/// 轮次名额用完时那条提醒根本没发出去，只能说「轮次用尽」。
+fn empty_stop(nudged: bool) -> Unfinished {
+    if nudged {
+        Unfinished::EmptyAfterNudge
+    } else {
+        Unfinished::RoundLimit { repeat: false }
     }
 }
 
@@ -239,6 +261,7 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
     let mut empty_rounds = 0usize;
     let mut repeat = RepeatGuard::default();
     let mut unfinished: Option<Unfinished> = None;
+    let mut reasoning_chars = 0usize;
 
     while rounds < MAX_ROUNDS {
         if cancel.load(Ordering::SeqCst) {
@@ -270,6 +293,7 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
         // 模型在调工具之前往往会先说一句「我看一下」，那句也要留着
         last_reply = outcome.content.clone();
         speech.push_str(&outcome.content);
+        reasoning_chars += outcome.reasoning_chars;
 
         match classify(outcome.finish_reason.as_deref(), &last_reply, !outcome.tool_calls.is_empty()) {
             Stop::Done => {
@@ -279,6 +303,7 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
                     actions: drain_actions(ctx.out),
                     assets: drain_assets(ctx.out),
                     unfinished: None,
+                    reasoning_chars,
                 })
             }
             Stop::Continue => {}
@@ -295,7 +320,8 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
                     )));
                     continue;
                 }
-                unfinished = Some(Unfinished::EmptyAfterNudge);
+                // 没提醒过就别自称提醒过：第 6 轮白卷的真实原因是轮次用尽
+                unfinished = Some(empty_stop(nudged));
                 break;
             }
             Stop::Truncated => {
@@ -308,9 +334,12 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
                 unfinished = Some(Unfinished::Truncated);
                 break;
             }
-            // 内容过滤：再说一遍会被同样掐掉，不浪费一次请求。不给 note ——
-            // 我们不知道被掐掉的是什么，编一句诊断不如让下面的兜底说话
-            Stop::Filtered => break,
+            // 内容过滤：再说一遍会被同样掐掉，所以**不重试**；但状态要说清楚 ——
+            // 用户面对的是一片空白，不告诉他是「被安全过滤」就等于让他以为模型抽风
+            Stop::Filtered => {
+                unfinished = Some(Unfinished::Filtered);
+                break;
+            }
         }
         if cancel.load(Ordering::SeqCst) {
             break;
@@ -387,6 +416,7 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
         actions: drain_actions(ctx.out),
         assets: drain_assets(ctx.out),
         unfinished,
+        reasoning_chars,
     })
 }
 
@@ -491,6 +521,23 @@ mod tests {
         assert!(!guard.hit("list_pages", "{}"));
         assert!(!guard.hit("list_pages", "{}"));
         assert!(guard.hit("list_pages", "{}"));
+    }
+
+    #[test]
+    fn an_empty_last_round_is_a_round_limit_not_a_nudge() {
+        // 第 6 轮白卷：名额已经用完，那条提醒根本发不出去 ——
+        // 名字必须说「轮次用尽」，不能自称「提醒过还是白卷」
+        assert_eq!(classify(None, "", false), Stop::EmptyReply);
+        assert_eq!(empty_stop(false), Unfinished::RoundLimit { repeat: false });
+        // 真发出过提醒、第二轮仍然空，才叫 EmptyAfterNudge
+        assert_eq!(empty_stop(true), Unfinished::EmptyAfterNudge);
+    }
+
+    #[test]
+    fn filtered_says_it_was_blocked_instead_of_playing_dumb() {
+        let text = Unfinished::Filtered.text(&[]);
+        assert!(text.contains("安全过滤"), "{text}");
+        assert!(text.contains("没有正文"), "{text}");
     }
 
     #[test]

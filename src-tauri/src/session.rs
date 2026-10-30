@@ -597,6 +597,9 @@ pub async fn chat_send(
     // 这一轮实际发出去的 system 落一份：终止判定出错时，第一件要查的就是
     // 「模型当时到底看见了什么」。放 logs/ 而不是 pool/ —— 后者是用户材料，
     // 混进去会被当成资产扫出来。写不进去就算了，观测不能影响主流程。
+    // 路径留着：这一轮跑完还要在上面补一行「思考了多少字」——
+    // 那条只能在请求结束后才知道，而这个文件必须在请求前就落地
+    let mut context_log: Option<std::path::PathBuf> = None;
     if let Some(dir) = root.as_ref() {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -609,8 +612,10 @@ pub async fn chat_send(
             .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
             .collect();
         let dir = dir.join("logs").join("context");
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(dir.join(format!("{stamp}-{person}.md")), &system);
+        let path = dir.join(format!("{stamp}-{person}.md"));
+        if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&path, &system).is_ok() {
+            context_log = Some(path);
+        }
     }
 
     let mut messages = vec![ChatMessage::system(system)];
@@ -680,6 +685,17 @@ pub async fn chat_send(
 
     if let Ok(mut running) = state.running.lock() {
         running.remove(&args.key);
+    }
+
+    // 思考链只落日志：它不进消息、不进上下文，但白卷现场没它就没法解释
+    // ——「想了 1200 字却一个字没说」和「什么都没想」是两种完全不同的故障。
+    // 写失败同样只是一个 `let _ =`：日志不能反过来把这一轮搞失败。
+    if let (Some(path), Ok(turn)) = (context_log.as_ref(), &result) {
+        use std::io::Write;
+        let _ = std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .and_then(|mut file| write!(file, "\n\nreasoning={} 字\n", turn.reasoning_chars));
     }
 
     match result {
