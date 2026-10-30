@@ -31,7 +31,7 @@ import { Paper } from "@/components/resume/paper";
 import paperStyles from "@/components/resume/paper.module.css";
 import { reducer } from "./reducer";
 import type { Action } from "./types";
-import { WorkspaceContext, type WorkspaceContextValue, type SaveState } from "./context";
+import { WorkspaceContext, type LayoutKind, type LayoutStatus, type WorkspaceContextValue, type SaveState } from "./context";
 
 /**
  * 初始工作区：空白起步。
@@ -164,7 +164,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [savedSnapshot, setSavedSnapshot] = useState<Workspace | null>(null);
   const [activePageId, setActivePageId] = useState<string | null>(null);
   /** 排版 agent 正在忙的那一页与它手上的动作；纯界面状态，不落盘 */
-  const [layoutStatus, setLayoutStatus] = useState<{ pageId: string; text: string } | null>(null);
+  const [layoutStatus, setLayoutStatus] = useState<LayoutStatus | null>(null);
   const firstRun = useRef(true);
   const toast = useToast();
   /** 等用户点头的写入批次，FIFO：一次只显示一个确认窗，后面来的排队不丢 */
@@ -553,17 +553,41 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     void listen<{ pageId: string }>("layout:started", (event) => {
       if (!alive) return;
       const { pageId } = event.payload;
-      // 同一页已经在显示就别换对象：每轮都换会让状态栏闪一下
+      // 同一页已经在显示就别换对象：每轮都换会让状态栏闪一下。
+      // 换页了才重开秒表 —— 秒表量的是「这一页这一轮跑了多久」。
       setLayoutStatus((prev) =>
-        prev?.pageId === pageId ? prev : { pageId, text: "正在看这一页的版式" },
+        prev?.pageId === pageId
+          ? prev
+          : { pageId, text: "正在看这一页的版式", since: Date.now(), step: 0, kind: "start" },
       );
     }).then(keep);
 
-    void listen<{ pageId: string; detail?: string }>("layout:progress", (event) => {
+    void listen<{
+      pageId: string;
+      kind?: LayoutKind;
+      tool?: string;
+      detail?: string;
+      thoughtChars?: number;
+    }>("layout:progress", (event) => {
       if (!alive) return;
-      const { pageId, detail } = event.payload;
-      if (!detail) return;
-      setLayoutStatus({ pageId, text: detail });
+      const { pageId, kind, detail, thoughtChars } = event.payload;
+      setLayoutStatus((prev) => {
+        // 正常情况下 started 先到；万一没收到，就当场补一个起点，别让状态栏空着
+        const base: LayoutStatus =
+          prev?.pageId === pageId
+            ? prev
+            : {
+                pageId,
+                text: "正在看这一页的版式",
+                since: Date.now(),
+                step: 0,
+                kind: "start",
+              };
+        // 思考只给字数：后端每 60 字发一次，读得出「它还在想」就够，不必粘原文
+        const text =
+          kind === "thinking" ? `思考中 · 已想 ${thoughtChars ?? 0} 字` : (detail ?? base.text);
+        return { pageId, text, since: base.since, step: base.step + 1, kind: kind ?? base.kind };
+      });
     }).then(keep);
 
     void listen<{ pageId: string }>("layout:idle", (event) => {

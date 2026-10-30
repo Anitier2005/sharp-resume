@@ -4,6 +4,28 @@ import type { Action } from "./types";
 
 export type SaveState = "idle" | "saving" | "saved";
 
+/**
+ * 排版这一轮里「正在发生的事」是哪一类。
+ * `start` 是本地造的（后端只发后面三种），用来给秒表一个起点。
+ */
+export type LayoutKind = "start" | "tool_start" | "tool_end" | "thinking";
+
+/**
+ * 页排版 agent 此刻在忙哪一页、忙什么。纯界面状态，不落盘。
+ *
+ * `since` 与 `step` 是给用户看的「还活着」凭证：文案两次变化之间可能隔几十秒，
+ * 秒表每秒在走、步数只在真收到进度时才涨 —— 两者都不许由界面自己编。
+ */
+export interface LayoutStatus {
+  pageId: string;
+  text: string;
+  /** 这一轮开跑的时刻（ms）；后续进度只更新文案，不重置它 */
+  since: number;
+  /** 收到的进度条数：工具开始/结束、每 60 字思考各算一步 */
+  step: number;
+  kind: LayoutKind;
+}
+
 export interface WorkspaceContextValue {
   state: Workspace;
   dispatch: React.Dispatch<Action>;
@@ -42,7 +64,7 @@ export interface WorkspaceContextValue {
    * 页排版 agent 此刻在忙哪一页、忙什么；null = 闲着。
    * 纯界面状态，不落盘：它是「正在发生的事」，不是数据。
    */
-  layoutStatus: { pageId: string; text: string } | null;
+  layoutStatus: LayoutStatus | null;
   /** 实际生效的 UI 字号倍率（已合并系统设置与用户档位） */
   textScale: number;
   /** 系统「文本大小」给出的倍率，已含可读下限 */

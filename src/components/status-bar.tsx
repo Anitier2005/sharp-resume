@@ -1,7 +1,18 @@
+import { useEffect, useState } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { countChars, pageIndex } from "@/lib/doc";
 import { measureTip, TOLERANCE_MAX } from "@/lib/measure";
 import styles from "./status-bar.module.css";
+
+/**
+ * 秒表文案：一分钟以内 `42s`，过了就换成 `1:05`。
+ * 从 `since` 现算而不是累加，标签页被浏览器节流后回到前台也不会落后。
+ */
+function elapsedText(since: number): string {
+  const secs = Math.max(0, Math.floor((Date.now() - since) / 1000));
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+}
 
 /**
  * 窗口底部状态栏（唯一一条，贯通整个宽度）。
@@ -16,6 +27,27 @@ import styles from "./status-bar.module.css";
  */
 export function StatusBar() {
   const { person, resume, page, saveState, layoutStatus, measure } = useWorkspace();
+
+  /**
+   * 秒表的节拍器：一秒一次，只推动本组件重渲染，时间本身不落进 store。
+   *
+   * 依赖只看「当前显示的排版页」：文案每变一次对象就换，拿对象当依赖会把
+   * interval 拆了重建；别页在跑而这里根本不显示时也不该空转。
+   * 没有排版可显示时直接 return，卸载时 clearInterval + alive 双保险。
+   */
+  const busyPageId = layoutStatus && page && layoutStatus.pageId === page.id ? page.id : null;
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!busyPageId) return;
+    let alive = true;
+    const timer = window.setInterval(() => {
+      if (alive) setTick((n) => n + 1);
+    }, 1000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [busyPageId]);
 
   const index = resume ? pageIndex(resume, page?.id ?? null) : -1;
   const chars = person ? countChars(person, page) : 0;
@@ -54,7 +86,11 @@ export function StatusBar() {
             {layoutStatus?.pageId === page.id && (
               <span className={styles.busy}>
                 <i className={styles.dotBusy} />
-                {layoutStatus.text}
+                <span className={styles.busyText}>{layoutStatus.text}</span>
+                <span className={styles.tick}>{elapsedText(layoutStatus.since)}</span>
+                {layoutStatus.step > 0 && (
+                  <span className={styles.steps}>· 第 {layoutStatus.step} 步</span>
+                )}
               </span>
             )}
             <span>

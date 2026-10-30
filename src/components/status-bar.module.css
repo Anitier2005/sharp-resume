@@ -104,16 +104,37 @@
   cursor: default;
 }
 
-/* 排版 agent 正在改这一页：文案可能很长，截断而不是把页码挤出去 */
+/* 排版 agent 正在改这一页：文案会被截断，但秒表与步数是「它还在动」的证据，
+   不能被一起截掉 —— 所以截断下放到 .busyText，容器只负责整体宽度上限 */
 .busy {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  max-width: 220px;
+  min-width: 0;
+  max-width: 280px;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--acc-text);
+}
+
+.busyText {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--acc-text);
+}
+
+/* 秒表：等宽数字，9s → 10s 进位时整行不会左右抖 */
+.tick {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-3);
+}
+
+/* 步数：比文案弱一级的脚注，读法是「到第几下工具了」 */
+.steps {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-4);
 }
 
 .idle {
