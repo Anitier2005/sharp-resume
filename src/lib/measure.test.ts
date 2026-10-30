@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearOrigin, contentVersion, measureTip, originOf, putOrigin } from "./measure";
+import { clearOrigin, contentVersion, measureTip, originOf, pageMetrics, putOrigin } from "./measure";
 import type { PageMeasure, Person, ResumePage } from "@/types";
 
 const person = (patch: Partial<Person> = {}): Person => ({
@@ -154,5 +154,44 @@ describe("原件页数暂存", () => {
     expect(originOf("r1")?.name).toBe("简历.pdf");
     clearOrigin("r1");
     expect(originOf("r1")).toBeNull();
+  });
+});
+
+describe("pageMetrics：一页能装多少 / 这页排了多少", () => {
+  /** 210mm 在 96dpi 下的宽度，和离屏宿主写的是同一个数 */
+  const W = 793.7;
+  /** 16mm 页边距，上下两条 */
+  const PAD_Y = 120.94;
+
+  it("没有页边距时与旧公式完全一致（不受这次修改影响）", () => {
+    const { onePage, contentPx } = pageMetrics({ width: W, height: 2400, padY: 0 });
+    expect(onePage).toBe(W * (297 / 210));
+    expect(contentPx).toBe(2400);
+  });
+
+  it("有页边距时一页变小、页数变大 —— 这才是不偏小 8.9% 的那一版", () => {
+    const height = 2056; // 实测：4248 字的稿子，纸高（含上下页边距）
+    const withPad = pageMetrics({ width: W, height, padY: PAD_Y });
+    const without = pageMetrics({ width: W, height, padY: 0 });
+
+    // 分母少了两条边距 = 一页能装的内容变少
+    expect(withPad.onePage).toBeLessThan(without.onePage);
+    expect(withPad.onePage).toBeCloseTo(W * (297 / 210) - PAD_Y, 2);
+    // 分子也要减：offsetHeight 里的边距不是内容
+    expect(withPad.contentPx).toBeCloseTo(height - PAD_Y, 2);
+
+    const pagesWith = withPad.contentPx / withPad.onePage;
+    const pagesWithout = without.contentPx / without.onePage;
+    // 旧口径 1.83 页，真打印是 2 页；新口径逼近 2（差值来自最后一页没占满）
+    expect(pagesWithout).toBeCloseTo(1.83, 1);
+    expect(pagesWith).toBeGreaterThan(pagesWithout);
+    expect(pagesWith).toBeCloseTo(1.93, 1);
+  });
+
+  it("纸只填满上下页边距时内容为 0：这是空页，不许报 1.00 页", () => {
+    // hook 里 `contentPx <= 0` 直接走 failed("empty")，不会再算出页数
+    const { contentPx } = pageMetrics({ width: W, height: PAD_Y, padY: PAD_Y });
+    expect(contentPx).toBe(0);
+    expect(contentPx <= 0).toBe(true);
   });
 });

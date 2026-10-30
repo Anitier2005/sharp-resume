@@ -138,6 +138,32 @@ interface Snapshot {
 }
 
 /**
+ * 一页能装多少内容、这页实际排了多少 —— 页数的整套换算只有这两行。
+ *
+ * 为什么必须减 `padY`：`A4_RATIO` 把纸宽换成的是**整张纸高 297mm**，而纸自己的
+ * 上下内边距就是页边距（离屏宿主按打印口径给了 16mm）。那 32mm 是排不了字的，
+ * 拿全高当分母等于把一页说大 12%，页数系统性偏小 —— 明明两页会说成 1.83 页。
+ * 分子同理：`offsetHeight` 含上下边距，不减就是把误差从分母挪到分子。
+ *
+ * 抽成纯函数只为它值得一个单测：这两个数错了，模型看到的页数就跟着错，
+ * 而那是它决定「压字号还是砍内容」的唯一依据。
+ */
+export function pageMetrics(input: {
+  /** 纸的 offsetWidth */
+  width: number;
+  /** 纸的 offsetHeight（含上下页边距） */
+  height: number;
+  /** 纸的上下内边距之和，也就是上下一共多少页边距 */
+  padY: number;
+}): { onePage: number; contentPx: number } {
+  const { width, height, padY } = input;
+  return {
+    onePage: width * A4_RATIO - padY,
+    contentPx: height - padY,
+  };
+}
+
+/**
  * 从离屏宿主量这一页有几页。
  *
  * 为什么不量预览那份：默认视图是编辑，预览根本不在 DOM 里；而两份各算一次必然
@@ -178,7 +204,17 @@ export function usePageMeasure(input: {
       setResult({ pageId, status: "unknown", version: okVersion, content, reason });
 
     if (!paper || !paper.offsetWidth) return failed("no-preview");
-    const contentPx = paper.offsetHeight;
+    const style = getComputedStyle(paper);
+    // 纸的上下内边距就是页边距（离屏宿主按打印口径给的 16mm）。
+    // 一页能装的内容 = 整张纸高 − 上下页边距；那两个数只有 DOM 知道，
+    // 不要再写死 265mm —— 页边距是可配的，写死就是第二个漂移源。
+    const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+    const { onePage, contentPx } = pageMetrics({
+      width: paper.offsetWidth,
+      height: paper.offsetHeight,
+      padY,
+    });
+    // 判空必须走在减完之后：只填满上下边距的纸，内容其实是 0
     if (contentPx <= 0) return failed("empty");
     if (!fontsReady.current) return failed("fonts");
 
@@ -201,9 +237,8 @@ export function usePageMeasure(input: {
       return;
     }
 
-    const onePage = paper.offsetWidth * A4_RATIO;
     // 行高读实测值：把溢出量折成「多少行正文」比「超出 0.18 页」好懂
-    const lineHeight = parseFloat(getComputedStyle(paper).lineHeight) || LINE_HEIGHT_FALLBACK;
+    const lineHeight = parseFloat(style.lineHeight) || LINE_HEIGHT_FALLBACK;
     okVersion += 1;
     last.current = { content, onePage, contentPx, lineHeight };
     stopTimeout();
