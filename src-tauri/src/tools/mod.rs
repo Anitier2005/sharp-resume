@@ -559,10 +559,15 @@ pub const TOOLS: &[Tool] = &[
         name: "view_asset",
         description: "把一份材料变成「这一轮你能看见的图片」：图片直接附原件，PDF 逐页渲染。\
                       想确认证件照合不合格、想看 PDF 原件怎么排的、或用户问「你看得到吗」时用它。\
+                      排版时也用它看「原件样张」—— 那一页是从原件改编来的，版式以那张图为准。\
                       附上的图片在下一轮消息里；PDF 渲染出的页也会进材料清单。只对能看图的模型有效。",
         params: view::params,
         run: view::render,
-        scopes: &[Scope::Session],
+        // 排版侧也要看图：原件样张是它唯一的版式依据。只给会话的话，
+        // describe_page 里那句「调 view_asset 看原件」就是一句空话 —— 它会拿着
+        // 一个 assetId 去要一个越权的工具。`convert_image` 本来就在 EVERYONE 里，
+        // 排版早就有一个会写池子的工具，这一条不多开一层权限。
+        scopes: EVERYONE,
         writes: true,
     },
     Tool {
@@ -787,7 +792,7 @@ mod tests {
         // 工具数就是能力边界的快照：少一个说明注册时漏了，多一个说明有人偷偷
         // 给某个角色开了口子，两者都该在这里被看见
         assert_eq!(session.len(), 41, "会话 agent 的工具数变了：{session:?}");
-        assert_eq!(layout.len(), 9, "排版 agent 的工具数变了：{layout:?}");
+        assert_eq!(layout.len(), 10, "排版 agent 的工具数变了：{layout:?}");
 
         // 会话 agent：能读、能转交、能转图，但不能自己动版面
         assert!(session.contains(&"request_layout"));
@@ -798,9 +803,10 @@ mod tests {
         // 目标页数只给会话：排版 agent 不改内容，也不该动「压到几页」这个约定
         assert!(session.contains(&"set_target_pages"));
         assert!(!layout.contains(&"set_target_pages"));
-        // PDF 渲染给自己看：只有会话需要，排版 agent 拿到的是结构化内容
+        // 看图两边都要：会话要确认证件照 / 看 PDF 原件，排版要看「原件样张」——
+        // 样张是它判断档位、页头、照片位置的唯一依据。抽图仍然只给会话
         assert!(session.contains(&"view_asset"));
-        assert!(!layout.contains(&"view_asset"));
+        assert!(layout.contains(&"view_asset"));
         // 知识库是只读检索：会话能查、排版不能（排版不改内容，查事实没有落点）
         assert!(session.contains(&"search_knowledge"));
         assert!(session.contains(&"read_knowledge"));

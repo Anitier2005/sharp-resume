@@ -489,7 +489,7 @@ fn describe_page(args: &LayoutArgs, facts: &crate::agent::facts::PageFacts) -> S
     {
         out.push_str(&format!(
             "\n## 原件样张\n\
-             这一页的内容来自一份原件，原件长什么样可以自己看：调 view，参数 assetId = {id}。\n\
+             这一页的内容来自一份原件，原件长什么样可以自己看：调 view_asset，参数 assetId = {id}。\n\
              原件是「长什么样」的唯一依据；不要凭审美另起一套。看不清版式就照结构化生成，不要自己发明版式。\n\
              这张图只是参考：不要把它当页面上的图片块引用。\n"
         ));
@@ -517,7 +517,7 @@ async fn run_turn(
         args.origin.clone(),
         None,
     );
-    // 排版侧也要知道「这一轮到底能不能看图」：它会在 `view` 里渲染页面给自己看，
+    // 排版侧也要知道「这一轮到底能不能看图」：`view_asset` 拿原件样张回来给自己看，
     // 能力是三态里唯一靠实测的那一栏，不许由提示词假定。
     let capability = crate::capability::resolve(&args.base_url, &args.model, &args.api_key);
     let mut system = SYSTEM.replace("{{page}}", &describe_page(args, &facts));
@@ -868,7 +868,11 @@ mod tests {
         let text = describe_page(&args, &no_facts());
         assert!(text.contains("## 原件样张"), "{text}");
         assert!(text.contains("assetId = a-sheet"), "要给可调的 assetId：{text}");
-        assert!(text.contains("view"), "{text}");
+        // 工具名必须是注册表里真有的那个：写成 `view` 的话模型调的是一个不存在的工具，
+        // 字符串断言照样能过，真机上却直接断线。工具是否真有由
+        // `tools::tests::capability_map_is_one_line_per_tool` 盯着（排版侧必须有 view_asset）
+        assert!(text.contains("调 view_asset"), "{text}");
+        assert!(!text.contains("调 view，"), "别把工具名写短：{text}");
         assert!(text.contains("唯一依据"), "{text}");
         // 样张不是页面内容：它不该混进「可用图片」，否则模型会把它当图片块引用
         assert!(!text.contains("可用图片"), "{text}");
@@ -881,6 +885,159 @@ mod tests {
         let text = describe_page(&sample(), &no_facts());
         assert!(!text.contains("原件样张"), "{text}");
         assert!(!text.contains("assetId ="), "{text}");
+    }
+
+    /* ---------- 提示词 ↔ 工具表一致性护栏 ---------- */
+
+    /// 从「调 XX（参数 YY）」这种句式里，抽出被点名的工具与参数。
+    ///
+    /// 只认这一种句式，是刻意的取舍：提示词里到处是 `parts`、`html`、`compact`
+    /// 这类反引号词，按反引号扫会把它们当成工具名；而「调 XX」在中文里没有第二种
+    /// 意思 —— 写了能调，就必须真能调。**代价**：散落在普通句子里的工具名抓不到。
+    /// 所以提示词要统一用「调 `X`」「参数 `Y`」的写法，这是可执行的约定，不是免责声明。
+    ///
+    /// 参数名只取工具名之后、同一句（到 `。` 或换行）之内跟在「参数」后面的那个词。
+    fn called_tools(text: &str) -> Vec<(String, Vec<String>)> {
+        let chars: Vec<char> = text.chars().collect();
+        let word = |from: usize| -> usize {
+            let mut cursor = from;
+            while cursor < chars.len()
+                && (chars[cursor].is_ascii_alphanumeric() || chars[cursor] == '_')
+            {
+                cursor += 1;
+            }
+            cursor
+        };
+        let mut found = Vec::new();
+        for (index, ch) in chars.iter().enumerate() {
+            if *ch != '调' {
+                continue;
+            }
+            // 跳过「调」与名字之间的空格与反引号：「调 `view_asset`」和「调 view」都认
+            let mut cursor = index + 1;
+            while cursor < chars.len() && (chars[cursor] == ' ' || chars[cursor] == '`') {
+                cursor += 1;
+            }
+            let start = cursor;
+            cursor = word(start);
+            if cursor == start || !chars[start].is_ascii_lowercase() {
+                continue; // 「调一次」「调整」这类不是工具名
+            }
+            let name: String = chars[start..cursor].iter().collect();
+
+            // 同一句里点名的参数：到句号或换行为止
+            let mut end = cursor;
+            while end < chars.len() && chars[end] != '。' && chars[end] != '\n' {
+                end += 1;
+            }
+            let tail: String = chars[cursor..end].iter().collect();
+            let mut params = Vec::new();
+            let mut rest = tail.as_str();
+            while let Some(at) = rest.find("参数") {
+                let after = &rest[at + "参数".len()..];
+                let trimmed = after.trim_start_matches(|c: char| c == ' ' || c == '`');
+                let param_end = trimmed
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .unwrap_or(trimmed.len());
+                let param = &trimmed[..param_end];
+                if !param.is_empty() && param.starts_with(|c: char| c.is_ascii_alphabetic()) {
+                    params.push(param.to_string());
+                }
+                rest = after;
+            }
+            found.push((name, params));
+        }
+        found
+    }
+
+    /// 提示词里「调 XX」点到的工具、「参数 YY」点到的参数，必须真的存在。
+    ///
+    /// 为什么要这条：`view` 那次和更早的 `set_field` 那次是同一个形状 —— 文案读起来
+    /// 毫无问题，单测只断言「这里有个词」，全绿；真机上模型第一步就撞「没有名为 XX
+    /// 的工具」，或者工具对了、参数名错了，再撞「找不到材料 」。字符串断言永远抓不到
+    /// 这类错，因为它核的是「文案里有这句话」，不是「这句话在真机上行得通」。
+    ///
+    /// 这里把「调 XX」当调用点抽出来，逐个去**真实的** `specs(Scope::Layout)` 核对：
+    /// 提示词写错了、工具清单变了、参数改名了，都在这儿红。
+    #[test]
+    fn every_tool_the_layout_prompt_tells_it_to_call_really_exists() {
+        let specs = crate::tools::specs(Scope::Layout);
+        let specs = specs.as_array().expect("specs 是数组");
+
+        let mut args = sample();
+        args.workspace["people"][0]["resumes"][0]["originSheet"] = json!({
+            "id": "a-sheet",
+            "kind": "image",
+            "name": "简历 样张.jpg",
+            "stored": "abcd1234.jpg"
+        });
+
+        let sources = [
+            ("prompts/layout.md", SYSTEM.to_string()),
+            ("describe_page（有样张）", describe_page(&args, &no_facts())),
+            ("describe_page（无样张）", describe_page(&sample(), &no_facts())),
+        ];
+
+        let mut seen: Vec<String> = Vec::new();
+        for (where_, text) in sources {
+            for (name, params) in called_tools(&text) {
+                seen.push(name.clone());
+                let tool = specs
+                    .iter()
+                    .find(|item| item["function"]["name"] == name.as_str())
+                    .unwrap_or_else(|| {
+                        panic!("{where_} 让模型调 {name}，但排版 agent 的工具表里没有它")
+                    });
+
+                let required = tool["function"]["parameters"]["required"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                for param in params {
+                    assert!(
+                        required.contains(&json!(param)),
+                        "{where_} 让模型用 {name} 的参数 {param}，但它只收 {required:?}"
+                    );
+                }
+            }
+        }
+
+        // 抽不到东西说明护栏本身失效了（句式改了就没人盯着了），比漏检更该红
+        assert!(
+            seen.len() >= 3,
+            "一个「调 XX」都没抽到，护栏失效：句式是不是改了？{seen:?}"
+        );
+        for needed in ["read_layout_guide", "view_asset", "set_page_layout"] {
+            assert!(seen.iter().any(|name| name == needed), "漏抽了 {needed}：{seen:?}");
+        }
+    }
+
+    /// 参数名单独钉一次：`view_asset` 收的是 `assetId`，`stored` 是池里的寻址名，
+    /// 只在工具内部用。名字对了、参数错了，真机上照样是一句「找不到材料  」。
+    #[test]
+    fn view_asset_is_told_the_parameter_it_really_takes() {
+        let specs = crate::tools::specs(Scope::Layout);
+        let view = specs
+            .as_array()
+            .and_then(|list| list.iter().find(|item| item["function"]["name"] == "view_asset"))
+            .expect("排版侧必须有 view_asset（原件样张是它唯一的版式依据）");
+        assert_eq!(
+            view["function"]["parameters"]["required"],
+            json!(["assetId"]),
+            "view_asset 的参数改了，提示词和 describe_page 要跟着改"
+        );
+
+        let mut args = sample();
+        args.workspace["people"][0]["resumes"][0]["originSheet"] = json!({
+            "id": "a-sheet",
+            "kind": "image",
+            "name": "简历 样张.jpg",
+            "stored": "abcd1234.jpg"
+        });
+        let text = describe_page(&args, &no_facts());
+        assert!(text.contains("assetId = a-sheet"), "{text}");
+        assert!(!text.contains("stored ="), "stored 是池内名，不是参数：{text}");
+        assert!(!SYSTEM.contains("stored ="), "提示词把池内名当参数了");
     }
 
     /// 整页原件页本来就不排版，也不必叫它去 view 自己对
