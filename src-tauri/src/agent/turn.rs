@@ -16,9 +16,14 @@ use serde_json::Value;
 use crate::net::{self, AiRequest, ChatMessage, StreamChunk};
 use crate::tools::{Scope, ToolCtx};
 
-const MAX_ROUNDS: usize = 6;
-
-/// 连续两轮白卷就停：提醒过一次还是不说，再问第三次也一样。
+/// **没有轮次上限。** 这里只记一件事：停下来的理由必须是「它绕圈」或「它不说话」，
+/// 不是「它做了几次」。
+///
+/// 为什么去掉数字帽：一次「还原整份简历」要读全文、渲染页图、读人、读页、抽图、
+/// 写字段 —— 实测 8 次工具操作、6 个来回就打满，最后一个来回刚拿到图就被掐断，
+/// 用户看到的是「用满了 6 轮」。那是把「做得慢」当成「出问题了」。
+/// 真正的死循环由两条盯着：同一工具同参数连调 3 次（`RepeatGuard`）、
+/// 连续两轮白卷（`MAX_EMPTY_ROUNDS`）。用户随时可以按停止。
 const MAX_EMPTY_ROUNDS: usize = 2;
 
 pub struct TurnResult {
@@ -79,8 +84,8 @@ pub enum Unfinished {
     EmptyAfterNudge,
     /// 续写过一次，仍然被长度截断
     Truncated,
-    /// 轮次用尽还没收尾。`repeat` 表示是被「同工具同参连调」护栏掐断的
-    RoundLimit { repeat: bool },
+    /// 同一工具同参数连续调了 3 次 —— 这是**唯一**会被主动掐断的情况
+    Loop,
     /// 被安全过滤拦截：不是模型抽风，也不是白卷，换个说法还能救
     Filtered,
 }
@@ -93,15 +98,8 @@ impl Unfinished {
                 join(used)
             ),
             Unfinished::Truncated => "这一轮输出被长度截断，内容可能不完整。".to_string(),
-            Unfinished::RoundLimit { repeat: true } => format!(
+            Unfinished::Loop => format!(
                 "同一个工具同样参数连续调了 3 次，这一轮没有收尾。已执行 {} 次工具操作，改动已生效。",
-                used.len()
-            ),
-            // 这条要同时盖住两种现场：一直调工具、以及最后一轮交白卷。
-            // 说「连续 N 轮都在调用工具」对后者是假话（那一轮它没调），
-            // 而两种现场的处置动作完全一样（这一轮到此为止），不值得写两套措辞。
-            Unfinished::RoundLimit { repeat: false } => format!(
-                "模型用满了 {MAX_ROUNDS} 轮仍然没有收尾。已执行 {} 次工具操作，改动已生效。",
                 used.len()
             ),
             // 用户看到的是一片空白；不写这一句，他分不清是「被安全过滤」还是「模型抽风」
@@ -110,16 +108,6 @@ impl Unfinished {
                     .to_string()
             }
         }
-    }
-}
-
-/// 白卷的收尾要按事实名字：**真的发出过提醒**才叫「提醒过还是白卷」。
-/// 轮次名额用完时那条提醒根本没发出去，只能说「轮次用尽」。
-fn empty_stop(nudged: bool) -> Unfinished {
-    if nudged {
-        Unfinished::EmptyAfterNudge
-    } else {
-        Unfinished::RoundLimit { repeat: false }
     }
 }
 
@@ -255,9 +243,6 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
     let mut speech = String::new();
     let mut used: Vec<String> = Vec::new();
     let mut with_tools = true;
-    // 轮次与「上一次请求说了什么」都要显式记着：终止判定读的是 finish_reason，
-    // 而「截断续写的上限」「白卷提醒的上限」都按请求次数算，不按 for 的下标算
-    let mut rounds = 0usize;
     // 每次请求的正文：终止判定与「说完了」的判据都是它，别用累计的 speech 去判
     let mut last_reply: String;
     let mut nudged = false;
@@ -267,11 +252,10 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
     let mut unfinished: Option<Unfinished> = None;
     let mut reasoning_chars = 0usize;
 
-    while rounds < MAX_ROUNDS {
+    loop {
         if cancel.load(Ordering::SeqCst) {
             break;
         }
-        rounds += 1;
 
         let mut request = AiRequest {
             base_url: template.base_url.clone(),
@@ -316,7 +300,7 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
                 // 白卷：工具结果已经在上面了，它只是没说结论。提醒一次就好 ——
                 // 提醒第二次一定还是白卷，那不如把「没说完」如实告诉用户。
                 // 还要留得出一次请求：轮次已经烧完时提醒也发不出去
-                if !nudged && !too_many_empty(empty_rounds) && rounds < MAX_ROUNDS {
+                if !nudged && !too_many_empty(empty_rounds) {
                     nudged = true;
                     messages.push(ChatMessage::user(format!(
                         "你刚才调用了 {}，结果已经在上面。用一两句话告诉我结论；还需要工具就继续调。",
@@ -324,13 +308,13 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
                     )));
                     continue;
                 }
-                // 没提醒过就别自称提醒过：第 6 轮白卷的真实原因是轮次用尽
-                unfinished = Some(empty_stop(nudged));
+                // 走到这里说明提醒已经发过（第一条白卷必定被提醒）
+                unfinished = Some(Unfinished::EmptyAfterNudge);
                 break;
             }
             Stop::Truncated => {
                 // 截断不是模型的错，是预算的错：让它接着写比从头再来便宜
-                if !continued && rounds < MAX_ROUNDS {
+                if !continued {
                     continued = true;
                     messages.push(ChatMessage::user("继续，接着刚才没写完的部分说。"));
                     continue;
@@ -359,7 +343,7 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
 
             // 先判护栏再执行：连到第 3 次的那一次调用没有意义，不做
             if repeat.hit(&name, &call.function.arguments) {
-                unfinished = Some(Unfinished::RoundLimit { repeat: true });
+                unfinished = Some(Unfinished::Loop);
                 tripped = true;
                 break;
             }
@@ -405,15 +389,9 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
         }
     }
 
-    // 走到这里只有一种正常原因：轮次烧完了还没收尾。
-    // 取消是另一条路（用户按了停止，不算「模型没说完」），不能混进来。
-    if unfinished.is_none() && !cancel.load(Ordering::SeqCst) && rounds >= MAX_ROUNDS {
-        unfinished = Some(Unfinished::RoundLimit { repeat: false });
-    }
+    // 走到这里只有两种原因：用户按了停止，或者被 `Loop` 护栏掐断。
+    // 没有「轮次用尽」这一支了 —— 不设上限。
 
-    if speech.is_empty() {
-        speech.push_str("（这一轮没有产出正文。可能是模型一直在调工具，或请求被中断。）");
-    }
     Ok(TurnResult {
         content: speech,
         used,
@@ -498,16 +476,13 @@ mod tests {
     }
 
     #[test]
-    fn round_limit_counts_the_tool_calls_it_did() {
+    fn the_loop_guard_counts_the_tool_calls_it_did() {
         let used = vec!["read_page".to_string(); 4];
-        let text = Unfinished::RoundLimit { repeat: false }.text(&used);
-        assert!(text.contains(&MAX_ROUNDS.to_string()), "{text}");
+        let text = Unfinished::Loop.text(&used);
+        assert!(text.contains("同样参数连续调了 3 次"), "{text}");
         assert!(text.contains("已执行 4 次工具操作"), "{text}");
-        // 这一支同时盖住「一直调工具」和「最后一轮白卷」，所以不能说每轮都在调工具
-        assert!(!text.contains("都在调用工具"), "{text}");
-        // 被「同工具同参」护栏掐断时要换个说法，否则用户以为只是轮次多
-        let repeat = Unfinished::RoundLimit { repeat: true }.text(&used);
-        assert!(repeat.contains("同样参数连续调了 3 次"), "{repeat}");
+        // 不设轮次上限之后，没有任何一句该提「轮次用尽」（「这一轮」是正常措辞）
+        assert!(!text.contains("轮次"), "别再提轮次：{text}");
     }
 
     /* ---------- 两条护栏 ---------- */
@@ -530,13 +505,13 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_last_round_is_a_round_limit_not_a_nudge() {
-        // 第 6 轮白卷：名额已经用完，那条提醒根本发不出去 ——
-        // 名字必须说「轮次用尽」，不能自称「提醒过还是白卷」
+    fn an_empty_reply_stops_rather_than_spinning_forever() {
+        // 白卷只有一种收尾：提醒过一次还是空。不设上限之后不存在
+        // 「名额用完所以没提醒」这种情况，别再留着那个分支的说法
         assert_eq!(classify(None, "", false), Stop::EmptyReply);
-        assert_eq!(empty_stop(false), Unfinished::RoundLimit { repeat: false });
-        // 真发出过提醒、第二轮仍然空，才叫 EmptyAfterNudge
-        assert_eq!(empty_stop(true), Unfinished::EmptyAfterNudge);
+        let text = Unfinished::EmptyAfterNudge.text(&["read_page".to_string()]);
+        assert!(text.contains("read_page"), "{text}");
+        assert!(!text.contains("轮次"), "{text}");
     }
 
     #[test]
