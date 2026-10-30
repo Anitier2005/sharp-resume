@@ -24,7 +24,7 @@ import {
   type AskQuestion,
 } from "@/lib/agent-actions";
 import { submitLayout } from "@/lib/layout";
-import { clearOrigin, putOrigin } from "@/lib/measure";
+import { clearOrigin, originOf, putOrigin } from "@/lib/measure";
 import { AskForm } from "./ask-form";
 import { displayName } from "@/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -76,6 +76,7 @@ export function ChatPanel() {
     resume,
     page,
     measure,
+    measureOf,
     dispatch,
     setActivePageId,
     applyOps,
@@ -266,10 +267,15 @@ export function ChatPanel() {
         page: target,
         state,
         kind: "request",
+        // 实测必须跟着走：不带的话排版 agent 看到的是「这一页还没量到」，
+        // 它只能在看不见页数的情况下凭字数猜，压版就成了闭眼开方子。
+        // 每一页都有自己的离屏实测，所以这里按目标页取，不是按当前页。
+        measure: measureOf(target.id),
+        origin: originOf(resume.id),
         text: brief.trim() || "请检查这一页的版式。",
       });
     },
-    [person, resume, page, state],
+    [person, resume, page, state, measureOf],
   );
 
   /**
@@ -364,6 +370,8 @@ export function ChatPanel() {
           page: targetPage,
           state,
           kind: "request",
+          measure: measureOf(targetPage.id),
+          origin: originOf(resume.id),
           text: `会话 agent 针对你上一个问题的答复${where}：\n${body}`,
         });
       };
