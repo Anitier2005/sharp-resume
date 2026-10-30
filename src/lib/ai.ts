@@ -145,19 +145,18 @@ export function saveAux(patch: Partial<AuxSettings>): void {
    ========================================================================== */
 
 /**
- * 这三类同样不是「当前对话用哪个模型」，而是「某件事用哪个模型」。
+ * 这两类同样不是「当前对话用哪个模型」，而是「某件事用哪个模型」。
  * 存在独立键里，缺省 = 沿用会话模型（用户不配也能用）。
  */
-export type SlotKind = "compact" | "layout" | "chunk";
+export type SlotKind = "compact" | "chunk";
 
 export interface SlotSettings {
   compact: AuxModelChoice | null;
-  layout: AuxModelChoice | null;
   chunk: AuxModelChoice | null;
 }
 
 const SLOTS_KEY = "slots:v1";
-const EMPTY_SLOTS: SlotSettings = { compact: null, layout: null, chunk: null };
+const EMPTY_SLOTS: SlotSettings = { compact: null, chunk: null };
 
 export function loadSlots(): SlotSettings {
   try {
@@ -166,7 +165,6 @@ export function loadSlots(): SlotSettings {
     const parsed = JSON.parse(raw) as Partial<SlotSettings>;
     return {
       compact: pickChoice(parsed.compact),
-      layout: pickChoice(parsed.layout),
       chunk: pickChoice(parsed.chunk),
     };
   } catch {

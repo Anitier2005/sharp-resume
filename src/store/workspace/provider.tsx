@@ -8,30 +8,20 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
-import type { Asset, Block, PageNote, Resume, Workspace } from "@/types";
+import type { Block, Resume, Workspace } from "@/types";
 import { AUTO_TEXT_SCALE_FLOOR, displayName } from "@/types";
 import { EMPTY_WORKSPACE } from "@/data/empty";
 import { loadWorkspace, saveWorkspace } from "@/lib/storage";
-import { describeChange, diff, flatten, type Flat } from "@/lib/changes";
-import { submitLayout } from "@/lib/layout";
-import { originOf, TOLERANCE_MAX, usePaperMeasures } from "@/lib/measure";
+import { usePaperMeasures } from "@/lib/measure";
 import { A4_W_PX } from "@/lib/paper-size";
-import {
-  applyAgentActions,
-  chatBridge,
-  isDestructiveOp,
-  layoutQuestion,
-  needsConfirm,
-} from "@/lib/agent-actions";
+import { chatBridge, isDestructiveOp, needsConfirm } from "@/lib/agent-actions";
 import { uid } from "@/lib/uid";
-import { useToast } from "@/components/ui/toast-context";
 import { Confirm } from "@/components/ui/confirm";
 import { Paper } from "@/components/resume/paper";
 import paperStyles from "@/components/resume/paper.module.css";
 import { reducer } from "./reducer";
 import type { Action } from "./types";
-import { WorkspaceContext, type LayoutKind, type LayoutStatus, type WorkspaceContextValue, type SaveState } from "./context";
+import { WorkspaceContext, type WorkspaceContextValue, type SaveState } from "./context";
 
 /**
  * 初始工作区：空白起步。
@@ -40,16 +30,6 @@ import { WorkspaceContext, type LayoutKind, type LayoutStatus, type WorkspaceCon
  * 那个模式已经删掉，示例数据也一并停了 —— 需要样例就在界面里自己建。
  */
 const INITIAL_WORKSPACE: Workspace = EMPTY_WORKSPACE;
-
-/** 后端排版跑完后推回来的动作 */
-interface LayoutApplied {
-  personId: string;
-  resumeId: string;
-  pageId: string;
-  actions: unknown[];
-  /** 本轮工具新产出的材料（图片转化）。与动作一起到，因为它们可能互为因果 */
-  assets?: Asset[];
-}
 
 /* ==========================================================================
    确认门：把「要删什么」翻译成人话
@@ -148,14 +128,8 @@ function describeDeletions(state: Workspace, ops: Action[]): string[] {
 
 
 /* ==========================================================================
-   自动自查（F-010）
+   离屏实测上限
    ========================================================================== */
-
-/** 同一页同一件事最多自动投几轮，再压不动就该人决定了 */
-const AUTO_ROUNDS_MAX = 3;
-
-/** 一帧里的多次测量只投一次：排版跑一轮是模型调用，不能每帧都花一次 */
-const AUTO_DEBOUNCE_MS = 300;
 
 /**
  * 离屏实测的最多页数：每页是一张真 A4（793.7px 宽）的完整渲染，
@@ -169,14 +143,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // 上次落盘的快照：与 state 不是同一个对象即说明有未保存的改动，由它派生保存状态
   const [savedSnapshot, setSavedSnapshot] = useState<Workspace | null>(null);
   const [activePageId, setActivePageId] = useState<string | null>(null);
-  /** 排版 agent 正在忙的那一页与它手上的动作；纯界面状态，不落盘 */
-  const [layoutStatus, setLayoutStatus] = useState<LayoutStatus | null>(null);
   const firstRun = useRef(true);
-  const toast = useToast();
   /** 等用户点头的写入批次，FIFO：一次只显示一个确认窗，后面来的排队不丢 */
   const [batches, setBatches] = useState<PendingBatch[]>([]);
-  /** 排版提问的防抖表：同一页 5 秒内只让会话 agent 跑一轮，防止两边互相叫起来 */
-  const askAt = useRef(new Map<string, number>());
 
   // 启动时载入
   useEffect(() => {
@@ -225,8 +194,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   /**
    * 离屏测量宿主：每页一份 `.wrap > Paper`，实测只从这里取，预览那份只管显示。
    *
-   * 为什么不是只量当前页：内容变更触发的那条路会遍历 `resume.pages`，
-   * 非当前页也得拿得到自己的实测 —— 否则模型永远在「这一页还没量到」。
+   * 为什么不是只量当前页：会话自己排版，`chat_send` 带的 `measure` 是它唯一
+   * 能知道「这一页压到几页了」的来源；它可能问的是手上那一页而不是用户此刻
+   * 看的那页，所以每一页都得有自己的实测。
    */
   const measureHost = useRef<HTMLDivElement | null>(null);
   /** 上一次提示过的总页数：只在超过上限且页数变化时提示一次，别每次敲键都刷 console */
@@ -253,13 +223,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const measure = page ? (measures[page.id] ?? null) : null;
 
   const measureOf = useCallback((pageId: string) => measures[pageId] ?? null, [measures]);
-
-  /**
-   * 内容变更那条路挂在 500ms 防抖里：把 measureOf 放 ref，
-   * 免得每次量出一个新数就把防抖计时器重置一遍。
-   */
-  const measureOfRef = useRef(measureOf);
-  measureOfRef.current = measureOf;
 
   /**
    * 页签栏用的「快速检索」列表（MRU）：
@@ -443,47 +406,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  /** 排版 agent 留的批注：按页落进数据，纸面自己负责贴到块上 */
-  const appendNote = useCallback(
-    (personId: string, resumeId: string, pageId: string, note: PageNote) => {
-      dispatch({ type: "pageNote", personId, resumeId, pageId, note });
-    },
-    [],
-  );
-
-  /**
-   * 排版 agent 向会话 agent 提问。
-   *
-   * 前端负责三件事：落成一条会话消息、让会话 agent 自动跑一轮、防重
-   * （同一页 5 秒内只触发一次 —— 两个 agent 互相呼叫很容易打成死循环，
-   * 契约 4 只限制后端单轮次数，这里的节流是最后一道闸）。
-   */
-  const askSession = useCallback(
-    (pageId: string, question: string, blockId?: string) => {
-      const now = Date.now();
-      if (now - (askAt.current.get(pageId) ?? 0) < 5000) return;
-      askAt.current.set(pageId, now);
-
-      const bridge = chatBridge();
-      if (!bridge) {
-        console.warn("[layout] 会话面板还没准备好，这次提问被跳过", question);
-        return;
-      }
-      const index = resume?.pages.findIndex((item) => item.id === pageId) ?? -1;
-      bridge.turn(pageId, layoutQuestion(index + 1, question, blockId));
-    },
-    [resume],
-  );
-
-  /**
-   * 监听器里要用「最新一版」的这些函数，但它们随 state 每次变化。
-   * 放进 ref 而不是进依赖：否则每敲一个字就重订阅一遍 Tauri 事件。
-   */
-  const handlers = useRef({ applyOps, appendNote, askSession, openPerson, openResume });
-  useEffect(() => {
-    handlers.current = { applyOps, appendNote, askSession, openPerson, openResume };
-  });
-
   // 自动保存：改动后 500ms 落盘。保存状态由「快照是否还是当前 state」派生，不在 effect 里同步 setState
   useEffect(() => {
     if (!ready) return;
@@ -500,218 +422,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }, 500);
     return () => window.clearTimeout(timer);
   }, [state, ready]);
-
-  /**
-   * 这一页的内容一变就告诉排版 agent。
-   *
-   * 为什么挂在保存节拍上（500ms 防抖）：敲字过程中每个中间态都报一遍没有意义，
-   * 排版看的是这一页最终的形状，不是打字打到一半的样子。
-   *
-   * 为什么只报内容、不报样式：排版 agent 改完样式会触发一次 state 变化，
-   * 要是连样式一起报，它就会被自己的改动叫醒，一圈一圈转下去。
-   */
-  const layoutBaseline = useRef(new Map<string, Flat>());
-
-  useEffect(() => {
-    if (!ready || !person || !resume) return;
-    const timer = window.setTimeout(() => {
-      const alive = new Set(resume.pages.map((item) => item.id));
-      // 删掉的页连基线一起清，免得 id 被复用时误判成「改了一大堆」
-      for (const id of [...layoutBaseline.current.keys()]) {
-        if (!alive.has(id)) layoutBaseline.current.delete(id);
-      }
-
-      for (const target of resume.pages) {
-        const flat = flatten(person, target);
-        // 人物级字段不属于这一页：改个名字不该惊动每一页的重排
-        for (const key of Object.keys(flat)) {
-          if (key.startsWith("person:")) delete flat[key];
-        }
-        const before = layoutBaseline.current.get(target.id);
-        layoutBaseline.current.set(target.id, flat);
-        // 第一次见到这一页（刚打开工作区、刚切到这份简历）只记基线，不触发
-        if (!before) continue;
-
-        const deltas = diff(before, flat);
-        if (!deltas.length) continue;
-        void submitLayout({
-          person,
-          resume,
-          page: target,
-          state,
-          kind: "change",
-          text: describeChange(deltas),
-          // 内容一变，这一页上一次的实测就作废了；但「量不到」也要如实上送，
-          // 不带的话 Rust 侧拿到 None，只能报「还没量到」—— 现在至少是这一页自己的数
-          measure: measureOfRef.current(target.id),
-        });
-      }
-    }, 500);
-    return () => window.clearTimeout(timer);
-  }, [state, ready, person, resume]);
-
-  /**
-   * 排版结果：后端跑完推过来，在这里落进 store。
-   *
-   * 放在 provider 而不是右侧面板：排版是后台跑的，用户很可能已经切到别的页，
-   * 面板卸载了也得收得到，否则这一轮就白跑了。
-   */
-  useEffect(() => {
-    let alive = true;
-    const stops: Array<() => void> = [];
-    const keep = (unlisten: () => void) => {
-      if (alive) stops.push(unlisten);
-      else unlisten();
-    };
-
-    void listen<LayoutApplied>("layout:applied", (event) => {
-      if (!alive) return;
-      const { personId, resumeId, actions, assets } = event.payload;
-      // 材料先落地：动作里可能马上引用它（模型常在同一轮里转完图就写进 HTML）
-      if (Array.isArray(assets) && assets.length) {
-        dispatch({ type: "addAssets", personId, assets });
-      }
-      if (!Array.isArray(actions) || !actions.length) return;
-      applyAgentActions(actions, {
-        // 排版事件也走这一条分发器：新增指令只需要在这里补一次，
-        // 不必为「会话来的」和「排版来的」各维护一套分支
-        openPage: (pageId) => setActivePageId(pageId),
-        openPerson: (personId) => handlers.current.openPerson(personId),
-        openResume: (personId, resumeId) => handlers.current.openResume(personId, resumeId),
-        patchUi: (patch) => dispatch({ type: "patchUi", patch }),
-        ask: () => {},
-        pageStyle: (pageId, style) =>
-          dispatch({ type: "pageStyle", personId, resumeId, pageId, style }),
-        pageLayout: (pageId, layout) =>
-          dispatch({ type: "pageLayout", personId, resumeId, pageId, layout }),
-        requestLayout: () => {},
-        // 写入走同一条确认门（排版 agent 不该写内容，但信封形状是共用的）
-        applyOps: (ops) => handlers.current.applyOps(ops),
-        pageNote: (pageId, note) =>
-          handlers.current.appendNote(personId, resumeId, pageId, note),
-        askSession: (pageId, question, blockId) =>
-          handlers.current.askSession(pageId, question, blockId),
-      });
-    }).then(keep);
-
-    void listen<{ pageId: string }>("layout:started", (event) => {
-      if (!alive) return;
-      const { pageId } = event.payload;
-      // 同一页已经在显示就别换对象：每轮都换会让状态栏闪一下。
-      // 换页了才重开秒表 —— 秒表量的是「这一页这一轮跑了多久」。
-      setLayoutStatus((prev) =>
-        prev?.pageId === pageId
-          ? prev
-          : { pageId, text: "正在看这一页的版式", since: Date.now(), step: 0, kind: "start" },
-      );
-    }).then(keep);
-
-    void listen<{
-      pageId: string;
-      kind?: LayoutKind;
-      tool?: string;
-      detail?: string;
-      thoughtChars?: number;
-    }>("layout:progress", (event) => {
-      if (!alive) return;
-      const { pageId, kind, detail, thoughtChars } = event.payload;
-      setLayoutStatus((prev) => {
-        // 正常情况下 started 先到；万一没收到，就当场补一个起点，别让状态栏空着
-        const base: LayoutStatus =
-          prev?.pageId === pageId
-            ? prev
-            : {
-                pageId,
-                text: "正在看这一页的版式",
-                since: Date.now(),
-                step: 0,
-                kind: "start",
-              };
-        // 思考只给字数：后端每 60 字发一次，读得出「它还在想」就够，不必粘原文
-        const text =
-          kind === "thinking" ? `思考中 · 已想 ${thoughtChars ?? 0} 字` : (detail ?? base.text);
-        return { pageId, text, since: base.since, step: base.step + 1, kind: kind ?? base.kind };
-      });
-    }).then(keep);
-
-    void listen<{ pageId: string }>("layout:idle", (event) => {
-      if (!alive) return;
-      // 只清自己那一页：别页刚开始跑，不该被这里顺手抹掉
-      setLayoutStatus((prev) => (prev?.pageId === event.payload.pageId ? null : prev));
-    }).then(keep);
-
-    void listen<{ pageId: string; error: string }>("layout:failed", (event) => {
-      if (!alive) return;
-      toast(`排版没跑成：${event.payload.error}`);
-    }).then(keep);
-
-    return () => {
-      alive = false;
-      for (const stop of stops) stop();
-    };
-  }, [dispatch, toast]);
-
-  /** 自动自查已投了几轮：pageId → 轮数。只放 ref：它属于这一场编辑，不是数据 */
-  const autoRounds = useRef(new Map<string, number>());
-
-  /**
-   * 溢出且有目标页数 → 让排版 agent 再压一轮，最多 3 轮；还不收敛就留一条批注让人决定。
-   *
-   * 全在前端做：Rust 侧没有 DOM，那边做定时轮询只会产出假数据。
-   * 量不到时不投 —— 拿一个假数去指挥排版，比不投更糟。
-   */
-  useEffect(() => {
-    if (!person || !resume || !page || !measure) return;
-    if (measure.status !== "ok" || !measure.onePage || !measure.contentPx) return;
-    // 排版正在跑这一页：不叠加，等它跑完自然会再看一眼
-    if (layoutStatus?.pageId === page.id) return;
-    const target = resume.targetPages;
-    if (!target) return;
-
-    const pages = measure.contentPx / measure.onePage;
-    if (pages <= TOLERANCE_MAX) {
-      // 收敛了就清零：下次再溢出从第 1 轮重新数
-      autoRounds.current.delete(page.id);
-      return;
-    }
-
-    const round = autoRounds.current.get(page.id) ?? 0;
-    if (round >= AUTO_ROUNDS_MAX) {
-      if (round === AUTO_ROUNDS_MAX) {
-        autoRounds.current.set(page.id, AUTO_ROUNDS_MAX + 1);
-        dispatch({
-          type: "pageNote",
-          personId: person.id,
-          resumeId: resume.id,
-          pageId: page.id,
-          note: {
-            id: `n-auto-${page.id}-4`,
-            text: `自动自查已投 ${AUTO_ROUNDS_MAX} 轮，仍实测 ${pages.toFixed(2)} 页（目标 ${target} 页）。差 ${(pages - 1).toFixed(2)} 页，需要人决定：减内容还是放宽页数。`,
-            at: Math.floor(Date.now() / 1000),
-          },
-        });
-      }
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      // 计数在真正投出去的那一刻加：被防抖取消掉的那几次不算一轮
-      autoRounds.current.set(page.id, round + 1);
-      void submitLayout({
-        person,
-        resume,
-        page,
-        state,
-        kind: "request",
-        // 实测值一起上送：不带的话排版 agent 看到的仍是「尚未实测」，
-        // 自动压版就成了闭眼开方子。取的是这一页自己那份，不拿当前页凑数
-        measure: measureOf(page.id),
-        origin: originOf(resume.id),
-        text: `自动自查：这一页实测 ${pages.toFixed(2)} 页，超出 ${(pages - 1).toFixed(2)} 页，目标是 ${target} 页。请继续压到目标页数内；压不动就说清差多少，不要谎报。`,
-      });
-    }, AUTO_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [measure, person, resume, page, state, layoutStatus, dispatch]);
 
   // 系统文本缩放：Windows「辅助功能 → 文本大小」不会自动传给网页，主动问一次。
   // 问不到时用可读下限兜底（老系统没这个设置）。
@@ -769,15 +479,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     toggleExpanded,
     saveState,
     ready,
-    layoutStatus,
     textScale,
     systemTextScale,
     setTextScale: (value: number | null) =>
       dispatch({ type: "setTextScale", textScale: value }),
   };
 
-  // 确认窗挂在 provider 上而不是某个面板里：触发它的可能是会话 agent
-  // （在会话列）也可能是排版 agent（在简历列），挂在哪一列都会在另一列失效
+  // 确认窗挂在 provider 上而不是某个面板里：触发它的可能是会话 agent，
+  // 面板卸载、换列之后这条挂起仍然得在
   const pending = batches[0] ?? null;
 
   return (
@@ -786,7 +495,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
       {/* 编辑态没有纸面 DOM（面板只在预览分支挂 .paper），而默认视图就是编辑。
           实测只能从这份离屏实例取；预览那份只管显示，不许另起一套公式。
-          每页一份：内容变更的循环会遍历所有页，只留当前页的话别的页永远量不到。
+          每页一份：会话的 chat_send 可能问的是任意一页，只留当前页的话别的页永远量不到。
           宽度必须固定：纸是 1:1 的 A4（210mm = 793.7px），跟着面板变就把
           字号与分页一起量歪了 —— 以前这里写 374，等于在缩略纸上量真 A4 的内容，
           页数会大出约一倍。data-print="hide"：打印只留纸面元素，不藏这份就会

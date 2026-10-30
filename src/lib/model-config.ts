@@ -13,15 +13,14 @@ import { onSettingsRefresh, readSetting, writeSetting } from "@/lib/settings-sto
  */
 /**
  * 模型按「用在哪」分类。同一个模型（比如 gpt-4o-mini）可能同时出现在几类里，
- * 每一类各管各的配置指针：换会话模型不该把压缩、排版、分片的模型一起换掉。
+ * 每一类各管各的配置指针：换会话模型不该把压缩、分片的模型一起换掉。
  */
-export type ModelKind = "chat" | "compact" | "layout" | "chunk" | "embedding" | "ocr";
+export type ModelKind = "chat" | "compact" | "chunk" | "embedding" | "ocr";
 
-/** 模型选择页的六行，顺序 = 用户心里的优先级 */
+/** 模型选择页的五行，顺序 = 用户心里的优先级 */
 export const MODEL_KINDS: { kind: ModelKind; label: string; note: string }[] = [
-  { kind: "chat", label: "会话", note: "主对话：改写、读页、调工具" },
+  { kind: "chat", label: "会话", note: "主对话：改写、读页、调工具、排版" },
   { kind: "compact", label: "压缩", note: "历史超窗口时压成摘要" },
-  { kind: "layout", label: "排版", note: "页排版 agent 用哪个模型" },
   { kind: "chunk", label: "知识库分片", note: "把文档切成块并写摘要" },
   { kind: "embedding", label: "嵌入", note: "知识库向量化与语义召回" },
   { kind: "ocr", label: "OCR", note: "模型看不了图时把图片转文字" },
@@ -158,17 +157,10 @@ function clampTemperature(value: unknown, fallback: number): number {
   return Math.min(2, Math.max(0, value));
 }
 
-/** 某条模型属于哪一类；老数据没有 kind，一律当对话模型 */
-/** 老数据/内置清单没有 kind，一律当会话模型 */
+/** 老数据/内置清单没有 kind，一律当会话模型；排版那类已随 agent 一起取消，旧值退化成会话 */
 export const kindOf = (model: ModelConfig): ModelKind => {
   const raw = model.kind;
-  if (
-    raw === "compact" ||
-    raw === "layout" ||
-    raw === "chunk" ||
-    raw === "embedding" ||
-    raw === "ocr"
-  ) {
+  if (raw === "compact" || raw === "chunk" || raw === "embedding" || raw === "ocr") {
     return raw;
   }
   return "chat";
@@ -193,13 +185,11 @@ export const kindLabel = (kind: ModelKind): string =>
     ? "会话"
     : kind === "compact"
       ? "压缩"
-      : kind === "layout"
-        ? "排版"
-        : kind === "chunk"
-          ? "知识库分片"
-          : kind === "embedding"
-            ? "嵌入"
-            : "OCR";
+      : kind === "chunk"
+        ? "知识库分片"
+        : kind === "embedding"
+          ? "嵌入"
+          : "OCR";
 
 export function findModel(id: string): ModelConfig | undefined {
   return modelById(id) ?? readCustom().find((item) => item.id === id);

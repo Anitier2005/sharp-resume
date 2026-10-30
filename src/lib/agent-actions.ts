@@ -1,4 +1,4 @@
-import type { BlockRole, PageLayout, PageNote, PageStyle, ResumePage, Workspace } from "@/types";
+import type { BlockRole, PageLayout, PageNote, PageStyle, Workspace } from "@/types";
 import type { Action } from "@/store/workspace/types";
 
 /**
@@ -34,12 +34,10 @@ export interface AgentActionHooks {
   patchUi: (patch: Partial<Workspace["ui"]>) => void;
   /** 模型要求填表时调用；由面板弹出表单 */
   ask: (questions: AskQuestion[]) => void;
-  /** 排版 agent 给出的页样式（旧的三档疏密，只在读旧消息时出现） */
+  /** 页样式（旧的三档疏密，只在读旧消息时出现） */
   pageStyle: (pageId: string, style: PageStyle) => void;
-  /** 排版 agent 写下的成品层覆盖：整页手写或某几块手写 */
+  /** 写下的成品层覆盖：整页手写或某几块手写 */
   pageLayout: (pageId: string, layout: PageLayout) => void;
-  /** 会话 agent 要求某一页重新排版 */
-  requestLayout: (pageId: string, brief: string) => void;
   /**
    * 内容写入通道。
    *
@@ -48,16 +46,8 @@ export interface AgentActionHooks {
    * 确认门（要不要先问用户）也在这个 hook 的实现里，不在校验层。
    */
   applyOps: (ops: Action[]) => void;
-  /** 排版 agent 在纸面上留的一条批注 */
+  /** 纸面上的批注 */
   pageNote: (pageId: string, note: PageNote) => void;
-  /**
-   * 排版 agent 向会话 agent 提问。
-   *
-   * 这是 agent 之间的往返，不进对话流：问题是内部的，答复也回投给排版信箱。
-   * `blockId` 有值时说明问的是某一块，要写进提问与答复里，
-   * 否则会话 agent 得自己再去读一遍页面才能对上号。
-   */
-  askSession: (pageId: string, question: string, blockId?: string) => void;
 }
 
 const VIEWS = new Set(["edit", "preview"]);
@@ -347,21 +337,14 @@ export function needsConfirm(ops: Action[]): boolean {
 }
 
 /* ==========================================================================
-   排版 ↔ 会话 的桥
+   确认窗 → 会话列 的桥
 
-   排版 agent 的提问最终要让会话 agent 跑一轮，而「跑一轮」需要模型设置、
-   流式通道、工具事件 —— 全都在聊天面板里。provider 拿不到那些东西，
-   所以用一个极小的注册表把两边接起来：面板挂载时注册，卸载时注销。
+   用户取消一批写入时，provider 要在会话里留一句「（已取消：…）」。
+   「消息存在哪、怎么落库」只有聊天面板知道，所以用一个极小的注册表把两边接起来：
+   面板挂载时注册，卸载时注销。
    ========================================================================== */
 
 export interface ChatBridge {
-  /**
-   * 把一条消息追加进当前会话并跑一轮。
-   *
-   * `silent` 表示这轮是 agent 之间的往返：消息进模型上下文但不进对话流，
-   * 界面上看不到提问、答复、打字动画，答复由面板回投给排版信箱。
-   */
-  turn: (pageId: string, content: string, silent?: boolean, blockId?: string) => void;
   /** 只追加一条系统提示，不触发模型 */
   notice: (content: string) => void;
 }
@@ -377,57 +360,6 @@ export function registerChatBridge(next: ChatBridge): () => void {
 
 export function chatBridge(): ChatBridge | null {
   return bridge;
-}
-
-/**
- * 内部提问用的提示词，不进对话流 —— 它只喂给会话 agent，
- * 让会话 agent 知道问的是哪一页、哪一块，不必自己再读一遍页面。
- */
-export function layoutQuestion(pageNo: number, question: string, blockId?: string): string {
-  const head = pageNo > 0 ? `排版 · 关于第 ${pageNo} 页` : "排版";
-  const where = blockId ? `${head} · 块 ${blockId}` : head;
-  return `${where}：${question.trim()}`;
-}
-
-/**
- * 同一页 5 秒内只让会话 agent 跑一轮。
- *
- * 两个 agent 互相呼叫很容易打成跨轮循环，后端的单轮限次挡不住它，
- * 这里的节流是最后一道闸。表放模块级而不是各组件一份：排版事件（provider）
- * 与会话指令（面板）是两条入口，各持一份就等于两个闸门，谁也挡不住对方。
- */
-const ASK_COOLDOWN_MS = 5000;
-const askedAt = new Map<string, number>();
-
-/**
- * 排版 agent 向会话 agent 提问的唯一入口。
- *
- * 只把提问交给 ChatBridge：格式化、防重、落消息都在这一条路上，
- * provider 与面板都不该再各写一份，否则两边漂移时最难查的就是「为什么问了两遍」。
- */
-export function askSessionFromLayout(input: {
-  /** 提问文案要带「第几页」，页序以调用方手里那份简历为准 */
-  pages: ResumePage[];
-  pageId: string;
-  question: string;
-  blockId?: string;
-}): void {
-  const next = chatBridge();
-  if (!next) {
-    console.warn("[layout] 会话面板还没准备好，这次提问被跳过", input.question);
-    return;
-  }
-  const now = Date.now();
-  if (now - (askedAt.get(input.pageId) ?? 0) < ASK_COOLDOWN_MS) return;
-  askedAt.set(input.pageId, now);
-
-  const index = input.pages.findIndex((item) => item.id === input.pageId);
-  next.turn(
-    input.pageId,
-    layoutQuestion(index + 1, input.question, input.blockId),
-    true,
-    input.blockId,
-  );
 }
 
 /** 返回实际应用的条数，调用方据此决定要不要提示用户 */
@@ -501,13 +433,6 @@ export function applyAgentActions(actions: unknown, hooks: AgentActionHooks): nu
         applied += 1;
         break;
       }
-      case "requestLayout": {
-        const pageId = typeof action.pageId === "string" ? action.pageId.trim() : "";
-        const brief = typeof action.brief === "string" ? action.brief.trim() : "";
-        if (!pageId) break;
-        hooks.requestLayout(pageId, brief);
-        break;
-      }
       case "ask": {
         const questions = cleanQuestions(action.questions);
         if (!questions.length) break;
@@ -528,14 +453,6 @@ export function applyAgentActions(actions: unknown, hooks: AgentActionHooks): nu
         const note = cleanNote(action.note);
         if (!pageId || !note) break;
         hooks.pageNote(pageId, note);
-        break;
-      }
-      case "askSession": {
-        const pageId = text(action.pageId);
-        const question = text(action.question);
-        if (!pageId || !question) break;
-        const blockId = text(action.blockId);
-        hooks.askSession(pageId, question, blockId || undefined);
         break;
       }
       default:

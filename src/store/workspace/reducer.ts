@@ -277,7 +277,7 @@ export function reducer(state: Workspace, action: Action): Workspace {
         return { ...page, notes: [...notes, action.note] };
       });
 
-    // 排版只由「页排版 agent」写：会话 agent 想改排版得走 request_layout
+    // 排版参数由会话 agent 自己写（排版已并进会话工具集），不再有独立的排版 agent
     case "pageStyle":
       return mapPage(state, action.personId, action.resumeId, action.pageId, (page) => ({
         ...page,
@@ -290,7 +290,7 @@ export function reducer(state: Workspace, action: Action): Workspace {
         layout: action.layout,
       }));
 
-    // 原件指针落在简历上：`layout` 每次都被排版 agent 整体覆盖，挂那里会被写掉
+    // 原件指针落在简历上：`layout` 每轮都会被整体覆盖，挂那里会被写掉
     case "originDoc":
       return mapResume(state, action.personId, action.resumeId, (resume) => ({
         ...resume,

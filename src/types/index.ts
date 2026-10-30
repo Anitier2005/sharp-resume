@@ -146,7 +146,7 @@ export interface Resume {
 }
 
 /** 简历页：一串块，按顺序排下去 */
-/** 页面排版参数：由「页排版 agent」决定，会话 agent 不改它 */
+/** 页面排版参数：会话 agent 自己排版时通过 pageLayout 写它 */
 export interface PageStyle {
   /** 疏密：紧凑 / 标准 / 宽松，决定行高与段间距 */
   density?: "compact" | "normal" | "roomy";
@@ -266,7 +266,7 @@ export interface ResumePage {
 }
 
 /**
- * 页面实测：**只有一个来源**（前端 DOM），随 `chat_send` / `layout_submit` 上送。
+ * 页面实测：**只有一个来源**（前端 DOM），随 `chat_send` 上送。
  *
  * 它不落库 —— 落库的测量值下次启动就变成假数据。判定阈值与文案在 Rust 的
  * `agent/facts.rs`，这里只负责把量到的数照实带过去。
@@ -382,10 +382,10 @@ export interface ChatMessage {
    */
   system?: boolean;
   /**
-   * 内部消息：agent 之间的往返（比如排版 agent 向会话 agent 提问、它给出的答复）。
+   * 内部消息：不进对话流的那类往返。
    *
-   * 它仍然进模型上下文（下一轮它还看得见，否则会前后矛盾），
-   * 但**不进对话流** —— 用户看到的只有自己和会话 agent 的对话。
+   * 排版 agent 已经取消，新代码不再产生它；字段留着只为读旧历史。
+   * 旧数据里它仍然进模型上下文（否则对话会前后矛盾），但用户看不到那一轮。
    */
   internal?: boolean;
 }

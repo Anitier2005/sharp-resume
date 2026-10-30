@@ -18,13 +18,11 @@ import { DEFAULT_RESERVE, findModel, listProfiles } from "@/lib/model-config";
 import { buildContext, splitReply } from "@/lib/prompt";
 import {
   applyAgentActions,
-  askSessionFromLayout,
   registerChatBridge,
   type AgentActionHooks,
   type AskQuestion,
 } from "@/lib/agent-actions";
-import { submitLayout } from "@/lib/layout";
-import { clearOrigin, originOf, putOrigin } from "@/lib/measure";
+import { clearOrigin, putOrigin } from "@/lib/measure";
 import { AskForm } from "./ask-form";
 import { displayName } from "@/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -39,16 +37,6 @@ import styles from "./chat.module.css";
  * （还带"已提取 N 个关键词"这类并未真正计算的工具行），用户会误以为是模型输出。
  * 现在改为：不写消息、不伪造内容，直接把设置面板推到用户面前。
  */
-
-interface SendOptions {
-  /**
-   * 内部往返：排版 agent 的提问与会话 agent 的答复都进模型上下文，
-   * 但**不进对话流** —— 用户要看到的是自己与会话 agent 的对话。
-   */
-  silent?: boolean;
-  /** 这一轮是冲着哪一块问的：答复回投给排版 agent 时要带上它，否则对不上号 */
-  blockId?: string;
-}
 
 /** 压缩点分隔线的标签：一句话说清「这条之前，模型只看得见摘要」 */
 const DIGEST_LABEL = "压缩点 · 此处之前的对话已压成摘要";
@@ -76,7 +64,6 @@ export function ChatPanel() {
     resume,
     page,
     measure,
-    measureOf,
     dispatch,
     setActivePageId,
     applyOps,
@@ -85,13 +72,6 @@ export function ChatPanel() {
   } = useWorkspace();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  /**
-   * 当前这一轮是不是内部的（排版提问）。
-   *
-   * busy 只管「同一时刻只能有一轮」，打字体、思考过程、停止按钮是给用户看的，
-   * 内部轮一律不渲染；两者揉成一个状态就得在每一处拿出来再猜一遍。
-   */
-  const [silentBusy, setSilentBusy] = useState(false);
   const [input, setInput] = useState("");
   const [files, setFiles] = useState<Attachment[]>([]);
   const [ai, setAi] = useState<AiSettings>(() => loadAi());
@@ -122,10 +102,6 @@ export function ChatPanel() {
   const [ask, setAsk] = useState<AskQuestion[] | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  /** send 的自我引用：内部提问是在「收到指令时」再发一轮请求，写在 send 内部就成了递归 */
-  const sendRef = useRef<
-    ((text: string, attachments: Attachment[], forPage?: string, opts?: SendOptions) => void) | null
-  >(null);
   /** 上一轮发出时的页面快照（摊平后），用来算「这一轮之前你手改了什么」 */
   const baseRef = useRef<{ key: string; flat: Flat } | null>(null);
   /** 消息真相源在 Rust：组件只持有 chat_history 拉回来的投影 */
@@ -183,14 +159,6 @@ export function ChatPanel() {
 
   const messages = useMemo(() => remote, [remote]);
 
-  /**
-   * 对话流只放用户与会话 agent 的往返。
-   *
-   * 内部消息（排版提问与它的答复）仍在 `messages` 里 —— 那是模型上下文的一部分，
-   * 下一轮它还看得见；这里只是决定「用户能看到什么」，所以过滤放在渲染前一步。
-   */
-  const visible = useMemo(() => messages.filter((item) => !item.internal), [messages]);
-
   const personId = person?.id ?? null;
 
   // 切人/启动时从 Rust 拉一次：现在拿的是全部消息，不再随模型窗口变
@@ -224,18 +192,17 @@ export function ChatPanel() {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [visible.length, busy, resume?.id]);
+  }, [messages.length, busy, resume?.id]);
 
   useEffect(() => {
     setBusy(false);
-    setSilentBusy(false);
     setFiles([]);
     setInput("");
   }, [resume?.id]);
 
   /**
    * 换人 / 换简历：上一轮那份原件的页数不再代表这一轮。
-   * 不清的话排版侧会拿别人那份 PDF 的页数去判「沿用原件页数」，
+   * 不清的话模型会拿别人那份 PDF 的页数去判「沿用原件页数」，
    * 这正是「跨请求残留」那类错。
    */
   useEffect(() => {
@@ -250,50 +217,11 @@ export function ChatPanel() {
   }, []);
 
   /**
-   * 会话 agent 说「这页要重排」时，交给页排版 agent。
-   *
-   * 只投递、不等结果：排版是常驻的后台工作，可能中途被更多输入打断，
-   * 也可能连着跑好几轮。结果通过 `layout:applied` 事件回到 provider。
-   * 排版本该由页 agent 负责，会话这边只传意图，不碰样式。
-   */
-  const runLayoutFor = useCallback(
-    (pageId: string, brief: string) => {
-      if (!person || !resume) return;
-      const target = resume.pages.find((item) => item.id === pageId) ?? page;
-      if (!target) return;
-      void submitLayout({
-        person,
-        resume,
-        page: target,
-        state,
-        kind: "request",
-        // 实测必须跟着走：不带的话排版 agent 看到的是「这一页还没量到」，
-        // 它只能在看不见页数的情况下凭字数猜，压版就成了闭眼开方子。
-        // 每一页都有自己的离屏实测，所以这里按目标页取，不是按当前页。
-        measure: measureOf(target.id),
-        origin: originOf(resume.id),
-        text: brief.trim() || "请检查这一页的版式。",
-      });
-    },
-    [person, resume, page, state, measureOf],
-  );
-
-  /**
-   * 排版 agent 提问：交给 lib/agent-actions 的统一入口跑一轮内部往返。
-   *
-   * 提问与答复都不进对话流（silent），答复在那一轮结束后回投排版信箱；
-   * 5 秒防重和文案都在 agent-actions 里，面板只补「第几页」需要的页序。
-   */
-  const askFromLayout = useCallback(
-    (pageId: string, question: string, blockId?: string) => {
-      askSessionFromLayout({ pages: resume?.pages ?? [], pageId, question, blockId });
-    },
-    [resume],
-  );
-
-  /**
    * 这一页的实测值；量的不是这一页就给 null。
    * 不拿「1 页」去凑一个像样的对象 —— 假数比没有数更糟（F-007）。
+   *
+   * 会话自己排版，`chat_send` 带的这个 `measure` 是模型唯一能知道
+   * 「这一页压到几页了」的来源，不能省。
    */
   const measureFor = useCallback(
     (pageId: string) => (measure && measure.pageId === pageId ? measure : null),
@@ -301,26 +229,17 @@ export function ChatPanel() {
   );
 
   const send = useCallback(
-    (text: string, attachments: Attachment[], forPage?: string, opts?: SendOptions) => {
+    (text: string, attachments: Attachment[]) => {
       if (!person || !resume) return;
-      const silent = opts?.silent === true;
 
       // 没有模型就到此为止：不发消息、不伪造回答，直接引导去配置
       if (!configured) {
-        // 内部往返是后台发起的，把设置面板顶到用户面前会很突兀
-        if (silent) return;
         void openModelSettings();
         toast("先配置模型才能对话");
         return;
       }
-      // forPage：排版 agent 问的是「它当时在排的那一页」，可能不是用户此刻看的那页
-      const targetPage =
-        (forPage ? resume.pages.find((item) => item.id === forPage) : null) ??
-        page ??
-        resume.pages[0] ??
-        null;
+      const targetPage = page ?? resume.pages[0] ?? null;
       if (!targetPage) {
-        if (silent) return;
         toast("这份简历还没有页面，先在右边新增一页");
         return;
       }
@@ -340,8 +259,6 @@ export function ChatPanel() {
         content: text,
         time: Date.now(),
         attachments: attachments.length ? attachments.map(stripPreview) : undefined,
-        // 内部消息：进模型上下文，但不进对话流（见 types 里 ChatMessage.internal）
-        ...(silent ? { internal: true } : {}),
       };
       const replyId = uid("m");
       const draft: ChatMessage = {
@@ -350,39 +267,13 @@ export function ChatPanel() {
         time: Date.now(),
         content: "",
         tool: `${ai.model} · 正在读简历`,
-        ...(silent ? { internal: true } : {}),
-      };
-
-      /**
-       * 答复回投给排版 agent。
-       *
-       * 提问与答复都不进对话流，用户看不见 —— 但排版 agent 拿不到答复就等于白问，
-       * 所以这一轮结束后把正文重新投进那一页的排版信箱。
-       */
-      const answerBack = (content: string) => {
-        if (!silent) return;
-        const body = content.trim();
-        if (!body) return;
-        const where = opts?.blockId ? `（块 ${opts.blockId}）` : "";
-        void submitLayout({
-          person,
-          resume,
-          page: targetPage,
-          state,
-          kind: "request",
-          measure: measureOf(targetPage.id),
-          origin: originOf(resume.id),
-          text: `会话 agent 针对你上一个问题的答复${where}：\n${body}`,
-        });
       };
 
       setBusy(true);
-      setSilentBusy(silent);
       setReasoning("");
       abortRef.current = new AbortController();
 
-      // 内部往返不进 remote：用户看到的对话流里不该出现提问与答复这两条
-      if (!silent) setRemote((prev) => [...prev, userMessage, draft]);
+      setRemote((prev) => [...prev, userMessage, draft]);
 
       void (async () => {
         try {
@@ -405,13 +296,10 @@ export function ChatPanel() {
               dispatch({ type: "pageStyle", personId: person.id, resumeId: resume.id, pageId, style }),
             pageLayout: (pageId, layout) =>
               dispatch({ type: "pageLayout", personId: person.id, resumeId: resume.id, pageId, layout }),
-            requestLayout: (pageId, brief) => runLayoutFor(pageId, brief),
             // 内容写入走 provider 的确认门：会话 agent 和用户点击必须同一套规则
             applyOps,
             pageNote: (pageId, note) =>
               dispatch({ type: "pageNote", personId: person.id, resumeId: resume.id, pageId, note }),
-            askSession: (pageId, question, blockId) =>
-              askFromLayout(pageId, question, blockId),
           };
 
           /**
@@ -433,20 +321,15 @@ export function ChatPanel() {
           channel.onmessage = (chunk) => {
             if (chunk.kind === "delta" && chunk.delta) {
               acc += chunk.delta;
-              // 内部轮没有可见的占位气泡，边流边补投影只是空转
-              if (silent) return;
               const now = Date.now();
               if (now - flushed > 70) {
                 flushed = now;
                 patchLocal(replyId, { content: acc });
               }
             } else if (chunk.kind === "reasoning" && chunk.reasoning) {
-              // 思考过程是给用户看的，内部轮不渲染也不必攒
-              if (silent) return;
               setReasoning((prev) => prev + chunk.reasoning!);
             } else if (chunk.kind === "tool_start" && chunk.tool) {
               if (!used.includes(chunk.tool)) used.push(chunk.tool);
-              if (silent) return;
               patchLocal(replyId, { tool: `${chunk.tool} · ${chunk.detail ?? "执行中"}` });
             } else if (chunk.kind === "mutate" && chunk.detail) {
               // 中途写入：模型改一条就落一条。坏信封直接丢——轮末还会再结算一次，
@@ -528,9 +411,6 @@ export function ChatPanel() {
                     { id: uid("a"), label: "再收一收", kind: "hint" },
                   ]
                 : null,
-              // 内部轮的助手消息由 Rust 建，本地只补过占位气泡；这里补标记，
-              // 否则重新拉历史时它会以「一条没有提问的回答」出现在对话流里
-              ...(silent ? { internal: true } : {}),
             },
           });
 
@@ -544,9 +424,6 @@ export function ChatPanel() {
             setDigest(slice.digest);
           }
 
-          // 答复必须回到排版 agent 手里，否则这一轮只是白白花掉一次调用
-          answerBack(content);
-
           // 页面控制工具的指令在这里落地：切页、切视图、改快捷栏、调外观
           // 工具新产出的材料先落地，动作里可能引用它
           if (sent.assets?.length) {
@@ -557,15 +434,8 @@ export function ChatPanel() {
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
           if (reason.includes("已中断")) {
-            // 内部轮没有可见气泡可撤；对话流里的「已停止」也只对用户自己发起的那轮有意义
-            if (!silent) {
-              setRemote((prev) => prev.filter((item) => item.id !== replyId));
-              toast("已停止");
-            }
-          } else if (silent) {
-            // 内部往返失败不在对话流里冒错误，也不回投失败文案（排版读不懂）。
-            // 用户看不到这轮，留一条控制台记录便于排查
-            console.warn("[chat] 排版提问没有拿到答复", reason);
+            setRemote((prev) => prev.filter((item) => item.id !== replyId));
+            toast("已停止");
           } else {
             patchLocal(replyId, {
               content: `调用失败：${reason}`,
@@ -575,7 +445,6 @@ export function ChatPanel() {
           }
         } finally {
           setBusy(false);
-          setSilentBusy(false);
           abortRef.current = null;
         }
       })();
@@ -592,34 +461,22 @@ export function ChatPanel() {
       applyOps,
       openPerson,
       openResume,
-      askFromLayout,
       ai,
       configured,
       toast,
       patchLocal,
-      runLayoutFor,
     ],
   );
 
-  useEffect(() => {
-    sendRef.current = send;
-  }, [send]);
-
   /**
    * 面板是唯一知道「消息存在哪、怎么落库」的地方（桌面端真相在 Rust）。
-   * provider 拿到排版 agent 的指令后，通过注册表回到这里执行 —— 比把整条
-   * 发送链路搬进 provider 现实得多，也避免两套写消息的代码各自漂移。
+   * provider 取消一批改动时要往会话里留一句「（已取消：…）」，
+   * 那条提示走这个注册表回到这里 —— 消息怎么落库只有面板知道。
    */
-  const bridgeApi = useRef<{
-    turn: (pageId: string, content: string, silent?: boolean, blockId?: string) => void;
-    notice: (content: string) => void;
-  }>({ turn: () => {}, notice: () => {} });
+  const bridgeApi = useRef<{ notice: (content: string) => void }>({ notice: () => {} });
 
   useEffect(() => {
     bridgeApi.current = {
-      // 提问一律按内部往返发：它来自排版 agent，不是用户打的字
-      turn: (pageId, content, silent, blockId) =>
-        sendRef.current?.(content, [], pageId, { silent, blockId }),
       notice: (content) => {
         if (!person) return;
         const message: ChatMessage = {
@@ -638,8 +495,6 @@ export function ChatPanel() {
   useEffect(
     () =>
       registerChatBridge({
-        turn: (pageId, content, silent, blockId) =>
-          bridgeApi.current.turn(pageId, content, silent, blockId),
         notice: (content) => bridgeApi.current.notice(content),
       }),
     [],
@@ -793,18 +648,16 @@ export function ChatPanel() {
               )}
             </Fragment>
           ))}
-          {/* 内部轮（排版 ↔ 会话）不渲染任何「正在发生」：用户看到的对话里
-              根本没有这一轮，冒出一个打字体反而像是卡住了 */}
-          {busy && !silentBusy && reasoning && (
+          {busy && reasoning && (
             <Disclosure summary={`思考过程 · ${reasoning.length} 字`} className={styles.think}>
               {reasoning}
             </Disclosure>
           )}
-          {busy && !silentBusy && <TypingTurn />}
+          {busy && <TypingTurn />}
         </div>
       </div>
 
-      {busy && !silentBusy && (
+      {busy && (
         <div className={styles.stopRow}>
           <button type="button" className={styles.stopBtn} onClick={stop}>
             停止生成

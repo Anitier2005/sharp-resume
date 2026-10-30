@@ -195,7 +195,8 @@ interface PageState {
 /**
  * 多页版：每一页在自己的离屏纸面上单独量，键是 pageId。
  *
- * 为什么必须分页：内容变更触发的那条路会遍历 `resume.pages`，
+ * 为什么必须分页：会话自己排版，`chat_send` 带的 `measure` 是模型唯一能知道
+ * 「这一页压到几页了」的来源，而它问的可能是手上那一页、不是用户此刻看的那页；
  * 只量当前页的话，另一页永远拿不到实测 —— 模型看到的就是「这一页还没量到」。
  *
  * 为什么状态必须按页分开：两页共用一个 `last` 时，甲页量完会把乙页的
@@ -403,7 +404,7 @@ export function usePaperMeasures(input: PaperMeasures): Record<string, PageMeasu
 }
 
 /**
- * 原件页数只在内存里活一轮：它随 `layout_submit` 的 payload 走，不落库。
+ * 原件页数只在内存里活一轮：它随 `chat_send` 的 payload 上送给模型，不落库。
  * 刷新/重启后就「这一轮没有上传原件」—— 诚实的退化，好过留一个会过期的假数。
  */
 const origins = new Map<string, Origin>();
@@ -413,8 +414,8 @@ export function putOrigin(resumeId: string, origin: Origin): void {
 }
 
 /**
- * 只读窥视：自动自查与 `submitLayout` 都要读同一份。
- * 做成「取走即删」的话，第二个读的人只能拿到 null，排版侧的事实块就会缺原件页数。
+ * 只读窥视：会话面板发 `chat_send` 时读它。
+ * 做成「取走即删」的话，第二次读只能拿到 null，模型的事实块就会缺原件页数。
  */
 export function originOf(resumeId: string): Origin | null {
   return origins.get(resumeId) ?? null;
