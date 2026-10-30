@@ -580,10 +580,21 @@ pub const TOOLS: &[Tool] = &[
         writes: false,
     },
     Tool {
+        name: "list_sources",
+        description: "列出我手上存着的原件（用户上传过的简历 PDF / 图片 / 文本）。\
+                      对话过了几轮、不确定「原件还在不在」「叫什么」「stored 是什么」时先调它，\
+                      不要凭记忆猜，也不要让用户重新贴一遍原文。\
+                      每行末尾的 stored 就是 read_source / render_doc_page 的参数。",
+        params: source::list_params,
+        run: source::list_sources,
+        writes: false,
+    },
+    Tool {
         name: "render_doc_page",
-        description: "把原件（PDF）的某一页渲成图片，只渲你要的那一页 —— 一次一页，清晰度可调。\
-                      材料段只给摘要和【原件结构】，没给页图：想确认版式、照片位置、表格怎么摆时，\
-                      自己按页码要一张，别凭描述猜。.docx / .txt 没有页图，要看内容用 read_source。",
+        description: "把一份原件变成这一轮看得见的图片：PDF 渲你要的那一页（一次一页，清晰度可调），\
+                      图片原件直接把原图附上。材料段只给摘要和【原件结构】，没给页图：\
+                      想确认版式、照片位置、表格怎么摆时，自己按 stored 要一张，别凭描述猜。\
+                      docx / pptx / txt 渲不成页图，读正文用 read_source。",
         params: render::params,
         run: render::run,
         writes: false,
@@ -592,7 +603,7 @@ pub const TOOLS: &[Tool] = &[
         name: "read_source",
         description: "读用户上传的原件正文（PDF / 文本）。材料段里写了「要全文调 read_source」时先读它再动手，\
                       不要凭 120 字摘要写简历 —— 摘要只够认出这是谁，不够写经历。\
-                      参数 stored 从材料段那行「（附件标识：…）」取，不是文件名；长文档用 offset/limit 分段读。",
+                      参数 stored 从 list_sources 或材料段那行「（附件标识：…）」取，不是文件名；长文档用 offset/limit 分段读。",
         params: source::params,
         run: source::run,
         writes: false,
@@ -727,8 +738,8 @@ mod tests {
     fn capability_map_is_one_line_per_tool() {
         let names = names();
 
-        // 44 = 内容读写 + 页面控制 + 版面三件套，一个不多一个不少
-        assert_eq!(names.len(), 44, "工具数变了：{names:?}");
+        // 45 = 内容读写 + 页面控制 + 版面三件套 + 原件四件套，一个不多一个不少
+        assert_eq!(names.len(), 45, "工具数变了：{names:?}");
         // specs 与注册表必须同源：少一条说明 specs 里还在过滤
         assert_eq!(
             specs().as_array().map(|list| list.len()).unwrap_or(0),
@@ -782,6 +793,7 @@ mod tests {
             "extract_images",
             "convert_image",
             "view_asset",
+            "list_sources",
             "render_doc_page",
             "read_source",
             "set_target_pages",
@@ -814,6 +826,7 @@ mod tests {
             "search_knowledge",
             "search_history",
             "read_knowledge",
+            "list_sources",
             "render_doc_page",
             "read_source",
         ];

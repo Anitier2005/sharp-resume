@@ -160,6 +160,15 @@ pub fn attach_put(
     name: String,
     data_base64: String,
 ) -> Result<AttachInfo, String> {
+    let root = crate::data_dir(&app)?;
+    put(&root, &name, &data_base64)
+}
+
+/// `attach_put` 的实行：只认数据目录，不碰 `AppHandle`。
+///
+/// 分出来是为了能测 —— 「上传即落事实层」这条必须在没有 Tauri 运行时的地方也跑得起来，
+/// 否则它只能靠真机试。
+fn put(root: &Path, name: &str, data_base64: &str) -> Result<AttachInfo, String> {
     use base64::Engine as _;
     let data = base64::engine::general_purpose::STANDARD
         .decode(data_base64.as_bytes())
@@ -167,8 +176,7 @@ pub fn attach_put(
     if data.is_empty() {
         return Err(format!("「{name}」是空文件"));
     }
-    let root = crate::data_dir(&app)?;
-    let dir = inbox_dir(&root);
+    let dir = inbox_dir(root);
     std::fs::create_dir_all(&dir).map_err(|error| format!("建附件目录失败：{error}"))?;
 
     let raw_ext = name
@@ -188,16 +196,44 @@ pub fn attach_put(
     let kind = kind_of(&ext);
     let info = AttachInfo {
         stored: stored.clone(),
-        name,
+        name: name.to_string(),
         ext: ext.clone(),
         kind,
         chars: parsed.text.chars().count(),
         scanned: parsed.scanned,
     };
+    // 上传当刻就把正文写进事实层：附件是「按轮一次性」的，这一行不写，
+    // 一旦 materials 提前失败（或根本没跑），下一轮 read_source 就只能回 inbox 找文件，
+    // 名字/路径任何一处对不上，模型看到的就是「原件已经不在系统里了」。
+    // 空正文照写（扫描件 / 图片 chars = 0）——「有这份原件、但没有文字层」也是事实。
+    persist_at_upload(root, &info.stored, &info.name, &info.ext, parsed.pages, &parsed.text);
     if let Ok(mut map) = cache().lock() {
         map.insert(cache_key(&stored, &ext), parsed);
     }
     Ok(info)
+}
+
+/// 上传时落事实层：连接在这里自己开（`attach_put` 是同步命令，拿不到 `Shared`，
+/// 也不该为它加一个参数），用完即还。
+///
+/// 失败只打一行日志，绝不把错误抛给调用方 —— 为了「以后能读回正文」而让用户
+/// 现在丢掉附件，是更糟的那一头。
+fn persist_at_upload(
+    root: &Path,
+    stored: &str,
+    name: &str,
+    ext: &str,
+    pages: Option<u32>,
+    text: &str,
+) {
+    match crate::db::open(&root.join("app.db")) {
+        Ok(conn) => {
+            if let Err(error) = crate::source::save(&conn, stored, name, ext, pages, text) {
+                eprintln!("[attach] 原件正文没能落库（{stored}）：{error}");
+            }
+        }
+        Err(error) => eprintln!("[attach] 打不开库，原件正文没能落库（{stored}）：{error}"),
+    }
 }
 
 /// 取回附件原字节。历史消息里的缩略图靠它 —— preview 的 object URL 刷新就没了。
@@ -286,11 +322,9 @@ fn clip(text: &str) -> String {
     text.chars().take(MAX_CHARS).collect()
 }
 
-/// 正文写进 Fact 层。只给「有正文的附件」（PDF / 文本类）写；图片不写 ——
-/// 图没有正文可存，它有别的去处（材料池 + 视觉输入）。
-///
-/// 空正文也写：那一行记的是「这份原件读不出字」，`read_source` 才能照实回答
-/// 「共 0 字」，而不是假装这份文件不存在。
+/// 正文写进 Fact 层。**所有类型都写**：图片与扫描件写的是空正文（chars = 0），
+/// 那一行回答的是「系统里有这份原件」，不是「这份原件有几个字」——
+/// 跳过它，`read_source` 就只能说「找不到该文件」，而文件明明还在。
 fn persist(
     db: &crate::db::Shared,
     stored: &str,
@@ -299,14 +333,19 @@ fn persist(
     pages: Option<u32>,
     text: &str,
 ) {
-    if ext != "pdf" && !TEXT_EXTS.contains(&ext) {
-        return;
-    }
     // 守卫不跨 await：这里整段是同步的，`with` 返回时连接已经还回去了
     if let Err(error) =
         db.with(|conn| crate::source::save(conn, stored, name, ext, pages, text))
     {
         eprintln!("[attach] 原件正文没能落库（{stored}）：{error}");
+    }
+}
+
+/// 「这份原件是谁的」。只在真的有事实行之后才记 —— `list_sources` 是按
+/// `attach_ref JOIN source` 查的，先记归属后落正文会留下一条查不出东西的影子。
+fn bind_origin(db: &crate::db::Shared, person_id: &str, stored: &str) {
+    if let Err(error) = db.with(|conn| crate::source::bind(conn, person_id, stored)) {
+        eprintln!("[attach] 原件归属没记上（{stored}）：{error}");
     }
 }
 
@@ -326,8 +365,11 @@ fn summary_text(chars: usize, stored: &str, text: &str) -> String {
 ///
 /// `db` 是 Fact 层的入库口：正文一解析出来就落库（见 `source.rs`），
 /// 因为附件是**按轮一次性**的 —— 错过这一轮，正文就只剩库里那一份。
+///
+/// `person_id` 是「这份原件归谁」：本轮谁在用附件，谁就是它的主人。
 pub async fn materials(
     root: &Path,
+    person_id: &str,
     refs: &[AttachRef],
     vision: bool,
     ocr: Option<&OcrConf>,
@@ -370,6 +412,10 @@ pub async fn materials(
         }
 
         if is_image(&ext) {
+            // 图片没有正文，但「系统里有这份原件」本身是事实：不写这一行，
+            // read_source / list_sources 就只剩「找不到」这一种回答
+            persist(db, stored, name, &ext, parsed.pages, &parsed.text);
+            bind_origin(db, person_id, stored);
             if vision {
                 images.push(crate::pdfimage::data_url_of(&mime_of(&ext), &bytes));
                 blocks.push(format!(
@@ -385,6 +431,7 @@ pub async fn materials(
         // 事实先落库，再谈投影怎么给：这一轮之后附件不会再出现，
         // 正文从此只活在库里。落库失败只打日志 —— 这一轮的材料还得照给
         persist(db, stored, name, &ext, parsed.pages, &parsed.text);
+        bind_origin(db, person_id, stored);
 
         // 默认不渲染页图：版式事实改由【原件结构】给（见下方 docparse），
         // 要真看某一页长什么样，模型自己调 render_doc_page —— 一次一页，按需付费。
@@ -846,7 +893,7 @@ mod tests {
             ext: String::new(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, false, None, "test-model", &db).await;
+        let materials = materials(&root, "p1", &refs, false, None, "test-model", &db).await;
         assert!(materials.section.contains(&format!("（附件标识：{stored}）")), "{}", materials.section);
         assert!(materials.section.contains("（原件共 1 页）"), "{}", materials.section);
         // 正文走纯文本投影时，PDF 里的字距会被提成空格（「谭 轶 天」）；
@@ -867,7 +914,7 @@ mod tests {
             ext: "pdf".into(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, false, None, "deepseek-chat", &db).await;
+        let materials = materials(&root, "p1", &refs, false, None, "deepseek-chat", &db).await;
         assert!(materials.section.contains("没有文字层"), "{}", materials.section);
         assert!(materials.section.contains("没配 OCR"), "{}", materials.section);
         assert!(materials.section.contains("设置 → 模型"), "{}", materials.section);
@@ -889,7 +936,7 @@ mod tests {
             model: "some-vl".into(),
         };
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, false, Some(&conf), "deepseek-chat", &db).await;
+        let materials = materials(&root, "p1", &refs, false, Some(&conf), "deepseek-chat", &db).await;
         assert!(materials.section.contains("没有文字层"), "{}", materials.section);
         assert!(materials.section.contains("OCR 也没读出来"), "{}", materials.section);
         let _ = std::fs::remove_dir_all(&root);
@@ -905,7 +952,7 @@ mod tests {
             ext: "pdf".into(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, false, None, "deepseek-chat", &db).await;
+        let materials = materials(&root, "p1", &refs, false, None, "deepseek-chat", &db).await;
         assert!(materials.section.contains("解析不出文字"), "{}", materials.section);
         assert!(
             !materials.section.contains("没有文字层"),
@@ -982,7 +1029,7 @@ mod tests {
             ext: "md".into(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, false, None, "test-model", &db).await;
+        let materials = materials(&root, "p1", &refs, false, None, "test-model", &db).await;
         assert!(materials.section.contains("【本次附件】"), "{}", materials.section);
         assert!(materials.section.contains("华北电力大学"), "{}", materials.section);
         assert!(materials.images.is_empty());
@@ -1014,7 +1061,7 @@ mod tests {
             },
         ];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, false, None, "test-model", &db).await;
+        let materials = materials(&root, "p1", &refs, false, None, "test-model", &db).await;
         let origin = materials.origin.expect("有 PDF 附件就该有 origin");
         assert_eq!(origin.name, "原件.pdf");
         assert_eq!(origin.pages, Some(2));
@@ -1043,7 +1090,7 @@ mod tests {
             ext: "pdf".into(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, false, None, "test-model", &db).await;
+        let materials = materials(&root, "p1", &refs, false, None, "test-model", &db).await;
         assert_eq!(materials.origin.expect("文件名还是要报").pages, None);
         // 坏文件不能变成「原件 0 页」
         assert!(materials.section.contains("（页数读不出）"), "{}", materials.section);
@@ -1069,7 +1116,7 @@ mod tests {
             ext: "md".into(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, false, None, "test-model", &db).await;
+        let materials = materials(&root, "p1", &refs, false, None, "test-model", &db).await;
         assert!(materials.section.contains("附件已不在"), "{}", materials.section);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1089,7 +1136,7 @@ mod tests {
             ext: "pdf".into(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, true, None, "vision-model", &db).await;
+        let materials = materials(&root, "p1", &refs, true, None, "vision-model", &db).await;
         assert!(
             !materials.images.is_empty(),
             "这份样本里至少有一张内嵌图（证件照）：{}",
@@ -1148,7 +1195,7 @@ mod tests {
             ext: "pdf".into(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, true, None, "vision-model", &db).await;
+        let materials = materials(&root, "p1", &refs, true, None, "vision-model", &db).await;
         assert!(materials.section.contains("没有可附的内嵌图"), "{}", materials.section);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1169,7 +1216,7 @@ mod tests {
             ext: "pdf".into(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, true, None, "vision-model", &db).await;
+        let materials = materials(&root, "p1", &refs, true, None, "vision-model", &db).await;
 
         let doc = materials.origin_doc.clone().expect("有 PDF 就该有原件指针");
         assert_eq!(doc.stored, stored, "指针必须带 stored，否则模型调不回这份文件");
@@ -1201,7 +1248,7 @@ mod tests {
             ext: "pdf".into(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, false, None, "deepseek-chat", &db).await;
+        let materials = materials(&root, "p1", &refs, false, None, "deepseek-chat", &db).await;
         let doc = materials.origin_doc.expect("没有视觉也要给指针");
         assert_eq!(doc.name, "扫描件.pdf");
         let _ = std::fs::remove_dir_all(&root);
@@ -1219,7 +1266,7 @@ mod tests {
             ext: "pdf".into(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, true, None, "vision-model", &db).await;
+        let materials = materials(&root, "p1", &refs, true, None, "vision-model", &db).await;
 
         assert!(materials.section.contains("没有文字层"), "{}", materials.section);
         assert!(materials.section.contains("render_doc_page"), "{}", materials.section);
@@ -1325,7 +1372,7 @@ mod tests {
             ext: "png".into(),
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, false, None, "deepseek-chat", &db).await;
+        let materials = materials(&root, "p1", &refs, false, None, "deepseek-chat", &db).await;
         assert!(materials.section.contains("不支持看图"), "{}", materials.section);
         assert!(materials.section.contains("设置 → 模型"), "{}", materials.section);
         assert!(materials.section.contains("deepseek-chat"), "要指名道姓：{}", materials.section);
@@ -1353,7 +1400,7 @@ mod tests {
             model: "some-vl".into(),
         };
         let db = crate::db::Shared::new(root.join("app.db"));
-        let materials = materials(&root, &refs, false, Some(&conf), "deepseek-chat", &db).await;
+        let materials = materials(&root, "p1", &refs, false, Some(&conf), "deepseek-chat", &db).await;
         assert!(materials.section.contains("没读出来"), "{}", materials.section);
         assert!(
             materials.section.contains("贴过来"),
@@ -1382,7 +1429,7 @@ mod tests {
             name: "简历.pdf".into(),
             ext: "pdf".into(),
         }];
-        let materials = materials(&root, &refs, false, None, "test-model", &db).await;
+        let materials = materials(&root, "p1", &refs, false, None, "test-model", &db).await;
 
         assert!(materials.section.contains("ACME Corp"), "{}", materials.section);
         assert!(materials.section.contains("Shanghai"), "短正文要整段给：{}", materials.section);
@@ -1421,7 +1468,7 @@ mod tests {
             name: "简历.pdf".into(),
             ext: "pdf".into(),
         }];
-        let materials = materials(&root, &refs, false, None, "test-model", &db).await;
+        let materials = materials(&root, "p1", &refs, false, None, "test-model", &db).await;
 
         let doc = db
             .with(|conn| crate::source::get(conn, &stored))
@@ -1469,9 +1516,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// 文本类附件同样入 Fact 层；图片不落（它没有正文，去处是材料池 + 视觉输入）
+    /// 每一类附件都进 Fact 层：文本带正文，图片带一行 chars = 0 的「有这份原件」。
+    ///
+    /// 图片曾经被跳过（「图没有正文可存」），代价是 read_source 对它只能说
+    /// 「找不到该文件」——而文件明明就在 inbox 里。
     #[tokio::test]
-    async fn text_attachments_land_in_the_fact_layer_but_images_do_not() {
+    async fn every_attachment_lands_in_the_fact_layer() {
         let body = "# 教育背景\n华北电力大学";
         let (root, stored) = inbox_with(body.as_bytes(), "md");
         let db = crate::db::Shared::new(root.join("app.db"));
@@ -1480,7 +1530,7 @@ mod tests {
             name: "简历.md".into(),
             ext: "md".into(),
         }];
-        materials(&root, &refs, false, None, "test-model", &db).await;
+        materials(&root, "p1", &refs, false, None, "test-model", &db).await;
         let doc = db
             .with(|conn| crate::source::get(conn, &stored))
             .unwrap()
@@ -1494,17 +1544,74 @@ mod tests {
             name: "照片.png".into(),
             ext: "png".into(),
         }];
-        materials(&png_root, &png_refs, false, None, "test-model", &png_db).await;
-        assert!(
-            png_db
-                .with(|conn| crate::source::get(conn, &png_stored))
-                .unwrap()
-                .is_none(),
-            "图片没有正文可存"
-        );
+        materials(&png_root, "p1", &png_refs, false, None, "test-model", &png_db).await;
+        let image = png_db
+            .with(|conn| crate::source::get(conn, &png_stored))
+            .unwrap()
+            .expect("图片也要有一行：它没有正文，但它是事实");
+        assert_eq!(image.meta.chars, 0);
+        assert!(image.text.is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&png_root);
+    }
+
+    fn base64_of(bytes: &[u8]) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    /// 上传即落事实层：`attach_put` 返回时库里已经有正文，不用等 materials。
+    ///
+    /// 这条是真机事故的回归 —— 发送前 materials 提前失败（或根本没跑）时，
+    /// `source` 那一行当时不存在，read_source 只能回 inbox 翻文件。
+    #[test]
+    fn upload_writes_the_fact_layer_immediately() {
+        let root = std::env::temp_dir().join(format!("sr-attach-{}", crate::session::uuid_like()));
+        let body = "# 教育背景\n华北电力大学 本科";
+        let info = put(&root, "简历.md", &base64_of(body.as_bytes())).unwrap();
+
+        // 只查库：这条断言证明正文不是「现场解析出来的」
+        let conn = crate::db::open(&root.join("app.db")).unwrap();
+        let doc = crate::source::get(&conn, &info.stored)
+            .unwrap()
+            .expect("上传后立刻要有一行");
+        assert_eq!(doc.text, body);
+        assert_eq!(doc.meta.chars, body.chars().count());
+        assert_eq!(doc.meta.name, "简历.md");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// inbox 里的文件被清掉，read_source 仍然读得到全文：正文在库里，不在磁盘上。
+    #[test]
+    fn attach_write_survives_a_missing_inbox_file() {
+        let root = std::env::temp_dir().join(format!("sr-attach-{}", crate::session::uuid_like()));
+        let body = "# 项目\n靠得住的那一版";
+        let info = put(&root, "简历.md", &base64_of(body.as_bytes())).unwrap();
+        std::fs::remove_file(root.join("inbox").join(&info.stored)).unwrap();
+
+        let ws = serde_json::json!({ "people": [] });
+        let out = crate::tools::Outbox::default();
+        let ctx = crate::tools::ToolCtx {
+            workspace: &ws,
+            person_id: "p1",
+            resume_id: "r",
+            page_id: "g",
+            out: &out,
+            root: Some(&root),
+            facts: None,
+        };
+        let text =
+            crate::tools::call("read_source", &serde_json::json!({ "stored": info.stored }), &ctx)
+                .unwrap();
+        assert!(text.contains("靠得住的那一版"), "{text}");
+        assert!(
+            !text.contains("不在"),
+            "文件没了也不许说「找不到该文件」：{text}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 临时：把真机那份 PDF 的材料段原文打出来（`--ignored --nocapture`）
@@ -1521,7 +1628,7 @@ mod tests {
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
         for vision in [false, true] {
-            let materials = materials(&root, &refs, vision, None, "deepseek-chat", &db).await;
+            let materials = materials(&root, "p1", &refs, vision, None, "deepseek-chat", &db).await;
             println!("===== vision={vision} images={} =====", materials.images.len());
             println!("{}", materials.section);
             println!(

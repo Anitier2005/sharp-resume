@@ -168,6 +168,54 @@ pub fn list(conn: &Connection) -> Result<Vec<SourceMeta>, String> {
     Ok(rows)
 }
 
+/// 把一份原件记到某位候选人名下（「这份原件是谁的」）。
+///
+/// 写入点是 `attach::materials` —— 那是唯一「手上既有这个人、又有这份原件」的地方。
+/// `INSERT OR IGNORE`：同一份原件反复上传/反复被同一人用到，只留一行；
+/// `added_at` 也**不刷新**：它记的是「这份原件什么时候进这个人的材料」，不是最后一次被提起。
+pub fn bind(conn: &Connection, person_id: &str, stored: &str) -> Result<(), String> {
+    if person_id.trim().is_empty() || stored.trim().is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO attach_ref (person_id, stored, added_at) VALUES (?1, ?2, ?3)",
+        params![person_id, stored, crate::session::chrono_like() as i64],
+    )
+    .map_err(|error| format!("记录原件归属失败：{error}"))?;
+    Ok(())
+}
+
+/// 某位候选人用过的原件，**新的在前**。
+///
+/// 排序用 `attach_ref.added_at`（毫秒）而不是 `source.added_at`（秒）：同一秒里连着传
+/// 两份附件时，秒级只能靠名字猜先后，用户看到的顺序就和他的操作顺序对不上。
+pub fn bound(conn: &Connection, person_id: &str) -> Result<Vec<SourceMeta>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.stored, s.name, s.ext, s.pages, s.chars, s.added_at, substr(s.text, 1, ?2)
+             FROM attach_ref r JOIN source s ON s.stored = r.stored
+             WHERE r.person_id = ?1
+             ORDER BY r.added_at DESC, s.stored",
+        )
+        .map_err(|error| format!("读取原件清单失败：{error}"))?;
+    let rows = stmt
+        .query_map(params![person_id, HEAD_CHARS as i64], |row| {
+            Ok(SourceMeta {
+                stored: row.get(0)?,
+                name: row.get(1)?,
+                ext: row.get(2)?,
+                pages: row.get::<_, Option<i64>>(3)?.map(|value| value as u32),
+                chars: row.get::<_, i64>(4)? as usize,
+                added_at: row.get(5)?,
+                head: row.get(6)?,
+            })
+        })
+        .map_err(|error| format!("查询原件清单失败：{error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("读取原件清单行失败：{error}"))?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

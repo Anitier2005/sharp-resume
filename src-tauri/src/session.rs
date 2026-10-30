@@ -514,6 +514,7 @@ pub async fn chat_send(
         (Some(dir), false) => {
             crate::attach::materials(
                 dir,
+                &args.key,
                 &args.attachments,
                 vision,
                 args.ocr.as_ref(),

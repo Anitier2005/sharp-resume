@@ -21,13 +21,30 @@ const DEFAULT_LIMIT: usize = 4000;
 /// 一次最多读多少字：再长就该分段读，否则一条工具结果能把整个窗口吃掉
 const MAX_LIMIT: usize = 20_000;
 
+/// 清单默认列几份、最多列几份。一份简历原件的量级是 1~3，20 足够；
+/// 上限压在 50 是因为清单只是「我手上有什么」，不是为了把全库倒进上下文
+const DEFAULT_LIST: usize = 20;
+const MAX_LIST: usize = 50;
+
+/// 一条都没有时的回答。用户看到的不是「空」，而是「下一步该干什么」
+const NO_SOURCES: &str =
+    "这个工作区里还没有原件。用户可以拖一份 PDF / 图片进对话，我会把它存下来。";
+
+/// 回落到全表时开头必须写清：这些不一定是这个候选人的。
+/// 不写这一句，模型会拿别人的原件当自己的简历来核对
+const GLOBAL_HEAD: &str = "下面这些是系统里的全部原件，不都是这个候选人的：";
+
+/// 结尾。它的作用是让模型知道「想不起来就再列一次」是允许的 —— 否则它会
+/// 凭记忆编一个 stored，然后撞在「没有这么一份原件」上
+const LIST_TAIL: &str = "原件不会随轮次消失；不确定有什么就再列一次。";
+
 pub fn params() -> Value {
     json!({
         "type": "object",
         "properties": {
             "stored": {
                 "type": "string",
-                "description": "原件标识，从材料段里的「（附件标识：…）」或 read_source 的报错里取，不是文件名"
+                "description": "原件标识，从 list_sources 的清单、材料段里的「（附件标识：…）」或 read_source 的报错里取，不是文件名"
             },
             "offset": {
                 "type": "integer",
@@ -98,6 +115,91 @@ pub fn run(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
     ))
 }
 
+/// `list_sources`：我手上到底有哪些原件。
+///
+/// 为什么要它：`stored` 只在「那一轮的消息」里出现过一次。轮次一过，模型手里
+/// 只剩记忆 —— 记不住就等于没有，于是它会说「原件已经不在系统里了」，
+/// 让用户重新贴一遍原文。事实层其实一直有：缺的只是「问一句有什么」的入口。
+pub fn list_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "description": "最多列几份，默认 20"
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+/// 一行一份原件。**`stored = …` 必须在**：清单的全部意义就是交出下一步要用的那把钥匙
+/// （`read_source` 的 stored、`render_doc_page` 的 stored 都是它）。
+fn line_of(meta: &crate::source::SourceMeta) -> String {
+    // 页数只有 PDF 有；没有就不写「0 页」——那是假话，也没人需要
+    let pages = match meta.pages {
+        Some(count) => format!("{count} 页，"),
+        None => String::new(),
+    };
+    format!(
+        "- {}（{}，{pages}{} 字，stored = {}）",
+        meta.name, meta.ext, meta.chars, meta.stored
+    )
+}
+
+pub fn list_sources(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(DEFAULT_LIST)
+        .clamp(1, MAX_LIST);
+
+    let root = ctx
+        .root
+        .ok_or_else(|| "当前环境拿不到数据目录（浏览器调试模式没有原件）".to_string())?;
+    let conn = crate::db::open(&root.join("app.db"))?;
+
+    let (mut rows, global) = {
+        let mine = crate::source::bound(&conn, ctx.person_id)?;
+        if mine.is_empty() {
+            // 老库（attach_ref 是这一版才有的）与「从别处带过来的原件」都走这条。
+            // 宁可多说一句「这是全部」，也不能回答「你什么都没有」——
+            // 后者会把模型逼回「让用户重新贴」那条路。
+            let mut all = crate::source::list(&conn)?;
+            all.reverse(); // source::list 按时间正序，清单要新在前
+            (all, true)
+        } else {
+            (mine, false)
+        }
+    };
+
+    if rows.is_empty() {
+        return Ok(format!("{NO_SOURCES}\n{LIST_TAIL}"));
+    }
+
+    let total = rows.len();
+    let shown = total.min(limit);
+    rows.truncate(shown);
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(if global {
+        GLOBAL_HEAD.to_string()
+    } else {
+        format!("这个候选人用过的原件（共 {total} 份，新的在前）：")
+    });
+    for meta in &rows {
+        lines.push(line_of(meta));
+    }
+    if shown < total {
+        lines.push(format!(
+            "（共 {total} 份，这里只列最新的 {shown} 份；要更多请把 limit 调大。）"
+        ));
+    }
+    lines.push(LIST_TAIL.to_string());
+    Ok(lines.join("\n"))
+}
+
 /// Fact 层没有这一行：从 `inbox/` 读回原件、按当时的扩展名重解析、补写进库。
 ///
 /// 补写失败也照样把正文交给模型 —— 这一轮的回答不该因为落库失败而作废。
@@ -107,7 +209,9 @@ fn backfill(
     stored: &str,
 ) -> Result<crate::source::SourceDoc, String> {
     let bytes = crate::attach::read(root, stored).map_err(|error| {
-        format!("没有 stored = {stored} 的原件：{error}。材料段里那行「附件标识」抄全了吗？")
+        format!(
+            "没有 stored = {stored} 的原件：{error}。先调 list_sources 看一眼手上到底有哪些原件，stored 从那里抄。"
+        )
     })?;
     let ext = stored
         .rsplit_once('.')
@@ -244,6 +348,88 @@ mod tests {
         let ctx = ctx_with(&root, &ws, &out);
         let err = run(&json!({ "stored": "deadbeefdeadbeef.pdf" }), &ctx).unwrap_err();
         assert!(err.contains("没有 stored"), "{err}");
+        assert!(err.contains("list_sources"), "要给下一把抓手：{err}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 清单里的每一行都必须带 `stored = …`：那是模型下一步唯一能用的钥匙。
+    /// 只给文件名，它就只能说「我这儿有一份叫 XX 的文件」，然后卡住。
+    #[test]
+    fn list_sources_names_the_stored_it_wants() {
+        let root = std::env::temp_dir().join(format!("sr-source-{}", crate::session::uuid_like()));
+        std::fs::create_dir_all(root.join("inbox")).unwrap();
+        let conn = crate::db::open(&root.join("app.db")).unwrap();
+        let body = "字".repeat(2402);
+        crate::source::save(
+            &conn,
+            "bcf9d0ec3fd6b381.pdf",
+            "华北电力大学 谭轶天.pdf",
+            "pdf",
+            Some(1),
+            &body,
+        )
+        .unwrap();
+        crate::source::bind(&conn, "p", "bcf9d0ec3fd6b381.pdf").unwrap();
+        drop(conn);
+
+        let ws = json!({ "people": [] });
+        let out = super::super::Outbox::default();
+        let ctx = ctx_with(&root, &ws, &out);
+
+        let text = list_sources(&json!({}), &ctx).unwrap();
+        assert!(text.contains("华北电力大学 谭轶天.pdf"), "{text}");
+        assert!(text.contains("stored = bcf9d0ec3fd6b381.pdf"), "{text}");
+        assert!(text.contains("2402 字"), "{text}");
+        assert!(text.contains("1 页"), "{text}");
+        assert!(text.contains("pdf"), "{text}");
+        assert!(
+            !text.contains("不都是这个候选人"),
+            "自己名下有的，不该说成全局清单：{text}"
+        );
+        assert!(text.contains("原件不会随轮次消失"), "结尾要有这句：{text}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 没有 attach_ref（老库 / 从别处带过来的原件）：回落到全表，
+    /// 并在开头说清「这不都是这个候选人的」—— 不说，模型会拿别人的原件当自己的简历核对。
+    #[test]
+    fn list_sources_falls_back_to_everything_when_unbound() {
+        let root = std::env::temp_dir().join(format!("sr-source-{}", crate::session::uuid_like()));
+        std::fs::create_dir_all(root.join("inbox")).unwrap();
+        let conn = crate::db::open(&root.join("app.db")).unwrap();
+        crate::source::save(&conn, "aaaaaaaaaaaaaaa1.pdf", "旧的.pdf", "pdf", Some(2), "旧简历").unwrap();
+        crate::source::save(&conn, "bbbbbbbbbbbbbbb2.md", "笔记.md", "md", None, "一段笔记").unwrap();
+        drop(conn);
+
+        let ws = json!({ "people": [] });
+        let out = super::super::Outbox::default();
+        let ctx = ctx_with(&root, &ws, &out);
+
+        let text = list_sources(&json!({}), &ctx).unwrap();
+        assert!(
+            text.starts_with("下面这些是系统里的全部原件，不都是这个候选人的"),
+            "开头要先说清这是全局的：{text}"
+        );
+        assert!(text.contains("旧的.pdf") && text.contains("笔记.md"), "{text}");
+        assert!(text.contains("stored = bbbbbbbbbbbbbbb2.md"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 一份都没有：给下一步（拖文件进来），而不是一句「没有」
+    #[test]
+    fn list_sources_with_an_empty_workspace_says_what_to_do() {
+        let root = std::env::temp_dir().join(format!("sr-source-{}", crate::session::uuid_like()));
+        std::fs::create_dir_all(root.join("inbox")).unwrap();
+        let ws = json!({ "people": [] });
+        let out = super::super::Outbox::default();
+        let ctx = ctx_with(&root, &ws, &out);
+
+        let text = list_sources(&json!({}), &ctx).unwrap();
+        assert!(text.contains("这个工作区里还没有原件"), "{text}");
+        assert!(text.contains("拖一份"), "{text}");
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }

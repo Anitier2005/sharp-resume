@@ -72,6 +72,14 @@ fn ensure_additive(conn: &Connection) -> Result<(), String> {
              chars    INTEGER NOT NULL,
              text     TEXT NOT NULL,
              added_at INTEGER NOT NULL
+         );
+         -- 「这份原件是哪位候选人用过的」。写点在 attach::materials（那里正好知道本轮是谁在用），
+         -- 没有记录时 list_sources 回落到全表 —— 老库和从别处带过来的原件都不该在清单里消失。
+         CREATE TABLE IF NOT EXISTS attach_ref (
+             person_id TEXT NOT NULL,
+             stored    TEXT NOT NULL,
+             added_at  INTEGER NOT NULL,
+             PRIMARY KEY (person_id, stored)
          );",
     )
     .map_err(|error| format!("创建设置/原件表失败：{error}"))

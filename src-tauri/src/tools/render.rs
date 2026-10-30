@@ -1,4 +1,4 @@
-//! `render_doc_page`：按需把原件的**某一页**渲成图片。
+//! `render_doc_page`：按需把原件的**某一页 / 整张原图**变成这一轮看得见的图片。
 //!
 //! 为什么有它：材料段现在只给摘要和指针，不再默认塞页图 —— 一份十几页的 PDF
 //! 全渲一遍，光 token 就吃掉半个窗口，而绝大多数轮次只关心第 1 页。
@@ -10,8 +10,11 @@
 //!   - 这里按 `stored` 指名页码，清晰度可调，一次一页 —— 材料段里的「附件标识」
 //!     就是 `stored`，模型手上没有 assetId 也能用。
 //!
-//! 只对 PDF：`.docx` / `.txt` 没有「页」这个概念（分页是别人渲染出来的），
-//! 硬渲只会给出一张和真实分页无关的图，比不给更误导。
+//! 三种原件三种处理：
+//!   - PDF：渲染第 N 页（分页由 PDF 自己定义，渲出来的就是真分页）；
+//!   - 图片：原图直接附上（它本来就是一张图，再渲一遍只会更糊）；
+//!   - 其它（docx / pptx / xlsx / txt…）：没有「页」这个概念（分页是别人渲染出来的），
+//!     硬渲只会给出一张和真实分页无关的图，比不给更误导 —— 所以指路去 `read_source`。
 
 use serde_json::{json, Value};
 
@@ -27,9 +30,16 @@ pub const MIN_WIDTH: u32 = 800;
 pub const MAX_WIDTH: u32 = 2400;
 /// 一轮最多几张：超过这个数模型也看不过来，反而挤掉正文
 pub const MAX_VIEWS: usize = 4;
+/// 一张原图超过这个体积就别直接附：base64 之后还要再涨三分之一，
+/// 一次就可能把整个上下文吃掉（与 `view_asset` 同一道闸）
+const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
-pub const NON_PDF: &str =
-    "这种格式没有页图可渲染（只有 PDF 能渲成图）。要看内容用 read_source，要看结构看材料段的【原件结构】。";
+/// 渲不成页图的类型：不说「不行」，说「该怎么看」。
+///
+/// 原来这里是一句「只有 PDF 能渲成图」，模型读完只能放弃 —— 而它真正想要的内容，
+/// `read_source` 里就有，只是没人告诉它。
+pub const NON_PAGE: &str =
+    "这类原件渲不成页图，用 read_source 读正文（它带格式层级）；要看成什么样请用户在 Word / 预览里打开。";
 
 pub const NO_VISION: &str =
     "当前模型看不了图，渲染出来也看不见。把内容读成文字：read_source。";
@@ -42,15 +52,15 @@ pub fn params() -> Value {
         "properties": {
             "stored": {
                 "type": "string",
-                "description": "原件标识，材料段里「（附件标识：…）」那串就是它，不是文件名"
+                "description": "原件的 stored（list_sources 里那个），不是文件名。材料段里的「（附件标识：…）」也是它"
             },
             "page": {
                 "type": "integer",
-                "description": "要看第几页，从 1 起，默认 1"
+                "description": "PDF 要看第几页，从 1 起，默认 1。图片原件用不到这个参数"
             },
             "width": {
                 "type": "integer",
-                "description": "渲染像素宽，默认 1600（够看清小字）。范围 800-2400，越界按边界算"
+                "description": "渲染像素宽，默认 1600（够看清小字）。范围 800-2400，越界按边界算。图片原件按原分辨率给，不受它影响"
             }
         },
         "required": ["stored"],
@@ -86,6 +96,24 @@ fn is_pdf(stored: &str, bytes: &[u8]) -> bool {
     stored.to_ascii_lowercase().ends_with(".pdf") || bytes.starts_with(b"%PDF")
 }
 
+/// 扩展名：stored 的后缀（后端生成的名字，值可信）。
+fn ext_of(stored: &str) -> String {
+    stored
+        .rsplit_once('.')
+        .map(|(_, tail)| tail.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+/// 图片的宽高。只读文件头，不解全图 —— 一张 4000×3000 的照片全解一遍要几十 MB 内存。
+///
+/// `None` = 这不是一张能认出来的图片（扩展名说它是，字节说它不是）。
+fn image_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    reader.into_dimensions().ok()
+}
+
 fn out_of_range(pages: usize, page: usize) -> String {
     format!("这份 PDF 只有 {pages} 页，第 {page} 页不存在。")
 }
@@ -117,9 +145,9 @@ pub fn run(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         .root
         .ok_or_else(|| "当前环境拿不到数据目录（浏览器调试模式没有原件）".to_string())?;
     let bytes = crate::attach::read(root, &stored)
-        .map_err(|error| format!("没有 stored = {stored} 的原件：{error}。材料段里那行「附件标识」抄全了吗？"))?;
+        .map_err(|error| format!("没有 stored = {stored} 的原件：{error}。清单用 list_sources 列一次，stored 从那里抄。"))?;
     if !is_pdf(&stored, &bytes) {
-        return Err(NON_PDF.into());
+        return render_other(&stored, &bytes, ctx);
     }
 
     // 页数用 lopdf 数（纯 Rust、几毫秒），不用为了问一句「有几页」先渲一遍。
@@ -147,6 +175,42 @@ pub fn run(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
     Ok(format!(
         "第 {page} 页已作为图片附在下一轮（{width}px 宽）。看完再排版／回答。"
     ))
+}
+
+/// 非 PDF 的两条路：图片直接附原图，其余指路 `read_source`。
+///
+/// 为什么图片不走渲染：它本来就是像素，渲染器只会再压一遍、更糊。
+/// 宽高要从文件头读（`image_size`），读不出（gif / bmp / avif 这几个没编解码器）
+/// 也照样附 —— 「读不出宽高」不是「看不了」。
+fn render_other(stored: &str, bytes: &[u8], ctx: &ToolCtx) -> Result<String, String> {
+    let ext = ext_of(stored);
+    let declared_image = crate::attach::is_image(&ext);
+    let size = image_size(bytes);
+    if size.is_none() && !declared_image {
+        return Err(NON_PAGE.into());
+    }
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "这张图太大（{}MB），直接附上会把上下文挤爆。请用户压一版再传（或另存成 jpg）。",
+            bytes.len() / 1024 / 1024
+        ));
+    }
+    super::push_view(ctx, &crate::pdfimage::data_url_of(mime_of(&ext), bytes))?;
+    Ok(match size {
+        Some((width, height)) => format!("已附上原图（{width}×{height}）。"),
+        None => "已附上原图（宽高读不出，按原样附的）。".to_string(),
+    })
+}
+
+fn mime_of(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        _ => "image/jpeg",
+    }
 }
 
 #[cfg(test)]
@@ -187,9 +251,9 @@ mod tests {
         assert_eq!(page_of(&json!({ "page": 3 })), 3);
     }
 
-    /// 非 PDF 要一句话说清「为什么不行 + 该用什么」
+    /// docx 渲不成页图，但回答不许止于「不行」：要说清正文在哪、版式找谁看
     #[test]
-    fn a_non_pdf_file_is_refused_with_an_exit() {
+    fn render_refuses_a_type_it_cannot_draw_but_says_what_to_do() {
         let stored = "abcd1234.docx";
         let root = inbox_with(b"PK\x03\x04 not really a docx", stored);
         let ws = json!({ "people": [] });
@@ -198,10 +262,42 @@ mod tests {
         let ctx = ctx_at(&root, &ws, &out);
 
         let error = run(&json!({ "stored": stored, "page": 1 }), &ctx).unwrap_err();
-        assert_eq!(error, NON_PDF);
+        assert_eq!(error, NON_PAGE);
         assert!(error.contains("read_source"), "{error}");
-        assert!(error.contains("原件结构"), "{error}");
-        assert!(out.views.lock().unwrap().is_empty(), "拒绝时不该推图");
+        assert!(error.contains("格式层级"), "{error}");
+        assert!(error.contains("Word"), "要告诉用户去哪儿看：{error}");
+        assert!(!error.contains("只有 PDF 能"), "旧文案不该再出现：{error}");
+        assert!(out.views.lock().unwrap().is_empty(), "渲不出来就别推图");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+        use std::io::Cursor;
+        let image = image::DynamicImage::new_rgb8(width, height);
+        let mut out = Vec::new();
+        image
+            .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    /// 图片原件：原图直接附（不再渲染），并报出真实宽高
+    #[test]
+    fn an_image_attachment_is_attached_as_the_original() {
+        let stored = "1234abcd5678ef90.png";
+        let root = inbox_with(&png_bytes(6, 4), stored);
+        let ws = json!({ "people": [] });
+        let mut out = Outbox::default();
+        out.vision = true;
+        let ctx = ctx_at(&root, &ws, &out);
+
+        let text = run(&json!({ "stored": stored }), &ctx).unwrap();
+        assert!(text.contains("已附上原图"), "{text}");
+        assert!(text.contains("6×4"), "要报真实宽高：{text}");
+        let views = out.views.lock().unwrap();
+        assert_eq!(views.len(), 1);
+        assert!(views[0].starts_with("data:image/png;base64,"), "{}", views[0]);
 
         let _ = std::fs::remove_dir_all(&root);
     }
