@@ -624,13 +624,23 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         ) {
             reply.push('\n');
             reply.push_str(MEASURE_LAG_HINT);
+        } else {
+            // 有数字也要说清它是**改之前**的。真机上出过：模型把 1.22 页当成
+            // 「刚返回的结果」转述给用户，而改完其实是 1.15 页 —— 数字是真的，
+            // 时态是假的，用户据此做的取舍也就跟着错。
+            reply.push('\n');
+            reply.push_str(MEASURE_BEFORE_HINT);
         }
     }
     Ok(reply)
 }
 
-/// 实测滞后一轮的说明。只在量不到 / 旧数作废时追加，有实测值时一个字都不多说。
+/// 实测滞后一轮的说明。只在量不到 / 旧数作废时追加。
 const MEASURE_LAG_HINT: &str = "页数要等这一轮结束、纸面重新排完才会更新 —— 同一轮里连改两次不会让数字变，别据此判断「版面没用」，也别凭这个去要求删内容。";
+
+/// 有数字时的时态说明：上面那行是**这次改动之前**量的。
+/// 不写这句，模型会把旧数当成"刚返回的结果"转述给用户（实测发生过）。
+const MEASURE_BEFORE_HINT: &str = "注意：上面这行是这次改动**之前**量的。改动后的页数要等这一轮结束、纸面重排完才出来，别把它当成这一版的结果。";
 
 /* ---------- 留批注 ---------- */
 
@@ -976,11 +986,17 @@ mod tests {
         assert!(text.contains("别据此判断"), "{text}");
     }
 
-    /// 有实测值时不多嘴：「等一轮」那句只属于量不到 / 旧数作废
+    /// 有实测值时也要说清时态：数字是改动之前的，不是这一版的结果
     #[test]
-    fn measured_reply_does_not_mention_the_lag() {
+    fn measured_reply_says_the_number_precedes_this_change() {
         let text = run(Some(&facts(1000.0)), json!({ "preset": "compact" })).unwrap();
-        assert!(!text.contains("等这一轮结束"), "{text}");
+        // 数字照给（模型要用它判断「大概差多少」）……
+        assert!(text.contains("实测"), "{text}");
+        // ……但必须说明它是改动之前的，不能当成这一版的结果转述
+        assert!(text.contains("这一轮结束"), "{text}");
+        assert!(text.contains("之前"), "{text}");
+        // 「别据此去删内容」那一套只属于量不到的情况，有数时不要吓唬它
+        assert!(!text.contains("别凭这个去要求删内容"), "{text}");
     }
 
     #[test]
