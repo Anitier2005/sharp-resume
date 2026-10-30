@@ -5,7 +5,8 @@
 //!
 //! v5 起按 block 排版，代码里没有「姓名 / 公司 / 教育」这类预设键：
 //!   fields 块的第一个字段 = 大标题，其余按「标签：值」；
-//!   section 块的标题就是用户写的那句话，条目第一个字段加粗；
+//!   section 块的标题就是用户写的那句话，条目的名称 / 中间字段 / 时间落在同一段
+//!   （名称加粗，时间靠右制表位推到版心右缘）—— 与屏幕上的 `.erow` 同构；
 //!   media 块在正文里留一行「见图」，图片本体旁挂到附件目录（不硬塞进 docx，
 //!   否则一张 8MB 的证书会把简历文档撑得没法发）。
 
@@ -267,6 +268,35 @@ fn para(text: &str, bold: bool, size: u32, color: &str, opts: &DocxOptions, cent
     )
 }
 
+/// 条目头：名称（加粗）+ 中间字段 + 时间，**同一个段落**，与屏幕上的 `.erow` 同构。
+///
+/// 时间用右制表位推到版心右边缘：位置取自版心宽度，不随字号漂移，
+/// 也不去估「这段字有多宽」—— 估出来的宽度换个字号就错位，比不齐更难看。
+fn entry_head_para(head: &crate::render::EntryHead, opts: &DocxOptions) -> String {
+    let mut inner = run(&head.lead, true, 21, "141412");
+    for role in &head.roles {
+        inner.push_str(&run(&format!("  {role}"), false, 18, "55554F"));
+    }
+    let tabs = match &head.time {
+        Some(time) => {
+            let size = opts.sz(18);
+            inner.push_str(&format!(
+                "<w:r><w:rPr><w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/></w:rPr><w:tab/></w:r>"
+            ));
+            inner.push_str(&run(time, false, 18, "55554F"));
+            format!(
+                "<w:tabs><w:tab w:val=\"right\" w:pos=\"{}\"/></w:tabs>",
+                opts.content_width_twips()
+            )
+        }
+        None => String::new(),
+    };
+    format!(
+        "<w:p><w:pPr>{tabs}<w:spacing w:after=\"40\" w:line=\"{line}\" w:lineRule=\"auto\"/></w:pPr>{inner}</w:p>",
+        line = opts.line()
+    )
+}
+
 /// 绝对定位段落：`w:framePr` 把这一段从正文流里摘出来，按页边坐标摆放。
 ///
 /// `w:hAnchor` / `w:vAnchor` 都是 `page`：屏幕上的 `left/top` 也是相对纸边量的。
@@ -420,13 +450,13 @@ fn block_xml(
                 out.push(para(&block.title, true, 21, hex, opts, false));
             }
             for entry in &block.items {
-                for (index, field) in entry_fields(entry, library).iter().enumerate() {
-                    if index == 0 {
-                        let text = if field.value.trim().is_empty() { &field.label } else { &field.value };
-                        out.push(para(text, true, 21, "141412", opts, false));
-                    } else {
-                        out.push(para(&field_text(field), false, 18, "55554F", opts, false));
-                    }
+                // 与屏幕同构：名称 + 中间字段 + 时间落在同一个段落里，
+                // 拆成一段一个字段会多占两三倍的行数（屏幕上早就不这么排了）
+                let has_bullets = entry.bullets.iter().any(|line| !line.trim().is_empty());
+                if let Some(head) =
+                    crate::render::entry_head(entry_fields(entry, library), has_bullets)
+                {
+                    out.push(entry_head_para(&head, opts));
                 }
                 for bullet in &entry.bullets {
                     if !bullet.trim().is_empty() {
@@ -754,6 +784,37 @@ mod tests {
         assert_eq!(px_to_twips(96.0), 1440);
         assert_eq!(px_to_twips(793.7), 11906, "A4 宽 793.7px → 11906 twips");
         assert_eq!(px_to_twips(0.0), 0);
+    }
+
+    /// 条目头在 Word 里必须是**一个段落**：名称加粗，中间字段与时间同在段末
+    #[test]
+    fn entry_head_becomes_a_single_paragraph() {
+        let page = page_with(json!([
+            { "id": "b2", "kind": "section", "title": "教育经历", "items": [
+                { "id": "e1", "fields": [
+                    { "id": "f1", "label": "学校", "value": "中山大学" },
+                    { "id": "f2", "label": "院校属性", "value": "教育部直属 211" },
+                    { "id": "f3", "label": "专业", "value": "行政管理" },
+                    { "id": "f4", "label": "时间", "value": "2016年9月-2020年6月" }
+                ], "bullets": [] }
+            ]}
+        ]));
+        let xml = document_of(&page, &opts_for("classic"));
+
+        // 分区标题 + 条目头 = 两个段落：四个字段不再各占一段
+        assert_eq!(xml.matches("<w:p>").count(), 2, "{xml}");
+        let head = xml
+            .split("<w:p>")
+            .find(|chunk| chunk.contains("中山大学"))
+            .expect("条目头那一段");
+        assert!(head.contains("<w:b/>"), "名称要加粗：{head}");
+        assert!(head.contains("教育部直属 211"), "{head}");
+        assert!(head.contains("行政管理"), "{head}");
+        assert!(head.contains("2016年9月-2020年6月"), "时间要在同一段：{head}");
+        // 时间靠右制表位推到版心右缘，不靠数全角空格猜宽度
+        assert!(head.contains(r#"<w:tab w:val="right""#), "{head}");
+        // 也不再逐字段印「标签：值」
+        assert!(!xml.contains("时间："), "{xml}");
     }
 
     #[test]

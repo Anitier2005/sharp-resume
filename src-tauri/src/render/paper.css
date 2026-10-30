@@ -201,6 +201,27 @@
   color: var(--dim);
   font-size: 0.9em;
 }
+/* 条目头：名称 / 中间字段 / 时间同处一行 —— 原件就是这么印的。
+ * 行距与字段间距沿用 --lh / --gap，密度档不必另写一套。 */
+.doc .entry .erow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.doc .entry .erow .role {
+  color: var(--dim);
+}
+.doc .entry .erow .time {
+  margin-left: auto;
+  color: var(--dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* role=row 的分区里条目本身是 flex 行：头行要占满整行，
+ * 时间才贴得到右边缘（否则它只在自己那点内容宽度里靠右） */
+.doc .row > .entry > .erow {
+  flex: 1 1 100%;
+}
 .doc .entry .bullets {
   margin-top: 3px;
 }

@@ -772,18 +772,35 @@ fn entry_fields<'a>(entry: &'a SectionEntry, person: &'a Person) -> &'a [Field] 
         .unwrap_or(&[])
 }
 
+/// 条目头：名称 / 中间字段 / 时间，**一行三段**。
+///
+/// 原件里一个条目就是一行（`公司  职位  时间`）。拆成一个字段一行不只是多占
+/// 两行 —— 五条项目经历加一条工作、一条教育就是十几行，观感也完全不像原件。
+pub(crate) struct EntryHead {
+    pub lead: String,
+    pub roles: Vec<String>,
+    pub time: Option<String>,
+}
+
 fn render_entry(entry: &SectionEntry, person: &Person, warnings: &mut Vec<String>) -> String {
     let fields = entry_fields(entry, person);
-    let (texts, images) = split_fields(fields);
+    let (_, images) = split_fields(fields);
+    let has_bullets = entry.bullets.iter().any(|line| !line.trim().is_empty());
 
     let mut inner = String::new();
-    if let Some((lead, rest)) = texts.split_first() {
-        inner.push_str(&format!("<b>{}</b>", escape(&lead_title(lead))));
-        for field in rest {
-            inner.push_str(&format!(
-                r#"<div class="meta">{}</div>"#,
-                escape(&field_text(field))
-            ));
+    if let Some(head) = entry_head(fields, has_bullets) {
+        if head.roles.is_empty() && head.time.is_none() {
+            // 只有名称：不套 flex 层，`.entry > b` 的块级规则继续生效
+            inner.push_str(&format!("<b>{}</b>", escape(&head.lead)));
+        } else {
+            let mut row = format!("<b>{}</b>", escape(&head.lead));
+            for role in &head.roles {
+                row.push_str(&format!(r#"<span class="role">{}</span>"#, escape(role)));
+            }
+            if let Some(time) = &head.time {
+                row.push_str(&format!(r#"<span class="time">{}</span>"#, escape(time)));
+            }
+            inner.push_str(&format!(r#"<div class="erow">{row}</div>"#));
         }
     }
     // 条目里的图片是「这一条的配图」：作品截图、证书照
@@ -798,6 +815,93 @@ fn render_entry(entry: &SectionEntry, person: &Person, warnings: &mut Vec<String
     }
 
     format!(r#"<div class="entry">{inner}</div>"#)
+}
+
+/// 把一组字段折成「名称 + 中间字段 + 时间」。
+///
+/// `has_bullets` 参与判断是必要的：「技能与兴趣」这类条目只有一个空值字段加
+/// 一串要点，分区标题已经印了那四个字，头行再印一遍就是在纸上重复。
+pub(crate) fn entry_head(fields: &[Field], has_bullets: bool) -> Option<EntryHead> {
+    // 图片字段的「值」是图注，进头行会印出半句话；它走 render_field_images
+    let texts: Vec<&Field> = fields.iter().filter(|f| f.image_id().is_none()).collect();
+    let lead = *texts.first()?;
+    if texts.len() == 1 && lead.value.trim().is_empty() && has_bullets {
+        return None;
+    }
+
+    let rest = &texts[1..];
+    // 只认最后一个：认不出来就当普通中间字段，硬塞到右边比不右对齐更难看
+    let time_at = rest
+        .len()
+        .checked_sub(1)
+        .filter(|&index| is_time_field(rest[index]));
+
+    let mut roles = Vec::new();
+    for (index, field) in rest.iter().enumerate() {
+        if Some(index) == time_at {
+            continue;
+        }
+        if let Some(text) = head_field_text(field) {
+            roles.push(text);
+        }
+    }
+    let time = time_at.and_then(|index| head_field_text(rest[index]));
+
+    Some(EntryHead {
+        lead: lead_title(lead).trim().to_string(),
+        roles,
+        time,
+    })
+}
+
+/// 头行上一个字段印什么：有值印值，没值退回标签（原件就是这么印的：
+/// `教育部直属 211` / `行政管理` / `产品助理`）。两个都空就整段省掉 ——
+/// 留一个空 span 只会在行里撑出一段看不见的间距。
+fn head_field_text(field: &Field) -> Option<String> {
+    let value = field.value.trim();
+    if !value.is_empty() {
+        return Some(value.to_string());
+    }
+    let label = field.label.trim();
+    if label.is_empty() {
+        None
+    } else {
+        Some(label.to_string())
+    }
+}
+
+/// 时间字段只靠两件事认：标签，或值的形态。
+///
+/// 不写日期解析器 —— `2025年10月-至今` / `2025.9-2026.6` / `2025/09` 之外还有
+/// 大量写法，真正的解析只会把「2025 届」这类也吞进去。
+fn is_time_field(field: &Field) -> bool {
+    if matches!(
+        field.label.trim(),
+        "时间" | "日期" | "起止时间" | "起止" | "年份"
+    ) {
+        return true;
+    }
+    has_date_shape(field.value.trim())
+}
+
+/// 值里出现「四位数字后跟 年 / . / - / /」就当它是日期区间
+fn has_date_shape(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let mut digits = 0;
+    for (index, ch) in chars.iter().enumerate() {
+        if ch.is_ascii_digit() {
+            digits += 1;
+            continue;
+        }
+        if digits >= 4 {
+            let next = chars[index..].iter().find(|c| !c.is_whitespace());
+            if matches!(next, Some('年') | Some('.') | Some('-') | Some('/')) {
+                return true;
+            }
+        }
+        digits = 0;
+    }
+    false
 }
 
 /// 标签云：一条只落一个 `<span class="tag">`。
@@ -1299,8 +1403,103 @@ mod tests {
     fn entry_inherits_library_fields_when_page_has_none() {
         let out = compile(&page(), &person());
         assert!(out.html.contains("<b>中远海运</b>"), "{}", out.html);
-        assert!(out.html.contains("职位：单证员"), "{}", out.html);
+        assert!(out.html.contains(r#"<span class="role">单证员</span>"#), "{}", out.html);
         assert!(out.html.contains("<li>负责报关单证</li>"), "{}", out.html);
+    }
+
+    /// 条目头是一行三段：原件里的教育经历就是「学校  院校属性  专业  时间」一行
+    #[test]
+    fn entry_head_is_one_line_of_three_parts() {
+        let page = solo_section(
+            "plain",
+            json!([{
+                "id": "e1",
+                "fields": [
+                    { "id": "f1", "label": "学校", "value": "中山大学" },
+                    { "id": "f2", "label": "院校属性", "value": "教育部直属 211" },
+                    { "id": "f3", "label": "专业", "value": "行政管理" },
+                    { "id": "f4", "label": "时间", "value": "2016年9月-2020年6月" }
+                ],
+                "bullets": []
+            }]),
+        );
+        let out = compile(&page, &person());
+
+        // 一个条目只有一行头：<b> + 2 个中间字段 + 1 个时间
+        assert_eq!(out.html.matches(r#"class="erow""#).count(), 1, "{}", out.html);
+        assert_eq!(out.html.matches(r#"class="role""#).count(), 2, "{}", out.html);
+        assert_eq!(out.html.matches(r#"class="time""#).count(), 1, "{}", out.html);
+        assert!(out.html.contains("<b>中山大学</b>"), "{}", out.html);
+        assert!(
+            out.html.contains(r#"<span class="role">教育部直属 211</span>"#),
+            "{}",
+            out.html
+        );
+        assert!(out.html.contains(r#"<span class="role">行政管理</span>"#), "{}", out.html);
+        assert!(
+            out.html.contains(r#"<span class="time">2016年9月-2020年6月</span>"#),
+            "{}",
+            out.html
+        );
+        // 不再是「一个字段一行、还带标签」
+        assert!(!out.html.contains(r#"class="meta""#), "{}", out.html);
+        assert!(!out.html.contains("时间："), "{}", out.html);
+    }
+
+    /// 第二个字段不是时间（项目 / 角色）：它留在中间，不硬塞到右边
+    #[test]
+    fn a_non_time_second_field_stays_in_the_middle() {
+        let page = solo_section(
+            "plain",
+            json!([{
+                "id": "e1",
+                "fields": [
+                    { "id": "f1", "label": "项目", "value": "调度系统" },
+                    { "id": "f2", "label": "角色", "value": "产品助理" }
+                ],
+                "bullets": []
+            }]),
+        );
+        let out = compile(&page, &person());
+
+        assert_eq!(out.html.matches(r#"class="erow""#).count(), 1, "{}", out.html);
+        assert!(out.html.contains(r#"<span class="role">产品助理</span>"#), "{}", out.html);
+        assert!(!out.html.contains(r#"class="time""#), "{}", out.html);
+    }
+
+    /// 单字段空值 + 要点：分区标题已经印了「技能与兴趣」，头行不能再印一遍
+    #[test]
+    fn a_lone_empty_label_with_bullets_prints_no_head() {
+        let page = solo_section(
+            "plain",
+            json!([{
+                "id": "e1",
+                "fields": [{ "id": "f1", "label": "技能与兴趣", "value": "" }],
+                "bullets": ["报关单证", "船务对接"]
+            }]),
+        );
+        let out = compile(&page, &person());
+
+        assert!(!out.html.contains(r#"class="erow""#), "{}", out.html);
+        assert!(!out.html.contains("技能与兴趣"), "{}", out.html);
+        assert!(out.html.contains("<li>报关单证</li>"), "{}", out.html);
+    }
+
+    /// 值里出现「四位数字 + 年/./-/」也当时间，认不出标签的老数据同样能右对齐
+    #[test]
+    fn a_date_shaped_value_counts_as_time() {
+        let mut field = Field {
+            id: "f1".into(),
+            label: "在岗".into(),
+            value: "2025.10 - 至今".into(),
+            asset_id: None,
+            extra: Default::default(),
+        };
+        assert!(is_time_field(&field));
+        field.value = "2025".into();
+        assert!(!is_time_field(&field), "单个年份没有区间形态，不当时间");
+        field.value = "三年".into();
+        assert!(!is_time_field(&field));
     }
 
     #[test]
@@ -1933,6 +2132,11 @@ mod tests {
         assert_eq!(out.html.matches(r#"class="entry""#).count(), 2, "{}", out.html);
         // 容器级 flex 会把两条挤成一行，样式必须落到 .entry 上
         assert!(PRESET_CSS.contains(".row > .entry"), "样式表缺 .row > .entry");
+        // 头行在 row 容器里要占满整行，时间才贴得到右缘
+        assert!(
+            PRESET_CSS.contains(".row > .entry > .erow"),
+            "样式表缺 .row > .entry > .erow"
+        );
     }
 
     /// split 只适合手写片段：结构化条目给不出「左栏 + 右栏」，必须回落并吭声
