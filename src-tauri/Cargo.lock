@@ -3352,10 +3352,12 @@ version = "0.1.0"
 dependencies = [
  "ammonia",
  "base64 0.22.1",
+ "flate2",
  "futures-util",
  "image",
  "lopdf",
  "pdf-extract",
+ "quick-xml",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",

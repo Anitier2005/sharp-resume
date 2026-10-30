@@ -157,6 +157,8 @@ impl DocOutline {
             .take(120)
             .map(|block| {
                 json!({
+                    // 字号与边距都按 0.1 取整再给：f32 直出会变成 56.70000076293945，
+                    // 既灌水又让「同一个值」没法用相等去断言
                     "k": match block.kind {
                         BlockKind::Title => "title",
                         BlockKind::Heading => "heading",
@@ -167,7 +169,7 @@ impl DocOutline {
                         BlockKind::Note => "note",
                     },
                     "lvl": block.style.level,
-                    "pt": block.style.size_pt,
+                    "pt": block.style.size_pt.map(round1),
                     "align": match block.style.align {
                         Align::Left => "left",
                         Align::Center => "center",
@@ -182,11 +184,20 @@ impl DocOutline {
             .collect();
         json!({
             "pages": self.pages,
-            "marginPt": self.margin_pt,
-            "bodyPt": self.body_pt,
+            "marginPt": self.margin_pt.map(|side| side.map(round1)),
+            "bodyPt": self.body_pt.map(round1),
             "blocks": blocks,
         })
     }
+}
+
+/// f32 → 0.1 取整的 f64。JSON 里不该出现 56.70000076293945 这种尾数。
+///
+/// 必须先 `as f64` 再乘除：f32 的 9.6 实际存的是 9.600000381，在 f32 里
+/// 乘十、四舍五入、再除十，落到 f64 时尾数照样还在 —— 等于没取整。
+fn round1(value: f32) -> f64 {
+    let value = value as f64;
+    (value * 10.0).round() / 10.0
 }
 
 fn clip(text: &str, max: usize) -> String {
