@@ -97,8 +97,11 @@ impl Unfinished {
                 "同一个工具同样参数连续调了 3 次，这一轮没有收尾。已执行 {} 次工具操作，改动已生效。",
                 used.len()
             ),
+            // 这条要同时盖住两种现场：一直调工具、以及最后一轮交白卷。
+            // 说「连续 N 轮都在调用工具」对后者是假话（那一轮它没调），
+            // 而两种现场的处置动作完全一样（这一轮到此为止），不值得写两套措辞。
             Unfinished::RoundLimit { repeat: false } => format!(
-                "模型连续 {MAX_ROUNDS} 轮都在调用工具，没有收尾。已执行 {} 次工具操作，改动已生效。",
+                "模型用满了 {MAX_ROUNDS} 轮仍然没有收尾。已执行 {} 次工具操作，改动已生效。",
                 used.len()
             ),
             // 用户看到的是一片空白；不写这一句，他分不清是「被安全过滤」还是「模型抽风」
@@ -499,6 +502,8 @@ mod tests {
         let text = Unfinished::RoundLimit { repeat: false }.text(&used);
         assert!(text.contains(&MAX_ROUNDS.to_string()), "{text}");
         assert!(text.contains("已执行 4 次工具操作"), "{text}");
+        // 这一支同时盖住「一直调工具」和「最后一轮白卷」，所以不能说每轮都在调工具
+        assert!(!text.contains("都在调用工具"), "{text}");
         // 被「同工具同参」护栏掐断时要换个说法，否则用户以为只是轮次多
         let repeat = Unfinished::RoundLimit { repeat: true }.text(&used);
         assert!(repeat.contains("同样参数连续调了 3 次"), "{repeat}");

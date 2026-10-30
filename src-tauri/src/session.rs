@@ -672,6 +672,11 @@ pub async fn chat_send(
     // 思考链只落日志：它不进消息、不进上下文，但白卷现场没它就没法解释
     // ——「想了 1200 字却一个字没说」和「什么都没想」是两种完全不同的故障。
     // 写失败同样只是一个 `let _ =`：日志不能反过来把这一轮搞失败。
+    //
+    // **为什么是追加而不是写进同一行**：这个文件记的是「这一轮模型将看到什么」，
+    // 必须在请求发出前就落地（请求失败也要留下证据）；而思考字数只有请求结束
+    // 才知道。两者的时间点一个在前一个在后，合并成一行只能靠事后重写整个文件，
+    // 中途崩溃就会留下半个假文件。下一个想「顺手合并」的人请先看这段。
     if let (Some(path), Ok(turn)) = (context_log.as_ref(), &result) {
         use std::io::Write;
         let _ = std::fs::OpenOptions::new()
@@ -726,7 +731,9 @@ fn write_context_log(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // personId 是外部传进来的，进文件名前先收窄字符集：它不该能拼出 `..` 或子目录
+    // personId 是前端传进来的外部串。进文件名前把非 `[A-Za-z0-9_-]` 全换成 `_`，
+    // 防的是**路径穿越**（`../`、绝对路径、Windows 保留名），不是审美：
+    // 日志文件名由我们决定，不该有一格是用户数据说了算。
     let person: String = person_id
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
