@@ -591,6 +591,25 @@ pub async fn chat_send(
         system.push_str("\n（需要原话或其中的具体数字时，用 search_history 工具检索旧消息）");
     }
 
+    // 这一轮实际发出去的 system 落一份：终止判定出错时，第一件要查的就是
+    // 「模型当时到底看见了什么」。放 logs/ 而不是 pool/ —— 后者是用户材料，
+    // 混进去会被当成资产扫出来。写不进去就算了，观测不能影响主流程。
+    if let Some(dir) = root.as_ref() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // personId 进文件名前先收窄字符集：它是外部传进来的，不该能拼出 `..`
+        let person: String = args
+            .key
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        let dir = dir.join("logs").join("context");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(format!("{stamp}-{person}.md")), &system);
+    }
+
     let mut messages = vec![ChatMessage::system(system)];
     for message in &history {
         let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
@@ -663,21 +682,23 @@ pub async fn chat_send(
     match result {
         Ok(turn) if !flag.load(Ordering::SeqCst) => {
             // 落一条 assistant 消息；content 由前端随后 patch（它还要解析改写块）
-            state.push(
-                &app,
-                &args.key,
-                json!({
-                    "id": reply_id,
-                    "role": "assistant",
-                    "content": turn.content,
-                    "time": chrono_like(),
-                    "tool": if turn.used.is_empty() {
-                        format!("{} · 已完成", args.model)
-                    } else {
-                        format!("{} · 用了 {}", args.model, turn.used.join(" / "))
-                    },
-                }),
-            );
+            let mut message = json!({
+                "id": reply_id,
+                "role": "assistant",
+                "content": turn.content,
+                "time": chrono_like(),
+                "tool": if turn.used.is_empty() {
+                    format!("{} · 已完成", args.model)
+                } else {
+                    format!("{} · 用了 {}", args.model, turn.used.join(" / "))
+                },
+            });
+            // 没正常收尾就把原因挂在消息上：content 保持原样（半句旁白也是它说的），
+            // 诊断单独一条，且不参与模型上下文 —— 下一轮它不该读到自己的病历
+            if let Some(kind) = turn.unfinished {
+                message["note"] = json!(kind.text(&turn.used));
+            }
+            state.push(&app, &args.key, message);
             Ok(SendResult {
                 id: reply_id,
                 actions: turn.actions,

@@ -73,6 +73,13 @@
   color: var(--acc-text);
 }
 
+/* 「这一轮没说完」的诊断：比正文更淡，不抢注意力但看得见 */
+.note {
+  color: var(--fg-4);
+  font-size: 0.625rem;
+  margin-top: 6px;
+}
+
 /* 改写对照：左竖线 + 旧文划掉 + 新文高亮 */
 .change {
   padding-left: 11px;

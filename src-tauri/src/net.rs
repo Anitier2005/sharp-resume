@@ -363,6 +363,26 @@ pub async fn chat_once(req: AiRequest) -> Result<String, String> {
 pub struct StreamOutcome {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
+    /// 服务端给的完成原因（`stop` / `length` / `tool_calls` / `content_filter`）。
+    ///
+    /// 这是**唯一可靠的「说完了」信号**：按「正文有没有内容」判结束是反模式 ——
+    /// 模型可以一个字都不说就把这一轮交回去（白卷），那不是「说完了」。
+    pub finish_reason: Option<String>,
+    /// 思考链累计字数：只用来判断「它其实想了很久」，不落库也不给模型看。
+    pub reasoning_chars: usize,
+}
+
+/// 完成原因：`choices[0].finish_reason` 优先，兼容端点会给 `stop_reason`。
+fn stop_reason_of(json: &serde_json::Value) -> Option<String> {
+    let choice = &json["choices"][0];
+    for value in [&choice["finish_reason"], &choice["stop_reason"], &json["stop_reason"]] {
+        if let Some(text) = value.as_str() {
+            if !text.trim().is_empty() {
+                return Some(text.trim().to_string());
+            }
+        }
+    }
+    None
 }
 
 /// SSE 里 tool_calls 是**分片**下发的（id / name / arguments 各来一段），
@@ -455,6 +475,11 @@ pub async fn stream_with<E: FnMut(StreamChunk)>(
             let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) else {
                 continue;
             };
+            // 完成原因通常在最后一个 chunk 上（与 delta 同一条），必须记下来：
+            // 上层靠它区分「说完了」「被截断」「被过滤」，而不是看正文空不空
+            if let Some(reason) = stop_reason_of(&json) {
+                outcome.finish_reason = Some(reason);
+            }
             let delta = &json["choices"][0]["delta"];
             if let Some(text) = delta["content"].as_str() {
                 if !text.is_empty() {
@@ -464,6 +489,8 @@ pub async fn stream_with<E: FnMut(StreamChunk)>(
             }
             if let Some(thought) = delta["reasoning_content"].as_str() {
                 if !thought.is_empty() {
+                    // 只推前端的话，「它想了 3000 字却一个字没说」在后端完全看不见
+                    outcome.reasoning_chars += thought.chars().count();
                     emit(StreamChunk::reasoning(thought.to_string()));
                 }
             }
@@ -544,6 +571,29 @@ mod tests {
         assert_eq!(parts[1]["image_url"]["url"], "data:image/jpeg;base64,AAAA");
         // 纯文本消息仍然是字符串：多数网关对数组的校验更严
         assert!(serde_json::to_value(ChatMessage::user("纯文本")).unwrap()["content"].is_string());
+    }
+
+    /// 完成原因是终止判定的唯一依据，读错字段等于没读：
+    /// `finish_reason` 缺席时退回 `stop_reason`（兼容端点），两者都用 `trim` 判空。
+    #[test]
+    fn finish_reason_falls_back_to_stop_reason() {
+        let openai = serde_json::json!({ "choices": [{ "finish_reason": "length" }] });
+        assert_eq!(stop_reason_of(&openai).as_deref(), Some("length"));
+
+        // finish_reason 是 null（还没结束时很常见）而 stop_reason 有值：要取后者
+        let compat = serde_json::json!({
+            "choices": [{ "finish_reason": null, "stop_reason": " max_tokens " }]
+        });
+        assert_eq!(stop_reason_of(&compat).as_deref(), Some("max_tokens"));
+
+        // 两个都有时 finish_reason 优先
+        let both = serde_json::json!({
+            "choices": [{ "finish_reason": "stop", "stop_reason": "end_turn" }]
+        });
+        assert_eq!(stop_reason_of(&both).as_deref(), Some("stop"));
+
+        // 中间的 chunk 没有完成原因：不能凭空造一个
+        assert_eq!(stop_reason_of(&serde_json::json!({ "choices": [{ "delta": {} }] })), None);
     }
 
     fn live_request() -> Option<AiRequest> {

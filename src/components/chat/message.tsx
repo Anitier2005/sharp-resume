@@ -337,6 +337,9 @@ export function AssistantTurn({
         </div>
       )}
       {message.content && <AssistantBody text={message.content} />}
+      {/* 没说完的诊断：贴在正文下方一行小字。正文照旧显示 —— 它是模型真说过的话，
+          藏起来用户反而以为「就说到这儿了」 */}
+      {message.note && <div className={styles.note}>{message.note}</div>}
 
       {message.changes?.map((change, index) => (
         <div className={styles.change} key={index}>

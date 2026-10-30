@@ -581,21 +581,22 @@ async fn run_turn(
     let reply_id = format!("l-{}", session::uuid_like());
     {
         let sessions = app.state::<Sessions>();
-        sessions.append(
-            app,
-            &key,
-            json!({
-                "id": reply_id,
-                "role": "assistant",
-                "content": turn.content,
-                "time": session::chrono_like(),
-                "tool": if turn.used.is_empty() {
-                    format!("{} · 排版", args.model)
-                } else {
-                    format!("{} · 用了 {}", args.model, turn.used.join(" / "))
-                },
-            }),
-        );
+        let mut message = json!({
+            "id": reply_id,
+            "role": "assistant",
+            "content": turn.content,
+            "time": session::chrono_like(),
+            "tool": if turn.used.is_empty() {
+                format!("{} · 排版", args.model)
+            } else {
+                format!("{} · 用了 {}", args.model, turn.used.join(" / "))
+            },
+        });
+        // 排版 agent 半路断了，用户更该知道：页面可能只改了一半
+        if let Some(kind) = turn.unfinished {
+            message["note"] = json!(kind.text(&turn.used));
+        }
+        sessions.append(app, &key, message);
     }
 
     Ok(turn)

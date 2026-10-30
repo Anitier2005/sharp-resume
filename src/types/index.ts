@@ -342,6 +342,13 @@ export interface ChatMessage {
   time: number;
   attachments?: Attachment[];
   tool?: string;
+  /**
+   * 这一轮没有正常收尾的原因（白卷 / 截断 / 轮次用尽），由 Rust 侧的终止判定给出。
+   *
+   * 它和 `content` 分开：正文是模型真的说出口的话，原样保留；
+   * 这条是系统对「它没说完」的诊断，不参与模型上下文，只在气泡下方显示。
+   */
+  note?: string;
   changes?: ChangeItem[];
   actions?: ChatAction[];
   /**

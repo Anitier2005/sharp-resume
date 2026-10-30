@@ -18,6 +18,9 @@ use crate::tools::{Scope, ToolCtx};
 
 const MAX_ROUNDS: usize = 6;
 
+/// 连续两轮白卷就停：提醒过一次还是不说，再问第三次也一样。
+const MAX_EMPTY_ROUNDS: usize = 2;
+
 pub struct TurnResult {
     /// 这一轮（可能跨多次请求）累计说出来的正文
     pub content: String,
@@ -28,6 +31,105 @@ pub struct TurnResult {
     /// 工具产出的新材料（图片转化会产出）。前端要把它们并进 state 的资产列表，
     /// 否则模型下一轮引用的 `asset:` 是个不存在的 id。
     pub assets: Vec<crate::model::Asset>,
+    /// 这一轮没有正常收尾时，为什么。`None` = 模型真的说完了。
+    ///
+    /// 它**不改 content**：正文原样保留（哪怕是半句旁白），
+    /// 给用户的诊断单独挂在消息的 `note` 上 —— 后者不参与模型上下文。
+    pub unfinished: Option<Unfinished>,
+}
+
+/// 一轮怎么收尾的。判据只有一个来源：服务端的 `finish_reason`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    /// 还要工具：接着跑，不是结束
+    Continue,
+    /// 正常说完
+    Done,
+    /// 没有工具调用，也没有正文
+    EmptyReply,
+    /// 输出被 max_tokens 截断
+    Truncated,
+    /// 被内容过滤掐掉
+    Filtered,
+}
+
+/// 判据顺序刻意如此：**先看有没有工具调用，再看 finish_reason，最后才看正文**。
+/// 反过来（正文非空就算说完）正是「说了半句话被当成完整答复」那个 bug 的成因。
+fn classify(reason: Option<&str>, reply: &str, has_calls: bool) -> Stop {
+    if has_calls {
+        return Stop::Continue;
+    }
+    match reason {
+        Some("length") | Some("max_tokens") => Stop::Truncated,
+        Some("content_filter") => Stop::Filtered,
+        _ if !reply.trim().is_empty() => Stop::Done,
+        _ => Stop::EmptyReply,
+    }
+}
+
+/// 没有正常收尾的三种情况。文案是给人看的诊断，不是给模型看的上下文。
+#[derive(Debug, Clone, Copy)]
+pub enum Unfinished {
+    /// 提醒过一次，仍然只调工具、不给正文
+    EmptyAfterNudge,
+    /// 续写过一次，仍然被长度截断
+    Truncated,
+    /// 轮次用尽还没收尾。`repeat` 表示是被「同工具同参连调」护栏掐断的
+    RoundLimit { repeat: bool },
+}
+
+impl Unfinished {
+    pub fn text(&self, used: &[String]) -> String {
+        match self {
+            Unfinished::EmptyAfterNudge => format!(
+                "这一轮模型只调用了工具（{}），没有给出正文。已经写进工作区的改动仍然有效，但它没有把结论告诉你。",
+                join(used)
+            ),
+            Unfinished::Truncated => "这一轮输出被长度截断，内容可能不完整。".to_string(),
+            Unfinished::RoundLimit { repeat: true } => format!(
+                "同一个工具同样参数连续调了 3 次，这一轮没有收尾。已执行 {} 次工具操作，改动已生效。",
+                used.len()
+            ),
+            Unfinished::RoundLimit { repeat: false } => format!(
+                "模型连续 {MAX_ROUNDS} 轮都在调用工具，没有收尾。已执行 {} 次工具操作，改动已生效。",
+                used.len()
+            ),
+        }
+    }
+}
+
+/// 工具名连成一句人话；一个都没调时给个能读的占位。
+fn join(names: &[String]) -> String {
+    if names.is_empty() { "无".to_string() } else { names.join(" / ") }
+}
+
+/// 护栏一：同工具同参连调的计数。
+///
+/// 模型卡在「读同一页 → 发现没变化 → 再读同一页」时，轮次上限要烧满 6 轮，
+/// 每轮都是一次完整的请求。连到第 3 次就停 —— 它已经转不出来了。
+#[derive(Default)]
+struct RepeatGuard {
+    last: Option<String>,
+    count: usize,
+}
+
+impl RepeatGuard {
+    /// 记一次调用，返回是否已经连到第 3 次（`name` + `arguments` 原文比）
+    fn hit(&mut self, name: &str, args: &str) -> bool {
+        let signature = format!("{name}\u{0}{args}");
+        if self.last.as_deref() == Some(signature.as_str()) {
+            self.count += 1;
+        } else {
+            self.last = Some(signature);
+            self.count = 1;
+        }
+        self.count >= 3
+    }
+}
+
+/// 护栏二：白卷连到第 `MAX_EMPTY_ROUNDS` 轮就停。
+fn too_many_empty(rounds: usize) -> bool {
+    rounds >= MAX_EMPTY_ROUNDS
 }
 
 /// 收尾：界面指令 + 一条内容信封。
@@ -76,6 +178,7 @@ fn describe(name: &str, args: &Value) -> String {
             _ => "切到编辑".to_string(),
         },
         "extract_images" => "在原件里找内嵌图片".to_string(),
+        "read_source" => "读原件正文".to_string(),
         "set_target_pages" => match args["pages"].as_u64() {
             Some(pages) => format!("把目标定成 {pages} 页"),
             _ => "清掉目标页数".to_string(),
@@ -126,11 +229,22 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
     let mut speech = String::new();
     let mut used: Vec<String> = Vec::new();
     let mut with_tools = true;
+    // 轮次与「上一次请求说了什么」都要显式记着：终止判定读的是 finish_reason，
+    // 而「截断续写的上限」「白卷提醒的上限」都按请求次数算，不按 for 的下标算
+    let mut rounds = 0usize;
+    // 每次请求的正文：终止判定与「说完了」的判据都是它，别用累计的 speech 去判
+    let mut last_reply: String;
+    let mut nudged = false;
+    let mut continued = false;
+    let mut empty_rounds = 0usize;
+    let mut repeat = RepeatGuard::default();
+    let mut unfinished: Option<Unfinished> = None;
 
-    for _ in 0..MAX_ROUNDS {
+    while rounds < MAX_ROUNDS {
         if cancel.load(Ordering::SeqCst) {
             break;
         }
+        rounds += 1;
 
         let mut request = AiRequest {
             base_url: template.base_url.clone(),
@@ -154,22 +268,68 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
             Err(error) => return Err(error),
         };
         // 模型在调工具之前往往会先说一句「我看一下」，那句也要留着
+        last_reply = outcome.content.clone();
         speech.push_str(&outcome.content);
 
-        if outcome.tool_calls.is_empty() {
-            return Ok(TurnResult { content: speech, used, actions: drain_actions(ctx.out),
-            assets: drain_assets(ctx.out) });
+        match classify(outcome.finish_reason.as_deref(), &last_reply, !outcome.tool_calls.is_empty()) {
+            Stop::Done => {
+                return Ok(TurnResult {
+                    content: speech,
+                    used,
+                    actions: drain_actions(ctx.out),
+                    assets: drain_assets(ctx.out),
+                    unfinished: None,
+                })
+            }
+            Stop::Continue => {}
+            Stop::EmptyReply => {
+                empty_rounds += 1;
+                // 白卷：工具结果已经在上面了，它只是没说结论。提醒一次就好 ——
+                // 提醒第二次一定还是白卷，那不如把「没说完」如实告诉用户。
+                // 还要留得出一次请求：轮次已经烧完时提醒也发不出去
+                if !nudged && !too_many_empty(empty_rounds) && rounds < MAX_ROUNDS {
+                    nudged = true;
+                    messages.push(ChatMessage::user(format!(
+                        "你刚才调用了 {}，结果已经在上面。用一两句话告诉我结论；还需要工具就继续调。",
+                        join(&used)
+                    )));
+                    continue;
+                }
+                unfinished = Some(Unfinished::EmptyAfterNudge);
+                break;
+            }
+            Stop::Truncated => {
+                // 截断不是模型的错，是预算的错：让它接着写比从头再来便宜
+                if !continued && rounds < MAX_ROUNDS {
+                    continued = true;
+                    messages.push(ChatMessage::user("继续，接着刚才没写完的部分说。"));
+                    continue;
+                }
+                unfinished = Some(Unfinished::Truncated);
+                break;
+            }
+            // 内容过滤：再说一遍会被同样掐掉，不浪费一次请求。不给 note ——
+            // 我们不知道被掐掉的是什么，编一句诊断不如让下面的兜底说话
+            Stop::Filtered => break,
         }
         if cancel.load(Ordering::SeqCst) {
             break;
         }
 
-        messages.push(ChatMessage::assistant_calls(outcome.tool_calls.clone(), outcome.content));
+        messages.push(ChatMessage::assistant_calls(outcome.tool_calls.clone(), outcome.content.clone()));
 
+        let mut tripped = false;
         for call in &outcome.tool_calls {
             let name = call.function.name.clone();
             let args: Value = serde_json::from_str(&call.function.arguments)
                 .unwrap_or_else(|_| Value::Object(Default::default()));
+
+            // 先判护栏再执行：连到第 3 次的那一次调用没有意义，不做
+            if repeat.hit(&name, &call.function.arguments) {
+                unfinished = Some(Unfinished::RoundLimit { repeat: true });
+                tripped = true;
+                break;
+            }
 
             on_event(StreamChunk::tool_event(
                 "tool_start",
@@ -191,6 +351,9 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
             used.push(name);
             messages.push(ChatMessage::tool_result(call.id.clone(), result));
         }
+        if tripped {
+            break;
+        }
 
         // 工具渲染出来的图片（PDF 页面）只能靠一条新的用户消息带进去：
         // 工具结果在协议里是纯字符串，塞不进 image_url 段。
@@ -209,11 +372,22 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
         }
     }
 
+    // 走到这里只有一种正常原因：轮次烧完了还没收尾。
+    // 取消是另一条路（用户按了停止，不算「模型没说完」），不能混进来。
+    if unfinished.is_none() && !cancel.load(Ordering::SeqCst) && rounds >= MAX_ROUNDS {
+        unfinished = Some(Unfinished::RoundLimit { repeat: false });
+    }
+
     if speech.is_empty() {
         speech.push_str("（这一轮没有产出正文。可能是模型一直在调工具，或请求被中断。）");
     }
-    Ok(TurnResult { content: speech, used, actions: drain_actions(ctx.out),
-            assets: drain_assets(ctx.out) })
+    Ok(TurnResult {
+        content: speech,
+        used,
+        actions: drain_actions(ctx.out),
+        assets: drain_assets(ctx.out),
+        unfinished,
+    })
 }
 
 
@@ -231,5 +405,97 @@ mod tests {
 
         let cleared = describe("set_target_pages", &json!({}));
         assert!(cleared.contains("清掉目标页数"), "{cleared}");
+    }
+
+    /* ---------- 终止判定：五种输入各钉一条 ---------- */
+
+    #[test]
+    fn tool_calls_always_means_continue() {
+        // 哪怕这一轮正文写了一大段、finish_reason 是 stop，只要有工具调用就还没完
+        assert_eq!(
+            classify(Some("stop"), "我看一下这一页", true),
+            Stop::Continue
+        );
+        assert_eq!(classify(Some("tool_calls"), "", true), Stop::Continue);
+        assert_eq!(classify(None, "", true), Stop::Continue);
+    }
+
+    #[test]
+    fn a_reason_with_text_is_done() {
+        assert_eq!(classify(Some("stop"), "改好了，两处都收紧了。", false), Stop::Done);
+        // 没有 finish_reason（老网关）但真有正文：只能按说完处理
+        assert_eq!(classify(None, "改好了。", false), Stop::Done);
+    }
+
+    #[test]
+    fn length_or_max_tokens_is_truncated() {
+        assert_eq!(classify(Some("length"), "第二段的改法是", false), Stop::Truncated);
+        assert_eq!(classify(Some("max_tokens"), "", false), Stop::Truncated);
+    }
+
+    #[test]
+    fn content_filter_is_filtered_not_empty() {
+        // 被过滤和「白卷」要分开：前者再问一次还是被掐，后者值得提醒一次
+        assert_eq!(classify(Some("content_filter"), "", false), Stop::Filtered);
+        assert_eq!(classify(Some("content_filter"), "（已省略）", false), Stop::Filtered);
+    }
+
+    #[test]
+    fn no_reason_no_text_is_an_empty_reply() {
+        // 线上真出过：4 次工具调用后交回一条没有 content 的响应
+        assert_eq!(classify(None, "", false), Stop::EmptyReply);
+        assert_eq!(classify(Some("stop"), "   \n", false), Stop::EmptyReply);
+    }
+
+    /* ---------- 三态文案：{used} 与 {n} 必须真的填进去 ---------- */
+
+    #[test]
+    fn empty_after_nudge_names_the_tools_it_called() {
+        let used = vec!["read_page".to_string(), "extract_images".to_string()];
+        let text = Unfinished::EmptyAfterNudge.text(&used);
+        assert!(text.contains("read_page / extract_images"), "{text}");
+        assert!(text.contains("没有给出正文"), "{text}");
+    }
+
+    #[test]
+    fn truncated_says_only_that_it_was_cut() {
+        let text = Unfinished::Truncated.text(&[]);
+        assert_eq!(text, "这一轮输出被长度截断，内容可能不完整。");
+    }
+
+    #[test]
+    fn round_limit_counts_the_tool_calls_it_did() {
+        let used = vec!["read_page".to_string(); 4];
+        let text = Unfinished::RoundLimit { repeat: false }.text(&used);
+        assert!(text.contains(&MAX_ROUNDS.to_string()), "{text}");
+        assert!(text.contains("已执行 4 次工具操作"), "{text}");
+        // 被「同工具同参」护栏掐断时要换个说法，否则用户以为只是轮次多
+        let repeat = Unfinished::RoundLimit { repeat: true }.text(&used);
+        assert!(repeat.contains("同样参数连续调了 3 次"), "{repeat}");
+    }
+
+    /* ---------- 两条护栏 ---------- */
+
+    #[test]
+    fn the_same_tool_with_the_same_args_trips_on_the_third_call() {
+        let mut guard = RepeatGuard::default();
+        assert!(!guard.hit("read_page", r#"{"pageId":"p1"}"#));
+        assert!(!guard.hit("read_page", r#"{"pageId":"p1"}"#));
+        assert!(guard.hit("read_page", r#"{"pageId":"p1"}"#), "第 3 次要停");
+
+        // 参数不同就是另一件事，重新数
+        let mut guard = RepeatGuard::default();
+        assert!(!guard.hit("read_page", r#"{"pageId":"p1"}"#));
+        assert!(!guard.hit("read_page", r#"{"pageId":"p1"}"#));
+        assert!(!guard.hit("read_page", r#"{"pageId":"p2"}"#));
+        assert!(!guard.hit("list_pages", "{}"));
+        assert!(!guard.hit("list_pages", "{}"));
+        assert!(guard.hit("list_pages", "{}"));
+    }
+
+    #[test]
+    fn two_empty_rounds_are_enough() {
+        assert!(!too_many_empty(1), "第一次白卷先提醒，不判死");
+        assert!(too_many_empty(2), "第二次还白卷就停");
     }
 }
