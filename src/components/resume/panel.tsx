@@ -18,11 +18,13 @@ import { pageIndex } from "@/lib/doc";
 import {
   exportResumeFolder,
   pageToMarkdown,
+  pdfExportDir,
   printPage,
   resumeToMarkdown,
   saveBytes,
   savePdf,
   saveText,
+  writePdf,
 } from "@/lib/export";
 import { pageToDocx } from "@/lib/docx";
 import { saveAsset } from "@/lib/assets";
@@ -672,6 +674,59 @@ export function ResumePanel() {
     requestAnimationFrame(() => requestAnimationFrame(run));
   };
 
+  /**
+   * 等纸面真的换到指定那一页。
+   *
+   * 切页会连着发生两件事，而且都是异步的：`compile_page` 去 Rust 拿 HTML，
+   * 回来之后 Paged.js 再分一次页。谁都没给「好了」的回调，所以只能看 DOM：
+   *   - `data-page` 等于目标页 = 这一摞纸已经换成目标页；
+   *   - `data-mode` 出现 = 编译结果到了（Paper 只在拿到 doc 之后才写这个属性）；
+   *   - `.pagedjs_page` 出现 = 分页落定。
+   *
+   * **必须三者同时成立**。只判「有 data-mode 且 pagedjs_page > 0」会立刻返回 true ——
+   * 切页的第一帧里这三样都还是上一页的，导出于是把上一页的内容写进这一页的文件
+   * （实测过：两页的 PDF 内容一模一样）。空白页切不出纸（分页得到 0 张），
+   * 所以「已换页 + 已编译 + 安静了」也算完成，否则最后一页会一直等到超时。
+   */
+  const waitForPaper = (targetId: string, timeout = 8000) =>
+    new Promise<boolean>((resolve) => {
+      const started = performance.now();
+      let quiet = 0;
+      let last = "";
+      const tick = () => {
+        const shown = document.querySelector('[data-print="page"]')?.getAttribute("data-page") ?? "";
+        const sheet = flatRef.current?.querySelector('[data-print="sheet"]');
+        // 换了页但纸还是上一页的 —— 这时候 data-mode 是旧值，不能算数
+        const mode = shown === targetId ? (sheet?.getAttribute("data-mode") ?? "") : "";
+        const sheets = pagedRef.current?.querySelectorAll(".pagedjs_page").length ?? 0;
+        if (mode && sheets > 0) {
+          resolve(true);
+          return;
+        }
+        const signature = `${mode}|${sheets}`;
+        quiet = signature === last ? quiet + 1 : 0;
+        last = signature;
+        if (mode && quiet > 20) {
+          resolve(true);
+          return;
+        }
+        if (performance.now() - started > timeout) {
+          resolve(false);
+          return;
+        }
+        requestAnimationFrame(tick);
+      };
+      tick();
+    });
+
+  /**
+   * 这一次导出该给多少边距：分页后的真 A4 已经把页边距画进纸里（给 0），
+   * 单张纸的预览没有，必须由打印参数补（给 16mm）。
+   * 读 DOM 而不是读 `paged` state：逐页导出时 state 是上一页的值。
+   */
+  const paperMarginMm = () =>
+    (pagedRef.current?.querySelectorAll(".pagedjs_page").length ?? 0) > 0 ? 0 : PAGE_MARGIN_MM;
+
   /** 打印前先切预览：保证打出来的就是屏幕上这份 DOM */
   const handlePrint = () => whenPreview(printPage);
 
@@ -706,6 +761,49 @@ export function ResumePanel() {
     void saveText(`${displayName(person.fields)}-${target.label || "未命名页"}.md`, pageToMarkdown(person, target)).then(
       (path) => path && toast("已导出 Markdown"),
     );
+  };
+
+  /**
+   * 整份 PDF：逐页导出，一页一个文件，落到 `<数据目录>/导出 PDF/<人 - 简历>/`。
+   *
+   * 为什么不拼成一份：整份的版式来自 Paged.js，而它只排「当前这一页」的内容。
+   * 想把多页并成一份，要么自己再排一遍（第二套排版必然与屏幕漂移），
+   * 要么在 PDF 层合并（字体与资源要重映射，出错时是一份打不开的文件）。
+   * 逐页导出保证每一张纸都与预览逐像素同源 —— 代价只是文件名多几个。
+   *
+   * 文件名带 `01-` 前缀：一屏十几个 PDF 时，资源管理器按名字排序才和简历的页顺序一致。
+   */
+  const exportAllPdf = async () => {
+    const name = displayName(person.fields);
+    const startPage = page.id;
+    let current = startPage;
+    let done = 0;
+    let dir = "";
+
+    if (!preview) setMode("preview");
+    try {
+      dir = await pdfExportDir(name, resume.title);
+      for (const [index, target] of resume.pages.entries()) {
+        if (target.id !== current) {
+          openPage(target.id);
+          current = target.id;
+        }
+        // 第一页不用切，但同样要等：进预览本身也是异步的一次编译 + 分页
+        if (!(await waitForPaper(target.id))) {
+          throw new Error(`第 ${index + 1} 页没有排出来，先看一眼预览再导`);
+        }
+        await writePdf(`${dir}\\${String(index + 1).padStart(2, "0")}-${target.label || "未命名页"}.pdf`, paperMarginMm());
+        done += 1;
+      }
+      toast(`已导出 ${done} 个 PDF 到「导出 PDF\\${dir.split("\\").slice(-1)[0]}」`);
+    } catch (error) {
+      // 已经写出去的先说清楚写了几个：报「失败」但没说是第几个，用户不知道该删什么
+      const tail = done > 0 ? `（已写出 ${done} 个）` : "";
+      toast(`导出 PDF 失败${tail}：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      // 回到用户原来那一页。停在最后一页会让人以为简历自己换了页
+      if (current !== startPage) openPage(startPage);
+    }
   };
 
   /** 整份导出：后端按页写文件到文件夹，并留一份 manifest 供下次增量更新 */
@@ -1036,7 +1134,11 @@ export function ResumePanel() {
             hint="导出文件夹"
             onSelect={() => gateAll(exportFolder)}
           />
-        </Dropdown>
+          <MenuItem
+            label="PDF · 整份"
+            hint="每页一个文件"
+            onSelect={() => gateAll(() => void exportAllPdf())}
+          />        </Dropdown>
       </div>
 
       {preview ? (
@@ -1058,7 +1160,15 @@ export function ResumePanel() {
           {paged && (
             <style>{`@media print { @page { size: ${A4_W} ${A4_H}; margin: 0; } }`}</style>
           )}
-          <div className={paperStyles.wrap} data-print="page" style={{ zoom: zoom / 100 }}>
+          {/* data-page：这一摞纸画的是哪一页。导出要逐页等编译 + 分页落定，
+              光看「有纸、有 data-mode」不够 —— 切页的头一帧这些还是上一页的。
+              与离屏测量宿主的 data-page 同一个字段名，两处口径一致。 */}
+          <div
+            className={paperStyles.wrap}
+            data-print="page"
+            data-page={page.id}
+            style={{ zoom: zoom / 100 }}
+          >
             {/* 真分页的结果：几张真 A4 竖着排。这里是 cloneNode 的副本，
                 事件不会跟过来，所以一个交互也不许挂（点击、Hover 都没有意义）。 */}
             <div

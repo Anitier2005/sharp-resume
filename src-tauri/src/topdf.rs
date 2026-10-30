@@ -53,6 +53,15 @@ pub async fn export_pdf(window: tauri::WebviewWindow, input: PdfInput) -> Result
         // PrintToPdf 对已存在的文件行为不保证，自己先删干净：保存框已经问过用户
         // 「要覆盖吗」，这里再让 WebView2 去猜只是多一种失败方式。
         let target = std::path::PathBuf::from(&path);
+        // 目录得先存在，PrintToPdf 不会替我们建。整份导出写的是
+        // `<数据目录>/导出 PDF/<人 - 简历>/`，那个目录由这次调用顺手建出来 ——
+        // 前端自己去建要先拿到数据目录再调插件，多一层能失败的环节。
+        if let Some(parent) = target.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|error| format!("建不了目录 {}：{error}", parent.display()))?;
+            }
+        }
         if target.exists() {
             std::fs::remove_file(&target)
                 .map_err(|error| format!("旧文件删不掉（是不是被别的程序打开了）：{error}"))?;

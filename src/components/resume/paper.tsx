@@ -62,6 +62,22 @@ export function Paper({ person, page }: PaperProps) {
    */
   const [seen, setSeen] = useState<SeenNotes>({ pageId: page.id, ids: new Set() });
 
+  /**
+   * 换页时先把上一页的编译结果扔掉。
+   *
+   * `doc` 是异步回来的（120ms 防抖 + 一次 IPC），中途不动的话，切页的头一百多毫秒
+   * 屏幕上还是**上一页那张纸** —— 用户会以为切错了。更要紧的是：任何「等纸面换过来」
+   * 的调用方（导出、截图、实测）都只能靠 `data-mode` 判断编译有没有完成，
+   * 而旧 doc 会让这个信号一直为真，于是导出把上一页当成这一页写出去。
+   *
+   * 只认 `page.id`：改内容也会让 `page` 换引用，那种情况要保留旧纸（否则每敲一个字
+   * 纸面就闪一次白）。
+   */
+  useEffect(() => {
+    setDoc(null);
+    setError(null);
+  }, [page.id]);
+
   useEffect(() => {
     let alive = true;
     // 编译要走一次 IPC：打字时每个键都发一次太浪费，等停下来再算
