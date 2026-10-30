@@ -303,42 +303,6 @@
   color: var(--warn);
   font-weight: 600;
 }
-/* 排版 agent 在忙：一个一直在动的小圆点。静止的文字看不出「它到底死没死」，
-   而用户最容易在这个空隙里反复点、反复改 */
-.foot .layout {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  max-width: 190px;
-  overflow: hidden;
-  white-space: nowrap;
-  color: var(--acc-text);
-}
-.foot .layout i {
-  flex: none;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--acc-text);
-  animation: layoutPulse 1.1s ease-in-out infinite;
-}
-@keyframes layoutPulse {
-  0%,
-  100% {
-    opacity: 0.25;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .foot .layout i {
-    animation: none;
-    opacity: 1;
-  }
-}
-
 /* 悬浮药丸：浮层底 + 阴影，不再靠一条底栏托着 */
 .zoomCtl {
   display: flex;

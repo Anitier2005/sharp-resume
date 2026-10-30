@@ -382,11 +382,11 @@ export function ChatPanel() {
             onEvent: channel,
           });
           const id = sent.id;
-          // 本轮原件的页数只活到下一次排版提交：没有原件就清掉，
+          // 本轮原件的页数只活到下一轮会话：没有原件就清掉，
           // 免得上一轮那份 PDF 的页数被当成本轮的
           if (sent.origin) putOrigin(resume.id, sent.origin);
           else clearOrigin(resume.id);
-          // 原件指针挂在简历上：排版 agent 每轮靠它调 render_doc_page 对照版式。
+          // 原件指针挂在简历上：会话 agent 每轮靠它调 render_doc_page 对照版式。
           // 不进人的材料列表，也不进任何 blocks —— 它不是这一页的内容
           if (sent.originDoc) {
             dispatch({

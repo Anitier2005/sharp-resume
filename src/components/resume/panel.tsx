@@ -109,9 +109,8 @@ export function ResumePanel() {
   const mode = state.ui.view ?? "edit";
   const setMode = (next: ViewMode) => dispatch({ type: "patchUi", patch: { view: next } });
 
-  // 排版不再由「切到预览」触发：内容一变就自动通知排版 agent，
-  // 归 provider 统一发起（那里是 state 的唯一汇聚点）。
-  // 预览只是一个看法，顺手烧一次模型调用既费钱又不是用户要的时机。
+  // 排版不再由「切到预览」触发：排版已经并进会话工具集，只由会话 agent 在
+  // 自己那一轮里动手。预览只是一个看法，顺手烧一次模型调用既费钱又不是用户要的时机。
   const [zoom, setZoom] = useState(DEFAULT_ZOOM);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
