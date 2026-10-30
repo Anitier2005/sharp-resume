@@ -640,6 +640,80 @@ fn grid_table(
     table_xml(&rows, cols, opts, false)
 }
 
+/// `cols-2` / `cols-3`：屏幕上 `columns: 2/3` 的分栏，在 Word 里落成无边框表格。
+///
+/// 与 `grid-2` / `grid-3` 的差别不在表，而在**填格顺序**：`display:grid` 是
+/// 横着一行一行铺（行优先），`columns` 是先填满第一栏再换第二栏（列优先）。
+/// 屏幕上 `.doc .sec.cols-2 > .entry > .bullets { columns: 2 }` 那八条要点，
+/// 人读到的是「1..4 在左、5..8 在右」；照行优先摊成四行两列，
+/// 读出来会变成 1、5、2、6…… 与屏幕整整齐齐地错开一位。
+///
+/// 切分公式 `per = ceil(n / cols)`：前 `per` 条进第一格，剩下进第二格。
+/// 不按内容高度去均分 —— 屏幕上的 multicol 会自己平衡高度，Word 里算不出来，
+/// 硬凑只会让条数对不上；条数对得上，一眼就看得出是同一份排版。
+///
+/// 标题由 `block_xml` 留在表格外（同 grid）；一条条目时**条目头也留在表格外**：
+/// 屏幕上 `.sec.cols-2 > .entry > .bullets` 只把要点分栏，名称那行仍占整行，
+/// 塞进单元格会让右制表位打在列宽上，时间缩到半页中间去。
+fn cols_table(
+    block: &Block,
+    library: &[crate::model::LibraryItem],
+    opts: &DocxOptions,
+    cols: usize,
+) -> String {
+    let cols = cols.max(1);
+    let widths = column_widths(opts.content_width_twips(), cols);
+    let style = block_style_of(block);
+
+    // 一条条目 + 要点：分的是**要点**，不是条目
+    if let [entry] = block.items.as_slice() {
+        let bullets: Vec<&str> = entry
+            .bullets
+            .iter()
+            .map(String::as_str)
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        if bullets.is_empty() {
+            // 没有要点可分：这条留在正文流里，与不带 role 时同一个样子
+            let mut paras: Vec<String> = Vec::new();
+            Flow::body(opts, style).entry_paras(entry, library, &mut paras);
+            return paras.join("");
+        }
+        let per = bullets.len().div_ceil(cols);
+        let mut cells: Vec<String> = Vec::new();
+        for chunk in bullets.chunks(per) {
+            let flow = Flow::cell(opts, style, widths[cells.len().min(cols - 1)]);
+            let mut paras: Vec<String> = Vec::new();
+            for bullet in chunk {
+                // 与 `entry_paras` 同一个段落样式：改了那边这里要跟着改
+                paras.push(flow.para(&format!("· {bullet}"), false, 18, "55554F", false));
+            }
+            cells.push(paras.join(""));
+        }
+        let head = match crate::render::entry_head(entry_fields(entry, library), true) {
+            Some(head) => Flow::body(opts, style).entry_head(&head),
+            None => String::new(),
+        };
+        return format!("{head}{}", table_xml(&[cells], cols, opts, false));
+    }
+
+    // 多条条目：一格一条，同样列优先
+    if block.items.is_empty() {
+        return String::new();
+    }
+    let per = block.items.len().div_ceil(cols);
+    let mut cells: Vec<String> = Vec::new();
+    for chunk in block.items.chunks(per) {
+        let flow = Flow::cell(opts, style, widths[cells.len().min(cols - 1)]);
+        let mut paras: Vec<String> = Vec::new();
+        for entry in chunk {
+            flow.entry_paras(entry, library, &mut paras);
+        }
+        cells.push(paras.join(""));
+    }
+    table_xml(&[cells], cols, opts, false)
+}
+
 /// `table` 角色：一条一行、一个字段一格，**只排字段值**（标签去掉、第一格加粗）。
 ///
 /// 与屏幕上的 `render::render_table` 是同一条规则 —— 那边也只取值、
@@ -716,6 +790,8 @@ fn block_xml(
             let table = match block.role.as_deref().map(str::trim) {
                 Some("grid-2") => Some(grid_table(block, library, opts, 2)),
                 Some("grid-3") => Some(grid_table(block, library, opts, 3)),
+                Some("cols-2") => Some(cols_table(block, library, opts, 2)),
+                Some("cols-3") => Some(cols_table(block, library, opts, 3)),
                 Some("table") => Some(field_table(block, library, opts)),
                 _ => None,
             };
@@ -1369,6 +1445,73 @@ mod tests {
         // 一格一条：两条条目落在同一行
         assert_eq!(xml.matches("<w:tr>").count(), 1, "{xml}");
         assert!(xml.contains("英语 CET-6") && xml.contains("Excel 透视"), "{xml}");
+    }
+
+    /// `cols-2` 的分的是**要点**，而且必须列优先 —— 屏幕上 `columns: 2`
+    /// 是先填满左栏再换右栏，导出照行优先摊开就会「1、5、2、6」地错位。
+    #[test]
+    fn cols_two_splits_bullets_column_first() {
+        let page = page_with(json!([
+            { "id": "b2", "kind": "section", "title": "技能", "role": "cols-2", "items": [
+                { "id": "e1", "bullets": [
+                    "语言：英语 CET-6",
+                    "编程：Rust",
+                    "编程：Javascript",
+                    "数据分析：SQL",
+                    "工具：Excel",
+                    "工具：Figma",
+                    "协作：Git",
+                    "其他：演讲"
+                ]}
+            ]}
+        ]));
+        let xml = document_of(&page, &opts_for("classic"));
+
+        assert!(xml.contains("<w:tbl>"), "cols-2 没落成表格：{xml}");
+        assert_eq!(xml.matches("<w:tc>").count(), 2, "两栏就该有两个格子：{xml}");
+        // 与 grid-2 一样无边框：分栏靠留白，不靠线
+        assert_eq!(xml.matches(r#"w:val="single""#).count(), 0, "cols-2 不该有框：{xml}");
+
+        let cells: Vec<usize> = xml.match_indices("<w:tc>").map(|(at, _)| at).collect();
+        let first = &xml[cells[0]..cells[1]];
+        let second = &xml[cells[1]..];
+
+        // 8 条 / 2 栏 = 每栏 4 条：1..4 在左，5..8 在右
+        for bullet in ["语言：英语 CET-6", "编程：Rust", "编程：Javascript", "数据分析：SQL"] {
+            assert!(first.contains(bullet), "第 1..4 条要点应在第一格，缺「{bullet}」：{xml}");
+            assert!(!second.contains(bullet), "「{bullet}」不该跑到第二格：{xml}");
+        }
+        for bullet in ["工具：Excel", "工具：Figma", "协作：Git", "其他：演讲"] {
+            assert!(second.contains(bullet), "第 5..8 条要点应在第二格，缺「{bullet}」：{xml}");
+            assert!(!first.contains(bullet), "「{bullet}」不该落在第一格：{xml}");
+        }
+        // 顺序用位置比，不是「有没有」：第一条要点必须真的在第二格之前
+        let first_bullet_at = xml.find("语言：英语 CET-6").expect("丢了第一条要点");
+        assert!(first_bullet_at > cells[0] && first_bullet_at < cells[1], "{xml}");
+        // 分区标题在表格外：屏幕上它是 `grid-column: 1/-1` 那一行
+        let title_at = xml.find("技能").expect("丢了分区标题");
+        let table_at = xml.find("<w:tbl>").expect("没有表格");
+        assert!(title_at < table_at, "标题被塞进表格了：{xml}");
+    }
+
+    /// 多条条目 + `cols-2`：一格一条，同样列优先（第一条在左、第二条在右）。
+    #[test]
+    fn cols_two_splits_entries_column_first() {
+        let page = page_with(json!([
+            { "id": "b2", "kind": "section", "title": "技能", "role": "cols-2", "items": [
+                { "id": "e1", "fields": [{ "id": "f1", "label": "语言", "value": "英语 CET-6" }] },
+                { "id": "e2", "fields": [{ "id": "f2", "label": "工具", "value": "Excel 透视" }] }
+            ]}
+        ]));
+        let xml = document_of(&page, &opts_for("classic"));
+
+        assert_eq!(xml.matches("<w:tc>").count(), 2, "{xml}");
+        let cells: Vec<usize> = xml.match_indices("<w:tc>").map(|(at, _)| at).collect();
+        let first = &xml[cells[0]..cells[1]];
+        let second = &xml[cells[1]..];
+        assert!(first.contains("英语 CET-6"), "第一条应在第一格：{xml}");
+        assert!(!first.contains("Excel 透视"), "第二条不该挤进第一格：{xml}");
+        assert!(second.contains("Excel 透视"), "第二条应在第二格：{xml}");
     }
 
     /// `table` 角色跟屏幕一样**只画横线**：`paper.css` 里 `.doc td` 只有
