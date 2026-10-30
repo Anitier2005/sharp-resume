@@ -290,11 +290,11 @@ export function reducer(state: Workspace, action: Action): Workspace {
         layout: action.layout,
       }));
 
-    // 原件样张落在简历上：`layout` 每次都被排版 agent 整体覆盖，挂那里会被写掉
-    case "originSheet":
+    // 原件指针落在简历上：`layout` 每次都被排版 agent 整体覆盖，挂那里会被写掉
+    case "originDoc":
       return mapResume(state, action.personId, action.resumeId, (resume) => ({
         ...resume,
-        originSheet: action.originSheet,
+        originDoc: action.originDoc,
       }));
 
     case "addAssets":

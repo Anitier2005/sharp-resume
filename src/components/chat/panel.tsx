@@ -417,7 +417,7 @@ export function ChatPanel() {
             actions: unknown[];
             assets?: Asset[];
             origin?: Origin | null;
-            originSheet?: Asset | null;
+            originDoc?: { stored: string; name: string; pages?: number } | null;
           }>("chat_send", {
             args: {
               key: person.id,
@@ -457,14 +457,14 @@ export function ChatPanel() {
           // 免得上一轮那份 PDF 的页数被当成本轮的
           if (sent.origin) putOrigin(resume.id, sent.origin);
           else clearOrigin(resume.id);
-          // 原件样张挂在简历上：它是排版 agent 每轮对照版式的依据。
+          // 原件指针挂在简历上：排版 agent 每轮靠它调 render_doc_page 对照版式。
           // 不进人的材料列表，也不进任何 blocks —— 它不是这一页的内容
-          if (sent.originSheet) {
+          if (sent.originDoc) {
             dispatch({
-              type: "originSheet",
+              type: "originDoc",
               personId: person.id,
               resumeId: resume.id,
-              originSheet: sent.originSheet,
+              originDoc: sent.originDoc,
             });
           }
 

@@ -136,6 +136,13 @@ export interface Resume {
    * 挂在简历上而不是页上 —— 页的 `layout` 每轮被排版 agent 整体覆盖，挂那里会被写掉。
    */
   originSheet?: Asset;
+  /**
+   * 原件文档的指针（stored / name / pages）。
+   *
+   * 现在不再预渲染样张：排版 agent 想看原件长什么样，就自己调 `render_doc_page`
+   * 拿那一页的清晰图。指针挂简历上而不是页上 —— 页的 `layout` 每轮被整体覆盖。
+   */
+  originDoc?: { stored: string; name: string; pages?: number };
 }
 
 /** 简历页：一串块，按顺序排下去 */

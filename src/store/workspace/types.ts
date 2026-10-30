@@ -109,7 +109,12 @@ export type Action =
    * 挂在简历上（不是页上、也不是人的材料列表）—— 它是排版 agent 的参考物，
    * 不是页面内容，也不该出现在「可用图片」里。
    */
-  | { type: "originSheet"; personId: string; resumeId: string; originSheet: Asset }
+  | {
+      type: "originDoc";
+      personId: string;
+      resumeId: string;
+      originDoc: { stored: string; name: string; pages?: number };
+    }
   /**
    * 排版提示：只改「这块用哪种容器」，不动内容。
    * `role` 省略 = 清掉提示，回落 plain。

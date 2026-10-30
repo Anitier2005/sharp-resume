@@ -476,20 +476,26 @@ fn describe_page(args: &LayoutArgs, facts: &crate::agent::facts::PageFacts) -> S
         out.push_str(&format!("可用图片：{}", images.join("、")));
     }
 
-    // 原件样张：这一页是从原件改编来的，版式唯一的依据是那张页图。
+    // 原件样张：这一页是从原件改编来的，版式唯一的依据就是原件本身。
     //
-    // 只给「有样张」的页加这一段 —— 没有原件时让模型自己判断，不要凭空诱导它
-    // 去找一张不存在的图。样张挂在简历上（不是材料列表里），所以也不会出现在
-    // 上面那行「可用图片」里：它不该被当图片块引用。
-    if let Some(id) = resume
-        .get("originSheet")
-        .and_then(|sheet| sheet.get("id"))
-        .and_then(Value::as_str)
-        .filter(|id| !id.trim().is_empty())
+    // 现在只给一个 `stored` 指针，让排版 agent 自己调 `render_doc_page` 取那一页的
+    // 清晰图 —— 不再预渲染（一份十几页的 PDF 全渲一遍，光 token 就吃掉半个窗口，
+    // 而它通常只看第 1 页）。只给「有原件」的页加这一段：没有原件时让模型自己判断，
+    // 不要凭空诱导它去找一张不存在的图。
+    if let Some(stored) = resume
+        .get("originDoc")
+        .and_then(|doc| doc.get("stored"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
     {
+        let name = resume
+            .get("originDoc")
+            .and_then(|doc| doc.get("name"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("原件");
         out.push_str(&format!(
             "\n## 原件样张\n\
-             这一页的内容来自一份原件，原件长什么样可以自己看：调 view_asset，参数 assetId = {id}。\n\
+             这一页的内容来自一份原件（{name}），原件长什么样可以自己看：调 render_doc_page，参数 stored = {stored}、page = 1。\n\
              原件是「长什么样」的唯一依据；不要凭审美另起一套。看不清版式就照结构化生成，不要自己发明版式。\n\
              这张图只是参考：不要把它当页面上的图片块引用。\n"
         ));
@@ -857,26 +863,24 @@ mod tests {
 
     /// 有样张：必须给出 assetId 和「先去看」这句话，否则模型只会自己审美
     #[test]
-    fn an_origin_sheet_hands_over_the_asset_id_and_says_it_is_the_reference() {
+    fn an_origin_doc_hands_over_the_stored_and_says_it_is_the_reference() {
         let mut args = sample();
-        args.workspace["people"][0]["resumes"][0]["originSheet"] = json!({
-            "id": "a-sheet",
-            "kind": "image",
-            "name": "简历 样张.jpg",
-            "stored": "abcd1234.jpg"
+        args.workspace["people"][0]["resumes"][0]["originDoc"] = json!({
+            "stored": "abcd1234.pdf",
+            "name": "简历.pdf",
+            "pages": 1
         });
         let text = describe_page(&args, &no_facts());
         assert!(text.contains("## 原件样张"), "{text}");
-        assert!(text.contains("assetId = a-sheet"), "要给可调的 assetId：{text}");
-        // 工具名必须是注册表里真有的那个：写成 `view` 的话模型调的是一个不存在的工具，
-        // 字符串断言照样能过，真机上却直接断线。工具是否真有由
-        // `tools::tests::capability_map_is_one_line_per_tool` 盯着（排版侧必须有 view_asset）
-        assert!(text.contains("调 view_asset"), "{text}");
-        assert!(!text.contains("调 view，"), "别把工具名写短：{text}");
+        // 现在给的是**池内名 + 页码**，不再给 assetId：不再预渲染样张，
+        // 排版 agent 要图就自己调 render_doc_page 取那一页
+        assert!(text.contains("stored = abcd1234.pdf"), "{text}");
+        assert!(text.contains("page = 1"), "{text}");
+        assert!(text.contains("调 render_doc_page"), "{text}");
+        assert!(!text.contains("view_asset"), "别再让它去 view_asset 找样张：{text}");
         assert!(text.contains("唯一依据"), "{text}");
-        // 样张不是页面内容：它不该混进「可用图片」，否则模型会把它当图片块引用
+        // 原件不是页面内容：不该混进「可用图片」，否则模型会把它当图片块引用
         assert!(!text.contains("可用图片"), "{text}");
-        assert!(!text.contains("a-sheet 简历 样张.jpg"), "{text}");
     }
 
     /// 没有样张：一个字都不许提，否则模型会去找一张不存在的图
@@ -965,11 +969,10 @@ mod tests {
         let specs = specs.as_array().expect("specs 是数组");
 
         let mut args = sample();
-        args.workspace["people"][0]["resumes"][0]["originSheet"] = json!({
-            "id": "a-sheet",
-            "kind": "image",
-            "name": "简历 样张.jpg",
-            "stored": "abcd1234.jpg"
+        args.workspace["people"][0]["resumes"][0]["originDoc"] = json!({
+            "stored": "abcd1234.pdf",
+            "name": "简历.pdf",
+            "pages": 1
         });
 
         let sources = [
@@ -1009,7 +1012,7 @@ mod tests {
             seen.len() >= 3,
             "一个「调 XX」都没抽到，护栏失效：句式是不是改了？{seen:?}"
         );
-        for needed in ["read_layout_guide", "view_asset", "set_page_layout"] {
+        for needed in ["read_layout_guide", "render_doc_page", "set_page_layout"] {
             assert!(seen.iter().any(|name| name == needed), "漏抽了 {needed}：{seen:?}");
         }
         // 参数那条同理：一条都没核对过，等于「参数名校验」这层根本不存在
@@ -1022,29 +1025,31 @@ mod tests {
     /// 参数名单独钉一次：`view_asset` 收的是 `assetId`，`stored` 是池里的寻址名，
     /// 只在工具内部用。名字对了、参数错了，真机上照样是一句「找不到材料  」。
     #[test]
-    fn view_asset_is_told_the_parameter_it_really_takes() {
+    fn render_doc_page_is_told_the_parameter_it_really_takes() {
         let specs = crate::tools::specs(Scope::Layout);
-        let view = specs
+        let render = specs
             .as_array()
-            .and_then(|list| list.iter().find(|item| item["function"]["name"] == "view_asset"))
-            .expect("排版侧必须有 view_asset（原件样张是它唯一的版式依据）");
+            .and_then(|list| {
+                list.iter()
+                    .find(|item| item["function"]["name"] == "render_doc_page")
+            })
+            .expect("排版侧必须有 render_doc_page（原件样张靠它取图）");
+        // 名字对了、参数错了，真机上照样是一句「找不到材料」——这一步必须钉死
         assert_eq!(
-            view["function"]["parameters"]["required"],
-            json!(["assetId"]),
-            "view_asset 的参数改了，提示词和 describe_page 要跟着改"
+            render["function"]["parameters"]["required"],
+            json!(["stored"]),
+            "render_doc_page 的参数改了，提示词和 describe_page 要跟着改"
         );
 
         let mut args = sample();
-        args.workspace["people"][0]["resumes"][0]["originSheet"] = json!({
-            "id": "a-sheet",
-            "kind": "image",
-            "name": "简历 样张.jpg",
-            "stored": "abcd1234.jpg"
+        args.workspace["people"][0]["resumes"][0]["originDoc"] = json!({
+            "stored": "abcd1234.pdf",
+            "name": "简历.pdf",
+            "pages": 1
         });
         let text = describe_page(&args, &no_facts());
-        assert!(text.contains("assetId = a-sheet"), "{text}");
-        assert!(!text.contains("stored ="), "stored 是池内名，不是参数：{text}");
-        assert!(!SYSTEM.contains("stored ="), "提示词把池内名当参数了");
+        assert!(text.contains("stored = abcd1234.pdf"), "{text}");
+        assert!(SYSTEM.contains("render_doc_page"), "提示词要教它用这个工具");
     }
 
     /// 整页原件页本来就不排版，也不必叫它去 view 自己对
