@@ -67,6 +67,12 @@ pub struct Materials {
     pub images: Vec<String>,
     /// 本轮第一个 PDF 附件。`pages: None` = 读不出（损坏 / 不是 PDF）
     pub origin: Option<crate::agent::facts::Origin>,
+    /// 原件样张：原件第 1 页的页图，已登记进材料池。
+    ///
+    /// 它是给**排版 agent** 的参考物，不是这一页的内容：不进 `blocks`，
+    /// 也不进材料段（会话 agent 已经有原件正文，再给它一张整页截图，
+    /// 它只会当成「用户材料里的一张图」）。
+    pub origin_sheet: Option<crate::model::Asset>,
 }
 
 /// 解析结果缓存。
@@ -333,6 +339,7 @@ pub async fn materials(
     let mut images: Vec<String> = Vec::new();
     // 只取本轮第一个 PDF：原件页数是「这一轮上传了什么」这么一件事，不是清单
     let mut first_pdf: Option<(String, Option<u32>)> = None;
+    let mut origin_sheet: Option<crate::model::Asset> = None;
 
     for file in refs {
         let Some(stored) = non_empty(&file.stored) else {
@@ -356,8 +363,11 @@ pub async fn materials(
             .map(str::to_string)
             .unwrap_or(declared);
         let parsed = cached(stored, &ext, &bytes);
+        let mut is_origin = false;
         if ext == "pdf" && first_pdf.is_none() {
             first_pdf = Some((name.to_string(), parsed.pages));
+            // 样张只认这一份（第一个 PDF）：它是「原件长什么样」的唯一依据
+            is_origin = true;
         }
 
         if is_image(&ext) {
@@ -387,6 +397,14 @@ pub async fn materials(
         if !pages.is_empty() {
             notes.push(format!("（另附前 {} 页的图片，版式看图片）", pages.len()));
             images.extend(pages.iter().cloned());
+        }
+        // 首轮原件的第一页页图同时登记成「样张」：排版 agent 拿不到这几张一次性附图
+        // （它们只活在这一轮的消息里），只能靠一个 assetId 自己去 `view` 重看。
+        // 只登记不交代 —— 材料段里一个字都不提，免得会话 agent 把它当页面内容
+        if is_origin && origin_sheet.is_none() {
+            if let Some(page) = pages.first() {
+                origin_sheet = register_sheet(root, name, page);
+            }
         }
         // 视觉模型为什么要单独给内嵌图：整页渲染是按页宽缩的，证件照在整页里
         // 只有几十像素，模型认不出那张脸。内嵌图是原件分辨率，同一套解码矩阵现成。
@@ -468,6 +486,32 @@ pub async fn materials(
         section,
         images,
         origin,
+        origin_sheet,
+    }
+}
+
+/// 把原件第 1 页的页图登记进材料池，返回那条 `Asset`（`view` 靠它的 id 重看原图）。
+///
+/// 登记失败只打日志、返回 None：样张是锦上添花，不能因为它让这一轮的材料组装失败。
+fn register_sheet(root: &Path, origin_name: &str, page_url: &str) -> Option<crate::model::Asset> {
+    let jpeg = data_url_bytes(page_url);
+    if jpeg.is_empty() {
+        return None;
+    }
+    // 去掉原件的扩展名：「简历.pdf 样张.jpg」在材料清单里读起来像两个文件
+    let stem = origin_name
+        .rsplit_once('.')
+        .map(|(head, _)| head)
+        .unwrap_or(origin_name)
+        .trim();
+    let name = format!("{stem} 样张.jpg");
+    let id = format!("a-{}", crate::session::uuid_like());
+    match crate::pool::put_at(root, &id, &name, &jpeg) {
+        Ok(asset) => Some(asset),
+        Err(error) => {
+            eprintln!("[attach] 原件样张没能登记（{name}）：{error}");
+            None
+        }
     }
 }
 
@@ -1041,6 +1085,90 @@ mod tests {
         let db = crate::db::Shared::new(root.join("app.db"));
         let materials = materials(&root, &refs, true, None, "vision-model", &db).await;
         assert!(materials.section.contains("没有可附的内嵌图"), "{}", materials.section);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /* ---------- 原件样张 ---------- */
+
+    /// 登记样张这一步本身不依赖渲染器：给一段 data URL 就应该落进池子、
+    /// 拿到一条 image 资产，名字里带「样张」以便和用户自己的图分开
+    #[test]
+    fn a_page_image_is_registered_as_the_origin_sheet() {
+        let root = std::env::temp_dir().join(format!("sr-sheet-{}", crate::session::uuid_like()));
+        std::fs::create_dir_all(root.join("pool")).unwrap();
+        let jpeg = png_bytes(3, 3);
+        let url = crate::pdfimage::data_url_of("image/jpeg", &jpeg);
+
+        let sheet = register_sheet(&root, "我的简历.pdf", &url).expect("样张要登记成功");
+        assert!(sheet.id.starts_with("a-"), "{}", sheet.id);
+        assert_eq!(sheet.kind, "image");
+        assert_eq!(sheet.name, "我的简历 样张.jpg", "去掉原件的扩展名，别读起来像两个文件");
+        assert!(!sheet.stored.is_empty());
+        // 文件真的在池子里：`view` 只认池内存储名
+        assert_eq!(crate::pool::read_at(&root, &sheet.stored).unwrap(), jpeg);
+
+        // 空 data URL 不登记：宁可不给样张，也不要在池子里留一个 0 字节的图
+        assert!(register_sheet(&root, "坏.pdf", "data:image/jpeg;base64,").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 有 PDF + 能看图 = 有样张；样张**不进材料段**（会话 agent 已经有原件正文，
+    /// 再给它一张整页截图只会被当成用户材料里的一张图）
+    #[tokio::test]
+    async fn a_pdf_with_vision_yields_an_origin_sheet_but_never_leaks_into_the_section() {
+        let bytes = crate::pdfembed::fixtures::pdf_with_text(&["ACME Corp", "Backend Engineer"]);
+        let (root, stored) = inbox_with(&bytes, "pdf");
+        let refs = vec![AttachRef {
+            stored: stored.clone(),
+            name: "原件.pdf".into(),
+            ext: "pdf".into(),
+        }];
+        let db = crate::db::Shared::new(root.join("app.db"));
+        let materials = materials(&root, &refs, true, None, "vision-model", &db).await;
+
+        if materials.images.is_empty() {
+            // 这台机器没有 PDF 渲染器（非 Windows 且没装 poppler/gs）：只验「没有渲染就不伪造样张」
+            assert!(materials.origin_sheet.is_none(), "渲染不出页面就不该有样张");
+            eprintln!("skipped: 这台机器渲染不出 PDF 页面");
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+
+        let sheet = materials.origin_sheet.clone().expect("有 PDF 且有视觉时必须有样张");
+        assert_eq!(sheet.kind, "image");
+        assert!(sheet.name.ends_with("样张.jpg"), "{}", sheet.name);
+        assert!(
+            crate::pool::read_at(&root, &sheet.stored).is_ok(),
+            "样张的字节要真的在池子里，否则 view 打不开"
+        );
+        // 四个地方都不许出现：材料段、正文、图片说明
+        assert!(
+            !materials.section.contains("样张"),
+            "样张是参考物，不是这一轮的材料：{}",
+            materials.section
+        );
+        assert!(
+            !materials.section.contains(&sheet.id),
+            "assetId 也不该进材料段：{}",
+            materials.section
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 没有视觉能力就不登记：看不见图的模型既不会 view，也没人消费这条资产
+    #[tokio::test]
+    async fn a_pdf_without_vision_registers_no_sheet() {
+        let bytes = crate::pdfembed::fixtures::pdf_with_pages(1);
+        let (root, stored) = inbox_with(&bytes, "pdf");
+        let refs = vec![AttachRef {
+            stored,
+            name: "扫描件.pdf".into(),
+            ext: "pdf".into(),
+        }];
+        let db = crate::db::Shared::new(root.join("app.db"));
+        let materials = materials(&root, &refs, false, None, "deepseek-chat", &db).await;
+        assert!(materials.origin_sheet.is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

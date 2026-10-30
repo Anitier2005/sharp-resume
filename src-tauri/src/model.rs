@@ -416,6 +416,13 @@ pub struct Resume {
     pub updated_at: u64,
     #[serde(default)]
     pub pages: Vec<ResumePage>,
+    /// 原件样张：用户上传的原件第 1 页的页图（材料池里的那张，`kind: "image"`）。
+    ///
+    /// 它是**排版参考物**，不是内容：不进 `blocks`、不进材料清单、不参与导出。
+    /// 挂在简历上而不是页上，是因为 `page.layout` 是排版 agent 每轮整体覆盖的字段
+    /// （它写回时不带这个键就会丢），而样张要在每一次排版里都在。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_sheet: Option<Asset>,
     #[serde(flatten, default, skip_serializing_if = "is_empty")]
     pub extra: Map<String, Value>,
 }

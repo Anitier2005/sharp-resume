@@ -105,6 +105,12 @@ export type Action =
   /** 工具产出的新材料（图片转化等）。按 id 去重后并进人的材料列表 */
   | { type: "addAssets"; personId: string; assets: Asset[] }
   /**
+   * 原件样张：会话上传原件后，后端把第 1 页页图登记成一条材料。
+   * 挂在简历上（不是页上、也不是人的材料列表）—— 它是排版 agent 的参考物，
+   * 不是页面内容，也不该出现在「可用图片」里。
+   */
+  | { type: "originSheet"; personId: string; resumeId: string; originSheet: Asset }
+  /**
    * 排版提示：只改「这块用哪种容器」，不动内容。
    * `role` 省略 = 清掉提示，回落 plain。
    */

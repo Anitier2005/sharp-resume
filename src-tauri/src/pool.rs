@@ -346,6 +346,10 @@ pub fn used_stored(workspace: &Workspace) -> HashSet<String> {
             }
         }
         for resume in &person.resumes {
+            // 原件样张也躺在同一个池里，只按 pages 算会把它当成孤儿
+            if let Some(sheet) = &resume.origin_sheet {
+                note_asset(&mut used, sheet);
+            }
             for page in &resume.pages {
                 if let Some(asset_id) = &page.asset_id {
                     if let Some(stored) = by_id.get(asset_id.as_str()) {
@@ -472,6 +476,7 @@ mod tests {
                     "personId": "p1",
                     "title": "简历",
                     "updatedAt": 0,
+                    "originSheet": { "id": "a4", "kind": "image", "name": "简历 样张.jpg", "stored": "sheet.jpg" },
                     "pages": [
                         { "id": "pg1", "kind": "file", "label": "扫描件", "assetId": "a3", "blocks": [] },
                         { "id": "pg2", "kind": "native", "label": "正文", "blocks": [
@@ -487,7 +492,8 @@ mod tests {
         assert!(used.contains("pool.png"), "顶层池里的文件要算");
         assert!(used.contains("photo.png"), "人身上的证件照要算");
         assert!(used.contains("cert.pdf"), "库条目上的证书要算");
-        assert_eq!(used.len(), 3, "链接不是文件，不该算进来：{used:?}");
+        assert!(used.contains("sheet.jpg"), "原件样张也要算，否则保存一次就被回收");
+        assert_eq!(used.len(), 4, "链接不是文件，不该算进来：{used:?}");
     }
 
     #[test]

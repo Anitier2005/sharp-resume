@@ -290,6 +290,13 @@ export function reducer(state: Workspace, action: Action): Workspace {
         layout: action.layout,
       }));
 
+    // 原件样张落在简历上：`layout` 每次都被排版 agent 整体覆盖，挂那里会被写掉
+    case "originSheet":
+      return mapResume(state, action.personId, action.resumeId, (resume) => ({
+        ...resume,
+        originSheet: action.originSheet,
+      }));
+
     case "addAssets":
       // 按 id 去重：同一次工具调用的事件可能重复送达（界面重连、事件重放），
       // 直接 push 会在材料区留下两张一模一样的图

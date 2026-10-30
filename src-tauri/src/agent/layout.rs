@@ -853,8 +853,53 @@ mod tests {
         assert!(text.contains("〔role: tags〕"), "分区的 role：{text}");
     }
 
+    /* ---------- 原件样张 ---------- */
+
+    /// 有样张：必须给出 assetId 和「先去看」这句话，否则模型只会自己审美
     #[test]
-    fn missing_page_is_reported_not_panicked() {        let mut args = sample();
+    fn an_origin_sheet_hands_over_the_asset_id_and_says_it_is_the_reference() {
+        let mut args = sample();
+        args.workspace["people"][0]["resumes"][0]["originSheet"] = json!({
+            "id": "a-sheet",
+            "kind": "image",
+            "name": "简历 样张.jpg",
+            "stored": "abcd1234.jpg"
+        });
+        let text = describe_page(&args, &no_facts());
+        assert!(text.contains("## 原件样张"), "{text}");
+        assert!(text.contains("assetId = a-sheet"), "要给可调的 assetId：{text}");
+        assert!(text.contains("view"), "{text}");
+        assert!(text.contains("唯一依据"), "{text}");
+        // 样张不是页面内容：它不该混进「可用图片」，否则模型会把它当图片块引用
+        assert!(!text.contains("可用图片"), "{text}");
+        assert!(!text.contains("a-sheet 简历 样张.jpg"), "{text}");
+    }
+
+    /// 没有样张：一个字都不许提，否则模型会去找一张不存在的图
+    #[test]
+    fn no_origin_sheet_no_section() {
+        let text = describe_page(&sample(), &no_facts());
+        assert!(!text.contains("原件样张"), "{text}");
+        assert!(!text.contains("assetId ="), "{text}");
+    }
+
+    /// 整页原件页本来就不排版，也不必叫它去 view 自己对
+    #[test]
+    fn a_file_page_gets_no_origin_sheet_section() {
+        let mut args = sample();
+        args.page_id = "pg1".into();
+        args.workspace["people"][0]["resumes"][0]["pages"][0]["kind"] = json!("file");
+        args.workspace["people"][0]["resumes"][0]["originSheet"] = json!({
+            "id": "a-sheet", "kind": "image", "name": "简历 样张.jpg", "stored": "x.jpg"
+        });
+        let text = describe_page(&args, &no_facts());
+        assert!(text.contains("没有可调的空间"), "{text}");
+        assert!(!text.contains("## 原件样张"), "{text}");
+    }
+
+    #[test]
+    fn missing_page_is_reported_not_panicked() {
+        let mut args = sample();
         args.page_id = "pg-nope".into();
         assert!(describe_page(&args, &no_facts()).contains("找不到这一页"));
     }

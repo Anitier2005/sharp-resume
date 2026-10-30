@@ -55,7 +55,11 @@ pub fn params() -> Value {
     })
 }
 
-/// 从工作区里找一份材料：人的、库条目的、顶层池的都要找
+/// 从工作区里找一份材料：人的、库条目的、简历的原件样张、顶层池的都要找。
+///
+/// 样张那条不能漏：它**故意**不在 `person.assets` 里（进了材料列表就会被当成
+/// 用户自己的一张图），可 `view` 仍要能按 assetId 打开它 —— 排版 agent 唯一的
+/// 对照依据就是它。
 pub(crate) fn find_asset<'a>(workspace: &'a Value, id: &str) -> Option<&'a Value> {
     let people = workspace.get("people")?.as_array()?;
     for person in people {
@@ -69,6 +73,15 @@ pub(crate) fn find_asset<'a>(workspace: &'a Value, id: &str) -> Option<&'a Value
                 if let Some(list) = item.get("assets").and_then(Value::as_array) {
                     if let Some(found) = list.iter().find(|item| item["id"].as_str() == Some(id)) {
                         return Some(found);
+                    }
+                }
+            }
+        }
+        if let Some(resumes) = person.get("resumes").and_then(Value::as_array) {
+            for resume in resumes {
+                if let Some(sheet) = resume.get("originSheet") {
+                    if sheet["id"].as_str() == Some(id) {
+                        return Some(sheet);
                     }
                 }
             }
@@ -300,11 +313,33 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_flattens_alpha_instead_of_failing() {
-        let img = DynamicImage::new_rgba8(32, 32);
+    fn jpeg_flattens_alpha_instead_of_failing() {        let img = DynamicImage::new_rgba8(32, 32);
         let (data, ext) = encode(&img, "jpeg", 80).expect("带 alpha 也要能转 jpeg");
         assert_eq!(ext, "jpg");
         assert!(data.len() > 100);
+    }
+
+    /// 原件样张不在人的材料列表里（它不该当材料出现），但 `view` 必须找得到 ——
+    /// 排版 agent 唯一的对照依据就是它
+    #[test]
+    fn the_origin_sheet_is_findable_even_though_it_is_not_a_material() {
+        let ws = json!({
+            "people": [{
+                "id": "p1",
+                "assets": [],
+                "items": [],
+                "resumes": [{
+                    "id": "r1",
+                    "pages": [],
+                    "originSheet": {
+                        "id": "a-sheet", "kind": "image", "name": "简历 样张.jpg", "stored": "s.jpg"
+                    }
+                }]
+            }]
+        });
+        let found = find_asset(&ws, "a-sheet").expect("样张要能按 assetId 找到");
+        assert_eq!(found["stored"], "s.jpg");
+        assert!(find_asset(&ws, "a-nope").is_none());
     }
 
     #[test]

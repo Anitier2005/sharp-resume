@@ -129,6 +129,13 @@ export interface Resume {
   targetPagesTurn?: number;
   /** 「旧的多页简历带着整份 1 页老目标」那条一次性提示已经看过 */
   targetPagesNotice?: boolean;
+  /**
+   * 原件样张：用户上传的原件第 1 页的页图（材料池里的一条 Asset）。
+   *
+   * 它是排版 agent 的**参考物**，不是内容：不进 blocks、不进材料列表、不参与导出。
+   * 挂在简历上而不是页上 —— 页的 `layout` 每轮被排版 agent 整体覆盖，挂那里会被写掉。
+   */
+  originSheet?: Asset;
 }
 
 /** 简历页：一串块，按顺序排下去 */

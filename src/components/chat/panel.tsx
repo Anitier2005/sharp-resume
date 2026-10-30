@@ -417,6 +417,7 @@ export function ChatPanel() {
             actions: unknown[];
             assets?: Asset[];
             origin?: Origin | null;
+            originSheet?: Asset | null;
           }>("chat_send", {
             args: {
               key: person.id,
@@ -456,6 +457,16 @@ export function ChatPanel() {
           // 免得上一轮那份 PDF 的页数被当成本轮的
           if (sent.origin) putOrigin(resume.id, sent.origin);
           else clearOrigin(resume.id);
+          // 原件样张挂在简历上：它是排版 agent 每轮对照版式的依据。
+          // 不进人的材料列表，也不进任何 blocks —— 它不是这一页的内容
+          if (sent.originSheet) {
+            dispatch({
+              type: "originSheet",
+              personId: person.id,
+              resumeId: resume.id,
+              originSheet: sent.originSheet,
+            });
+          }
 
           const { content, changes } = splitReply(acc, person, targetPage);
           await invoke("chat_patch", {
