@@ -979,6 +979,7 @@ mod tests {
         ];
 
         let mut seen: Vec<String> = Vec::new();
+        let mut params_checked = 0usize;
         for (where_, text) in sources {
             for (name, params) in called_tools(&text) {
                 seen.push(name.clone());
@@ -994,6 +995,7 @@ mod tests {
                     .cloned()
                     .unwrap_or_default();
                 for param in params {
+                    params_checked += 1;
                     assert!(
                         required.contains(&json!(param)),
                         "{where_} 让模型用 {name} 的参数 {param}，但它只收 {required:?}"
@@ -1010,6 +1012,11 @@ mod tests {
         for needed in ["read_layout_guide", "view_asset", "set_page_layout"] {
             assert!(seen.iter().any(|name| name == needed), "漏抽了 {needed}：{seen:?}");
         }
+        // 参数那条同理：一条都没核对过，等于「参数名校验」这层根本不存在
+        assert!(
+            params_checked >= 2,
+            "一条参数名校验都没跑到，护栏空转（文案里的「参数 XX」提取坏了）：{seen:?}"
+        );
     }
 
     /// 参数名单独钉一次：`view_asset` 收的是 `assetId`，`stored` 是池里的寻址名，
