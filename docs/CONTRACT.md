@@ -639,6 +639,31 @@ Anthropic 兼容端点给 `stop_reason`，`finish_reason` 优先，都缺则退�
 - `pgMar` 从 `paper.margin`（mm→twips）派生、`pgSz` 从 `paper.size_mm()` 派生，字号/行距按预设派生（classic 10 / compact 9.4 / roomy 10.6 / dense 9.6）。
 - **已知缺口**：HEIC/AVIF 等没有解码器的格式进图片字段时，Word 里会静默变成占位框。正确解法是资产入池时用 `convert_image` 转码，不在导出层加解码器。
 
+### 12.1 网格：role → `w:tbl`
+
+屏幕上 `grid-2 / grid-3 / table / cols-2 / cols-3` 是容器差异，Word 里统一落成**表格**（无边框均分列，`tblLayout=fixed`）：
+
+| role | Word 里长什么样 |
+|---|---|
+| `grid-2` / `grid-3` | 无边框表格，一格一条 entry |
+| `table` | 表格，`insideH` 带线（颜色取 `--line`），一格一条 entry |
+| `cols-2` / `cols-3` | 无边框表格，**按列优先切分**：一条 entry 时切要点（`per = ceil(n/cols)`），多条 entry 时切条目 |
+
+- 列宽 = 版心宽 / 列数，除不尽的零头归最后一列。
+- 分区标题永远在表格**外面**：合并进表格会让标题跟着整表被推到下一页。
+- `cols-N` 的切分必须与屏幕的 `columns` 顺序一致（列优先），否则「左栏第一条」在 Word 里会跑到右边。
+- **仍不同构的两处**，写在这是为了别再被当成 bug：栏高（屏幕按内容高度自动平衡，表格按条数均分）、栏间距（屏幕 18px，表格 cellMar=0）。
+
+### 12.2 块级样式：对齐 / 字号 / 加粗
+
+`Block.style { align, size, bold }`（`set_block_style` 写，`blockStyle` op 落地），屏幕与 Word **必须同时生效**：
+
+- 屏幕：块根元素的内联 `text-align` / `font-size: {n}pt` / `font-weight: 700`；
+- Word：同块的段落带 `w:jc` / `w:sz`（half-points，即 pt×2）/ `w:b`；
+- 值域：align ∈ left/center/right，size 8–24 的整数，bold 布尔。非法值**报错**，不静默丢弃 —— 模型据此判断「设上了没有」。
+- `bold: false` 的语义是「不再额外加粗」，撤不掉条目名/分区标题**结构性**的粗体。文案必须这么写，否则模型会以为能反向操作。
+- 这是纯排版：**一个字都不改**。`parts` / `html` 路径不受影响，也不该用它们绕开 —— 写在 HTML 里的内联样式在 Word 里会丢。
+
 ## 13. 提示词 ↔ 工具表一致性（护栏）
 
 排版/会话的提示词里只要写了「调 `X`」，就必须有一条测试去**工具注册表**里核对 `X` 真的存在、参数名真的在该工具的 `required` 里。
