@@ -27,6 +27,8 @@ ocr = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# 只为构建期校验知识库清单：清单写坏时不该让运行时静默变成「空库」
+serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
