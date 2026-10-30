@@ -109,3 +109,11 @@ windows = { version = "0.62", features = [
 # 测试里用 #[tokio::test] 真连一次模型：tokio 本来就在树里，加 feature 不增编译量。
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# 开发档只保留行号表，不要完整 debuginfo。
+# 起因：`cargo test --lib` 每次链接出的测试二进制带着完整调试信息，几百 MB 一份、
+# 按 hash 不共享；几个人并发跑就把磁盘吃满（真出现过 477G 盘写满、rlib 被截断）。
+# debug = 1 保留「出错时能看到行号」，砍掉变量与类型信息 —— 体积降一半以上，
+# 断点调试依然可用。要做内存级调试时临时改成 2，不要长期开着。
+[profile.dev]
+debug = 1
