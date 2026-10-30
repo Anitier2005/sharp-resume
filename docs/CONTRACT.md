@@ -524,3 +524,102 @@ Rust：`capability::resolve(base_url, model, api_key) -> Capability`。
 `chat_send`（会话）与 `layout_submit`（排版）各自 `resolve` 一次，写入自己的
 `Outbox.vision`，并把 `facts::capability_block(cap)` 拼进 system。排版侧不许省这一步：
 它同样会在 `view` 里渲染页面给自己看。
+
+---
+
+## 8. 会话轮次的终止判定
+
+**唯一可靠信号是 `finish_reason`**（OpenAI 口径：`stop` / `length` / `tool_calls` / `content_filter`；
+Anthropic 兼容端点给 `stop_reason`，`finish_reason` 优先，都缺则退回旧判据并打日志）。
+按「正文有没有内容」判结束是生产反模式——真机上就是这么把一个"说到一半"的回合当成完成落库的。
+
+`net::StreamOutcome` 必须收下三样：`content`、`tool_calls`、`finish_reason`；另收 `reasoning_chars`（只累计字数，不存文本）。
+
+### 8.1 五态
+
+| `classify(reason, reply, has_calls)` | 处理 |
+|---|---|
+| `has_calls` 为真（无论正文） | `Continue`，执行工具后继续 |
+| `length` / `max_tokens` | `Truncated` → 追加「继续」再请求**一次** |
+| `content_filter` | `Filtered` → **不重试**，如实告知（再问还是被掐） |
+| 正文非空 | `Done` |
+| 正文为空 | `EmptyReply` → 追加收尾提示**一次** |
+
+收尾提示占一个轮次名额（总请求数上限必须硬，不许偷偷 +1）。
+
+### 8.2 未完成必须可诊断
+
+`TurnResult.unfinished` 四态，缺一不可：
+
+- `EmptyAfterNudge` —— **真的发出过**收尾提示且仍空。没发过就不许叫这个名字。
+- `Truncated` —— 输出被长度截断。
+- `Filtered` —— 被安全过滤拦截。
+- `RoundLimit { repeat }` —— `repeat=false`：用满轮次仍无正文（含"最后一轮白卷"）；`repeat=true`：同一工具同参数连调 3 次。
+  文案必须对两种现场都成立：`模型用满了 {MAX_ROUNDS} 轮仍然没有收尾。已执行 {n} 次工具操作，改动已生效。`
+
+### 8.3 两条护栏
+
+同一工具同参数**连续 3 次** → 停；连续 **2 轮**空正文 → 停。
+工具已经有了副作用（`add_field` / `convert_image`），所以「没写完」**不许当 Err**：
+本轮返回 Ok，但带 `unfinished`，前端在消息下方显示一行灰色说明。
+
+### 8.4 请求日志
+
+`chat_send` 组装完 system（含 digest）后写 `<数据目录>/logs/context/{unix秒}-{personId}.md`。
+- 必须在请求**前**落地：它记的是「模型将看到什么」。
+- 思考字数只在请求结束才有，所以是**尾部追加** `reasoning=N 字`，不写回同一行。
+- `personId` 进文件名前把非 `[A-Za-z0-9_-]` 换成 `_`（防路径穿越）。
+- 任何一步失败都 `let _ =`，不影响这一轮。
+
+## 9. 纸面尺寸与分页
+
+**屏幕上那张纸必须是 1:1 的 A4**：`210mm × 297mm`（96dpi 下 793.7 × 1122.5px）。
+曾经的 374px「缩略纸 + 绝对 px 字号」让测量出的页数系统性偏大 **2.5 倍**，排版模型被一个假高度逼着压字号、改栏数、改写文字。
+
+- 预览缩放只走 CSS zoom，默认 47%（视觉宽 ≈373px，与旧版观感一致）；菜单里的 **100% = 真实 A4**。
+- 离屏测量宿主与纸同尺寸、同口径（`.paper` 给 16mm 页边距、`.doc` padding 0）。
+- **一页可用高度**：`onePage = paper.offsetWidth × (297/210) − padY`，`contentPx = paper.offsetHeight − padY`，`padY` 现场读 `getComputedStyle` 的上下内边距。写死 265mm 就是第二个漂移源。
+- `.paper` 用 `min-height` 而非 `height`：写死会让 `offsetHeight` 恒等于 297mm，等于把测量废掉。
+
+### 9.1 真分页（Paged.js）
+
+只走 ESM `Previewer`，不进主 chunk（动态 import）。三条硬约束：
+
+1. **必须外面包一层 shell 再传**：Paged.js 会丢掉传入的根元素、只从 `firstChild` 开始搬；直接传 `.doc` 会让纸上的内容失去 `.doc` 作用域，按 16px 默认字号排，半页的东西被切成两页。
+2. 显式传样式表数组（对象形式 `{ [href]: cssText }`，传字符串会被当 URL 去 fetch，静默 0 页），并给所有 `<style>` 打 `data-pagedjs-ignore`。
+3. 离屏预排不能 `display:none`（高度为 0，一页也切不出）；用 `position:absolute; left:-20000px; visibility:hidden`。
+
+分页失败 → 退回单张纸 + 虚线（`console.warn`，不许白屏）。head 里 Paged.js 插入的样式必须按「开跑前快照」回收，退出时 `resetPagination()` 全清。
+
+## 10. 排版文字锁
+
+**任何一个入口都不许让文字变。** 排版模型拥有完整版面能力（尺寸、边距、分栏、字体字号、定位、增删页），内容权限为零。
+
+两个入口都要锁：`parts`（逐块）与 `html`（整页接管）。
+
+- **归一化链**（两侧同一个函数、各一次）：去零宽/软连字符 → NFKC → **抹标点邻接空白** → 压空白。
+  标点邻接空白一律视为排版噪声：`A B:C` / `A B : C` / `A B：C` 归一后全等；字母之间的空格不动（`Java Script` ≠ `JavaScript`）。
+- **比对用序列比对**（`blocks` 按顺序拼接）。因此：重排区块顺序、把两块并成一块都会被拒——**这是有意的**，调区块顺序属内容决定，要走 `ask_session`。
+- **报错两侧口径不同**：比对走归一文本，**报错预览走不归一的那份**。否则 NFKC 把全角「：」压成半角，模型认不出自己写的是哪句。
+- `kind == "media"` 整块豁免；未知块报「块 {id} 不存在」并列出这一页的块，不许静默放行。
+- 整页接管的拒绝文案不报块号：`整页接管不能改字：这一页原文共 {n} 字，你写的是 {m} 字。要改内容请调 ask_session。`
+
+`position` / `top/left/right/bottom` / `z-index` 由 `ALLOW_ABSOLUTE` 把着（默认 false），且必须排在真分页之后才能打开——绝对定位元素跨页只能由分页引擎兜底。
+`transform` 只放行 `translate*`：`scale/rotate/skew/matrix` 一律剔除（Word 表达不了缩放，放开了就是「屏幕上对、导出去错」）。
+
+## 11. 附件正文：Fact 层
+
+**附件正文是事实，不是每轮的投影。** 曾经把它整段塞进 system 用完即弃，一轮中断就永久丢失（真机：2404 字正文蒸发，后续轮次只能说「系统里只有你的照片」）。
+
+- 表 `source(stored PK, name, ext, pages, chars, text, added_at)` 建在 `ensure_additive`，不升 schema 版本；同一 `stored` 重复上传仍是 1 行。
+- 投影只给**指针 + 摘要**：正文 ≤800 字照旧全文；>800 字只给前 120 字 + `（原件正文共 {chars} 字…要全文调 read_source，参数 stored = {stored}）`。
+- 工具 `read_source { stored, offset?, limit? }`（缺省 4000 / 上限 20000），越界报「offset 超过正文长度」；事实层缺失但文件还在 → 现场重解析并补写。
+- **投影永不反写事实**：摘要与报告的摘要用同一个 `digest_text`，不许各处各写一遍。
+
+## 12. Word 导出
+
+- **绝对定位 → `w:framePr`**：`w:hAnchor="page" w:vAnchor="page"`，坐标口径是**版心左上角 + 页边距**（与屏幕 `.abs` 一致：`.doc` 带 `position:relative`，绝对定位的包含块就是版心）。px→twips = `px / 96 × 1440`。
+- `framePr` 是**段落级**：一个 `.abs` 容器的多个子元素会被拼成一段纯文本，`z-index` 不存在（重叠变成文字让位），`transform`/圆角/阴影/背景色全部丢失。这些是 Word 的表达边界，不是 bug。
+- **照片必须真内嵌**：`word/media/photo{N}.jpg` + `rId` 关系 + `<wp:extent>`。显示 62×82px（EMU 9525/px），**源图压到 160px 宽 / JPEG 0.8**（62÷96×300≈194 设备像素，取 160 在 A4 上约 245dpi）。取不到图 → 退回「［照片］」占位框，版面不重排，导出里不写报错文字。
+- `pgMar` 从 `paper.margin`（mm→twips）派生、`pgSz` 从 `paper.size_mm()` 派生，字号/行距按预设派生（classic 10 / compact 9.4 / roomy 10.6 / dense 9.6）。
+- **已知缺口**：HEIC/AVIF 等没有解码器的格式进图片字段时，Word 里会静默变成占位框。正确解法是资产入池时用 `convert_image` 转码，不在导出层加解码器。
