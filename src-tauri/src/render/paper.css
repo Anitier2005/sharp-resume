@@ -23,6 +23,12 @@
   --line: #e2e2dc;
   --acc: #2c2c2a;
   --soft: #f4f4f1;
+  /* 结构线（分区下划线、分隔线）的颜色。默认取正文墨色，也就是「黑线」——
+     简历上的线是用来分段的，浅灰在缩放和打印后往往看不见，等于没画。
+     模型可以用 `set_page_layout { rule }` 整页覆盖（生成器把它写成 .doc 上的变量）。 */
+  --rule: var(--ink);
+  /* 框线（图片、表格、标签）另用 --line：那些框面积大，跟正文一样黑会压住内容 */
+  --frame: var(--line);
 
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   font-size: var(--fs);
@@ -144,7 +150,7 @@
 }
 .doc .head .rule {
   height: 1px;
-  background: var(--line);
+  background: var(--rule);
   margin-top: 10px;
 }
 
@@ -191,7 +197,7 @@
   color: var(--acc);
   padding-bottom: 4px;
   margin-bottom: 8px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--rule);
 }
 .doc .entry {
   margin-bottom: 9px;
@@ -240,8 +246,10 @@
 /* 标题只画到自己脚下，不拉通整行 */
 .doc .sec.tight > .t {
   display: inline-block;
-  border-bottom: none;
-  padding-bottom: 0;
+  /* 早先是 border-bottom:none —— 结果是「标题脚下一条线都没有」，
+     而原件每一节都带线。保留 inline-block 让线只画到文字宽度，语义仍是「只到自己脚下」。 */
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 2px;
   margin-bottom: 6px;
 }
 .doc .sec.plain > .t {
@@ -394,18 +402,18 @@
 
 .doc .rule {
   height: 1px;
-  background: var(--line);
+  background: var(--rule);
   margin: 10px 0;
   border: none;
 }
 .doc .rule-dash {
   height: 0;
-  border-top: 1px dashed var(--line);
+  border-top: 1px dashed var(--rule);
   margin: 10px 0;
 }
 .doc .rule-strong {
   height: 2px;
-  background: var(--acc);
+  background: var(--rule);
   margin: 10px 0;
   border: none;
 }

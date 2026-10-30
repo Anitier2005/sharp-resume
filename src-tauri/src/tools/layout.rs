@@ -404,6 +404,10 @@ pub fn set_layout_params() -> Value {
                 "enum": ["", "center", "bare", "thick", "aside"],
                 "description": "页头版式。aside 是原件最常见的排法：姓名与联系方式居中、照片贴右上角；center 整体居中；bare 不画分隔线；thick 粗分隔线。不传就维持现状，传空串回到生成器默认"
             },
+            "rule": {
+                "type": "string",
+                "description": "线条颜色：分区下划线、分隔线都跟着它。默认是近黑（正文墨色）；想看轻一点给 #8a8a82，想更淡给 #d8d8d0，不画线给 none。只收 #rgb / #rrggbb / none；传空串回到默认"
+            },
             "parts": {
                 "type": "object",
                 "description": "只重写某几个块：块 id → 这一块的 HTML。块 id 从 read_page 的输出里取。值为空串表示撤销这一块的覆盖，回到自动生成",
@@ -494,6 +498,23 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
             } else {
                 notes.push(format!("页头 {head}"));
             }
+        }
+    }
+
+    if let Some(rule) = args.get("rule").and_then(Value::as_str) {
+        let rule = rule.trim();
+        if rule.is_empty() {
+            layout.remove("rule");
+            notes.push("线条回到默认色".to_string());
+        } else if !render::is_rule_color(rule) {
+            // 只收 #rgb / #rrggbb / none：这个值会被拼进 style 属性，别的形态一律不收
+            return Err(format!("rule 只收 #rgb / #rrggbb / none，收到「{rule}」"));
+        } else if rule.eq_ignore_ascii_case("none") {
+            layout.insert("rule".into(), json!("none"));
+            notes.push("线条去掉".to_string());
+        } else {
+            layout.insert("rule".into(), json!(rule));
+            notes.push(format!("线条 {rule}"));
         }
     }
 

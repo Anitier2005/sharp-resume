@@ -183,6 +183,14 @@ pub struct PageLayout {
     /// 用户认得出「这是我那份简历」的地方。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub head: String,
+    /// 线条色（分区下划线、分隔线）。空 = 用样式表的默认值 `--acc`（近黑）。
+    ///
+    /// 为什么单开一项而不是让模型写内联样式：线条是**整页**的属性，散在每块的
+    /// `parts` 里各写一遍，改一次全页颜色要动十几个块，还容易漏。收成一项之后
+    /// 生成器把它写成 `.doc` 上的 CSS 变量覆盖，一处生效。
+    /// 只收 `#rgb` / `#rrggbb` / `none` —— 它会被拼进 style 属性，不收别的形态。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rule: String,
     /// 未知字段原样保留：新版本写的成品，旧版本读一遍再存不能把它丢掉
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, Value>,
@@ -217,7 +225,7 @@ pub fn compile(page: &ResumePage, person: &Person) -> Compiled {
     {
         check_asset_refs(raw, person, &mut warnings);
         return Compiled {
-            html: shell(&sanitize(raw), &preset),
+            html: shell(&sanitize(raw), &preset, &layout.rule),
             css: PRESET_CSS,
             mode: "manual",
             preset,
@@ -232,7 +240,7 @@ pub fn compile(page: &ResumePage, person: &Person) -> Compiled {
     };
 
     Compiled {
-        html: shell(&body, &preset),
+        html: shell(&body, &preset, &layout.rule),
         css: PRESET_CSS,
         mode: "structured",
         preset,
@@ -240,8 +248,49 @@ pub fn compile(page: &ResumePage, person: &Person) -> Compiled {
     }
 }
 
-fn shell(body: &str, preset: &str) -> String {
-    format!(r#"<article class="doc" data-preset="{preset}">{body}</article>"#)
+fn shell(body: &str, preset: &str, rule: &str) -> String {
+    let style = match rule_style(rule) {
+        Some(decl) => format!(r#" style="{decl}""#),
+        None => String::new(),
+    };
+    format!(r#"<article class="doc" data-preset="{preset}"{style}>{body}</article>"#)
+}
+
+/// 线条色的 style 声明；`None` = 不下发覆盖，用样式表默认。
+///
+/// `none` 要落成 `transparent` 而不是「什么都不写」—— 后者会退回默认的黑色，
+/// 也就是「想删线反而更黑」。
+fn rule_style(raw: &str) -> Option<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.eq_ignore_ascii_case("none") {
+        return Some("--rule:transparent".to_string());
+    }
+    clean_rule_color(value).map(|color| format!("--rule:{color}"))
+}
+
+/// 工具层用的校验：`#rgb` / `#rrggbb` / `none` 都算合法。
+pub fn is_rule_color(raw: &str) -> bool {
+    let value = raw.trim();
+    value.eq_ignore_ascii_case("none") || clean_rule_color(value).is_some()
+}
+
+/// 线条色只收这几种形态：`#rgb`、`#rrggbb`、`none`。
+///
+/// 它会被原样拼进 `style` 属性，所以**不能**让任意字符串过来 —— 一个引号就能
+/// 从 style 里逃出去（生成器的输出不走 ammonia，这里就是唯一一道检查）。
+fn clean_rule_color(raw: &str) -> Option<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if value == "none" {
+        return None;
+    }
+    let hex = value.strip_prefix('#')?;
+    if !matches!(hex.len(), 3 | 6) || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("#{hex}"))
 }
 
 fn pick_preset(page: &ResumePage, layout: &PageLayout) -> String {
@@ -1540,6 +1589,44 @@ mod tests {
     }
 
     /// head: aside 现在真的出绝对定位的照片（原件那种「姓名居中、照片贴右上角」）
+    /// 线条色落在 `.doc` 根上（一处生效，全页的分区线与分隔线都跟着变）
+    #[test]
+    fn rule_colour_lands_on_the_doc_root() {
+        let mut page = page();
+        page.layout = Some(PageLayout {
+            rule: "#1f1f1c".into(),
+            ..Default::default()
+        });
+        let out = compile(&page, &person());
+        assert!(out.html.contains(r#"style="--rule:#1f1f1c""#), "{}", out.html);
+    }
+
+    /// 非法值一律不下发：它会被拼进 style 属性，收严一点比事后清洗便宜
+    #[test]
+    fn a_malformed_rule_colour_is_dropped() {
+        for bad in ["red", "#12345", "1f1f1c", "#gggggg", "#fff\"onload=x"] {
+            let mut page = page();
+            page.layout = Some(PageLayout {
+                rule: bad.into(),
+                ..Default::default()
+            });
+            let out = compile(&page, &person());
+            assert!(!out.html.contains("--rule:"), "{bad} 不该被接受：{}", out.html);
+        }
+    }
+
+    /// `none` 要落成 transparent —— 什么都不写会退回默认的黑色
+    #[test]
+    fn rule_none_means_transparent() {
+        let mut page = page();
+        page.layout = Some(PageLayout {
+            rule: "none".into(),
+            ..Default::default()
+        });
+        let out = compile(&page, &person());
+        assert!(out.html.contains("--rule:transparent"), "{}", out.html);
+    }
+
     #[test]
     fn head_aside_pins_the_photo_to_the_top_right() {
         let mut page = page();
