@@ -52,6 +52,8 @@ const PARA_GAP: f32 = 1.95;
 const SIZE_TOL: f32 = 0.08;
 /// 对齐判定：中线偏离页心超过这个比例（相对页宽）就不算居中
 const CENTER_TOL: f32 = 0.03;
+/// 居中行的最大宽度（占页宽）。撑满版心的行一律不算居中 —— 它们的中点必然在页心。
+const CENTER_MAX_W: f32 = 0.70;
 /// 右对齐：右边缘离页右边小于这个比例（相对页宽）才算贴右边。
 /// 12% 是因为正常页边距就有 8~10%，卡 5% 会漏掉「贴着自己右边距」的行。
 const RIGHT_TOL: f32 = 0.12;
@@ -341,8 +343,10 @@ fn mergeable(prev: &Line, line: &Line, page_w: f32) -> bool {
     if gap <= 0.0 || gap > prev.size.max(line.size) * PARA_GAP {
         return false;
     }
-    // 列表项自成一块
-    !starts_item(&line.text) && !starts_item(&prev.text)
+    // 只有**新起一行**是条目记号时才另起一块；
+    // 上一行是不是条目不影响合并 —— 条目的续行必须并回它自己，
+    // 否则一句要点会被劈成「· 前半句」+「后半句」两块，排版 agent 会当成两条。
+    !starts_item(&line.text)
 }
 
 /// 列表项的记号：原件里就是这些字符开头
@@ -390,7 +394,10 @@ fn align_of(line: &Line, page_w: f32) -> Align {
         return Align::Left;
     }
     let mid = (line.x + line.right) / 2.0;
-    if (mid - page_w / 2.0).abs() < page_w * CENTER_TOL {
+    // 满宽行的中点天然落在页心，光看「中点近页心」会把每一段正文都判成居中
+    // （实测那份原件里 95% 的正文被误判 Center）。居中的行一定是**比版心窄**的：
+    // 真正居中的姓名、联系方式、签名行都不会撑满整行。
+    if line.width() < page_w * CENTER_MAX_W && (mid - page_w / 2.0).abs() < page_w * CENTER_TOL {
         return Align::Center;
     }
     // 只有整行都落在右半页、且右边缘贴边，才算右对齐
@@ -1083,7 +1090,7 @@ fn parse_cmap(data: &[u8]) -> (HashMap<u32, String>, usize) {
         }
     }
 
-    if let Some(block) = section(&text, "beginbfchar", "endbfchar") {
+    for block in sections(&text, "beginbfchar", "endbfchar") {
         for line in block {
             let tokens = hex_tokens(line);
             if tokens.len() >= 2 {
@@ -1092,7 +1099,7 @@ fn parse_cmap(data: &[u8]) -> (HashMap<u32, String>, usize) {
         }
     }
 
-    if let Some(block) = section(&text, "beginbfrange", "endbfrange") {
+    for block in sections(&text, "beginbfrange", "endbfrange") {
         for line in block {
             let tokens = hex_tokens(line);
             if tokens.len() < 2 {
@@ -1123,11 +1130,29 @@ fn parse_cmap(data: &[u8]) -> (HashMap<u32, String>, usize) {
     (map, code_bytes)
 }
 
-/// 取出 `begin…end` 之间的行
+/// 取出 `begin…end` 之间的行（只第一块；用于 codespacerange 这种全局唯一的段）
 fn section<'a>(text: &'a str, begin: &str, end: &str) -> Option<Vec<&'a str>> {
     let start = text.find(begin)? + begin.len();
     let stop = text[start..].find(end)? + start;
     Some(text[start..stop].lines().collect())
+}
+
+/// 取出**所有** `begin…end` 块。
+///
+/// 为什么需要它：ToUnicode 规范规定一个 `beginbfchar…endbfchar` 块最多 100 条，
+/// 一份中文简历的 CMap 因此会切成几十块。只取第一块会丢掉八成字形 —— 实测那份
+/// 原件里 `FT14` 恰好停在 100 条，整份映射率只有 32%，被门槛判成「读不了」。
+fn sections<'a>(text: &'a str, begin: &str, end: &str) -> Vec<Vec<&'a str>> {
+    let mut blocks = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(found) = text[cursor..].find(begin) {
+        let start = cursor + found + begin.len();
+        let Some(stop_rel) = text[start..].find(end) else { break };
+        let stop = start + stop_rel;
+        blocks.push(text[start..stop].lines().collect());
+        cursor = stop + end.len();
+    }
+    blocks
 }
 
 /// 一行里第 `index` 个 `<...>` 的字节
@@ -1678,5 +1703,49 @@ BT /F1 10 Tf 1 0 0 1 50 586 Tm (MySQL / Redis / Kafka) Tj ET\n";
         let outline = parse(&bytes).expect("有文字");
         let text = &outline.blocks[0].text;
         assert!(text.contains("Rust") && text.contains("TypeScript"), "{text:?}");
+    }
+
+    /* ---------- 8. 三条真机回归（都由用户那份 WPS 简历暴露出来） ---------- */
+
+    /// ToUnicode 规范限制每块最多 100 条，一份中文简历的 CMap 会有几十块。
+    /// 只取第一块时实测映射率只有 32%，整份被判成「读不了」。
+    #[test]
+    fn every_bfchar_block_is_read_not_just_the_first() {
+        let cmap = b"/CIDInit /ProcSet findresource begin\n\
+1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n\
+2 beginbfchar\n<0003> <0020>\n<186A> <8C2D>\nendbfchar\n\
+2 beginbfchar\n<186B> <5B57>\n<186C> <7B26>\nendbfchar\n";
+        let (map, _) = parse_cmap(cmap);
+        assert_eq!(map.get(&0x186A).map(String::as_str), Some("谭"), "第一块");
+        assert_eq!(map.get(&0x186B).map(String::as_str), Some("字"), "第二块也要读");
+        assert_eq!(map.get(&0x186C).map(String::as_str), Some("符"), "第二块也要读");
+    }
+
+    /// 满宽行的中点天然落在页心。只看「中点近页心」会把每一段正文都判成居中，
+    /// 实测那份原件里 95% 的正文被误判 Center。
+    #[test]
+    fn a_full_width_line_is_not_centred() {
+        // 一行从左边距顶到右边距：宽 500 / 页宽 595，中点正好是页心
+        let full = "正文".repeat(23); // 46 字 × 11pt ≈ 506pt，接近版心宽
+        let line = &group_lines(&[run(1, 40.0, 300.0, 11.0, &full)])[0];
+        assert!(line.width() > W * 0.7, "这行必须是满宽的：{}", line.width());
+        assert_eq!(align_of(line, W), Align::Left);
+    }
+
+    /// 条目的续行必须并回它自己。否则一句要点被劈成两块，排版 agent 会当成两条。
+    #[test]
+    fn a_bullets_continuation_merges_into_the_same_block() {
+        // 注意 y 是自上而下的（interpret 里按页高翻转过了）：下一行的 y 更大
+        let lines = group_lines(&[
+            run(1, 40.0, 300.0, 11.0, "· 产品研发与设计：针对旗下素质教育品牌开展赛制优化"),
+            run(1, 40.0, 315.0, 11.0, "与建模参数升级，并调整模型参数增强真实性。"),
+        ]);
+        assert!(mergeable(&lines[0], &lines[1], W), "续行应当可并");
+        let groups = group_paragraphs(&lines, W);
+        assert_eq!(groups.len(), 1, "一条要点只该产生一块：{groups:?}");
+        let blocks = build_blocks(&groups, &lines, W, 11.0);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(blocks[0].kind, BlockKind::ListItem), "{:?}", blocks[0].kind);
+        assert!(blocks[0].text.contains("真实性"), "续行的字要并进来：{}", blocks[0].text);
     }
 }
