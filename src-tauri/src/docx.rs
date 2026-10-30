@@ -556,6 +556,9 @@ const TABLE_RULE_HEX: &str = "E2E2DC";
 /// `.doc .sec.grid-2` 本来就没有框，分栏靠留白，Word 里加框等于凭空多一张表。
 ///
 /// `table` 角色只画横线：屏幕的表格只有每格下边框，没有竖线也没有外框。
+/// 屏幕上的多栏间距（paper.css 的 column-gap: 18px）。Word 表格靠单元格内边距还原它。
+const COLUMN_GAP_PX: f64 = 18.0;
+
 fn tbl_borders(ruled: bool) -> String {
     fn none(side: &str) -> String {
         format!("<w:{side} w:val=\"none\" w:sz=\"0\" w:space=\"0\" w:color=\"auto\"/>")
@@ -603,9 +606,11 @@ fn table_xml(rows: &[Vec<String>], cols: usize, opts: &DocxOptions, ruled: bool)
     }
     format!(
         "<w:tbl><w:tblPr><w:tblW w:w=\"{width}\" w:type=\"dxa\"/><w:tblLayout w:type=\"fixed\"/>\
-         {borders}<w:tblCellMar><w:left w:w=\"0\" w:type=\"dxa\"/><w:right w:w=\"0\" w:type=\"dxa\"/>\
-         </w:tblCellMar></w:tblPr><w:tblGrid>{grid}</w:tblGrid>{body}</w:tbl>",
-        borders = tbl_borders(ruled)
+         {borders}<w:tblCellMar><w:left w:w=\"{gap}\" w:type=\"dxa\"/><w:right w:w=\"{gap}\" w:type=\"dxa\"/></w:tblCellMar></w:tblPr><w:tblGrid>{grid}</w:tblGrid>{body}</w:tbl>",
+        borders = tbl_borders(ruled),
+        // 屏幕上的栏间距是 column-gap: 18px，Word 里只能靠单元格左右内边距凑：
+        // 相邻两格各留一半，两块文字之间正好 18px（首尾各内缩 9px，那段留白比顶格好看）
+        gap = px_to_twips(COLUMN_GAP_PX / 2.0)
     )
 }
 
