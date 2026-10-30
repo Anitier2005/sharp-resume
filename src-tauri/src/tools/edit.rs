@@ -13,15 +13,28 @@
 //! 条目、整份经历库）。理由很实际：一轮对话改的通常只有两三个容器，而整份工作区
 //! 可能有几十页。没被改到的容器在 flush 时根本不出现在 ops 里，前端也就不会重渲染。
 //!
+//! ## 工作副本（`live`）
+//!
+//! 只排队、不更新快照会出两个真机上发生过的错：
+//!   1. 模型写完回头读，读到的还是旧快照 —— 它以为没写进去，再写一遍，写出重复字段；
+//!   2. 同轮第二次写同一个容器时，算新数组的底本里不含第一次的改动。
+//!
+//! `EditState.live` 就是那个「底本」：本轮开始时的快照 + 本轮已经暂存的写入按序应用
+//! 之后的样子。工具读它（`ToolCtx::view`），不再是那份静态快照。
+//!
+//! 镜像做在**仅有的两个入队口**（`mark`、`mark_op`）上，不在各个工具里 ——
+//! 工具不需要也不应该记得去同步它，漏一个就会重演上面那个 bug。镜像遇到不认识的
+//! op 只跳过（读结果略旧），绝不 panic：一个没覆盖的类型不该让整轮报废。
+//!
 //! ## 暂存区存在哪
 //!
 //! 按契约，`EditState` 属于 `Outbox`：`Outbox { actions, assets, edits: Mutex<EditState> }`。
 //! 工具只通过 `ToolCtx.out` 拿到出站口，所以「同一轮的所有工具改同一份暂存区」
 //! 这件事天然由 `out.edits` 保证，不需要任何全局变量。
 //!
-//! 生命周期：`turn::run` 开头 `begin(ctx.out)` 清空，`drain_actions` 末尾
-//! `flush_all(ctx.out)` 结算。中途取消 / 报错时不清也安全 —— 下一轮的 `begin`
-//! 会把半成品扔掉。
+//! 生命周期：`turn::run` 开头 `begin(ctx.out, ctx.workspace)` 重建工作副本，
+//! `drain_actions` 末尾 `flush_all(ctx.out)` 结算。中途取消 / 报错时不清也安全 ——
+//! 下一轮的 `begin` 会把半成品扔掉。
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -311,15 +324,20 @@ pub struct EditState {
     new_resumes: HashSet<String>,
     /// 本轮已经删掉的 id：再改它就是模型在自说自话，直接报错比静默丢弃好
     removed: HashSet<String>,
+    /// 本轮工作副本：`begin` 时的快照 + 本轮已暂存写入按序应用后的样子。
+    ///
+    /// 谁读它：`ToolCtx::view`，也就是所有读工具看到的底本。
+    /// 谁写它：`mark` / `mark_op`（仅有的两个入队口），工具本身不碰。
+    /// `None` 表示没 `begin` 过（测试、离线），读工具回落到上送的快照。
+    live: Option<Value>,
 }
 
 impl EditState {
     /// 轮末把改动结算成一条 `mutate` 信封；没有改动返回 None。
     /// 本轮已暂存、尚未落库的改动条数。
     ///
-    /// 存在的理由：`read_page` / `read_person` 读的是**轮次开始时的快照**（同一轮里
-    /// 多次改同一容器必须在暂存区合并，否则后一次会冲掉前一次）。模型写完立刻回头读，
-    /// 读到的是旧状态 —— 不说清楚，它会以为写入失败了，然后重复写一遍。
+    /// 存在的理由：暂存区里的改动要到轮末才落库，读工具读的是工作副本而不是落库后的
+    /// 状态。不说清「还没落库」，模型会以为写入失败了，然后重复写一遍。
     pub fn pending_count(&self) -> usize {
         self.order.len()
     }
@@ -339,7 +357,9 @@ impl EditState {
                 ops.push(op);
             }
         }
-        // 结算完就清空：下一轮从干净状态开始，也避免快照的旧值被带过去
+        // 结算完就清空：下一轮从干净状态开始，也避免快照的旧值被带过去。
+        // `live` 不动 —— 结算不等于这一轮结束，后面可能还有工具调用，
+        // 读工具仍要看到刚写的字（下一轮 `begin` 会整份重建）。
         self.slots.clear();
         self.new_sections.clear();
         self.new_resumes.clear();
@@ -355,14 +375,23 @@ impl EditState {
         if key.is_empty() {
             return;
         }
+        // 先按**当前**副本算一次 op 并镜像进工作副本，再入队。
+        // 入队按容器去重（同一容器只发一条最终状态），但工作副本要的是最新值 ——
+        // 所以镜像每次都做，不看是不是首次入队。
+        let op = self.op_of(&dirty);
         // 同一容器只发一条（发最终状态），位置保留第一次触碰时的顺序 ——
         // 顺序即语义：先 addSection 再往这个分区里加条目
         if self.seen.insert(key) {
             self.order.push(dirty);
         }
+        if let Some(op) = op {
+            apply_to_live(&mut self.live, &op);
+        }
     }
 
     fn mark_op(&mut self, op: Value) {
+        // 先镜像：读工具下一轮读到的工作副本里就该有它
+        apply_to_live(&mut self.live, &op);
         self.seq += 1;
         // Op 没有容器可以合并，用序号造一个唯一键，保证不会被去重
         self.seen.insert(format!("op:{}", self.seq));
@@ -456,16 +485,275 @@ fn section_items_op(section: &Section, items: Vec<Value>) -> Value {
     })
 }
 
+/* ---------- 工作副本的镜像 ---------- */
+
+/// 按 id 取人员节点。整条链上任何一环缺失都只是 `None`：
+/// 工作副本是「读得更准」的优化，取不到就保持原样，绝不能变成一次失败。
+fn person_in<'a>(workspace: &'a mut Value, person_id: &str) -> Option<&'a mut Value> {
+    workspace
+        .get_mut("people")?
+        .as_array_mut()?
+        .iter_mut()
+        .find(|person| person["id"].as_str() == Some(person_id))
+}
+
+fn child_in<'a>(parent: &'a mut Value, key: &str, id: &str) -> Option<&'a mut Value> {
+    parent
+        .get_mut(key)?
+        .as_array_mut()?
+        .iter_mut()
+        .find(|node| node["id"].as_str() == Some(id))
+}
+
+fn page_in<'a>(
+    workspace: &'a mut Value,
+    person: &str,
+    resume: &str,
+    page: &str,
+) -> Option<&'a mut Value> {
+    child_in(child_in(person_in(workspace, person)?, "resumes", resume)?, "pages", page)
+}
+
+/// 人 → 简历 → 页 → 块
+fn block_in<'a>(
+    workspace: &'a mut Value,
+    person: &str,
+    resume: &str,
+    page: &str,
+    block: &str,
+) -> Option<&'a mut Value> {
+    child_in(page_in(workspace, person, resume, page)?, "blocks", block)
+}
+
+/// 写入一条载荷；载荷缺失（op 里没这个键）就什么都不做
+fn assign(node: &mut Value, key: &str, value: Option<&Value>) {
+    if let Some(value) = value {
+        node[key] = value.clone();
+    }
+}
+
+/// 从数组里摘掉同 id 的一项（删分区 / 删页 / 删简历共用）
+fn drop_from(node: &mut Value, key: &str, id: &str) {
+    if let Some(items) = node.get_mut(key).and_then(Value::as_array_mut) {
+        items.retain(|item| item["id"].as_str() != Some(id));
+    }
+}
+
+/// 把一条已经产出的 op 镜像进工作副本。
+///
+/// 这里是全仓唯一需要「懂」每种 op 的地方，所以每种都显式 match：
+/// 漏一种不会崩、只是读结果略旧，比「猜错了语义」安全得多。
+fn apply_to_live(live: &mut Option<Value>, op: &Value) {
+    let Some(workspace) = live.as_mut() else {
+        return;
+    };
+    let kind = op.get("type").and_then(Value::as_str).unwrap_or("");
+    let get = |key: &str| op.get(key).and_then(Value::as_str).unwrap_or("");
+
+    match kind {
+        // 整组替换字段：候选人 / 字段块 / 页头
+        "personFields" => {
+            if let Some(person) = person_in(workspace, get("personId")) {
+                assign(person, "fields", op.get("fields"));
+            }
+        }
+        "blockFields" => {
+            if let Some(block) =
+                block_in(workspace, get("personId"), get("resumeId"), get("pageId"), get("blockId"))
+            {
+                assign(block, "fields", op.get("fields"));
+            }
+        }
+        // 页头 = 这一页第一个字段块（和前端 `withHeader` 同一条规则）。
+        // 块还不存在时前端会自己插一个、id 由它生成 —— 我们猜不出那个 id，
+        // 所以不插假块（插了之后同轮的 blockFields 会打在一个前端不认识的 id 上）。
+        // 这一种情况下工作副本保持原样，读工具读不到刚写的页头字段。
+        "pageHeader" => {
+            if let Some(page) = page_in(workspace, get("personId"), get("resumeId"), get("pageId")) {
+                if let Some(block) = page
+                    .get_mut("blocks")
+                    .and_then(Value::as_array_mut)
+                    .and_then(|blocks| {
+                        blocks.iter_mut().find(|block| block["kind"].as_str() == Some("fields"))
+                    })
+                {
+                    assign(block, "fields", op.get("header"));
+                }
+            }
+        }
+        // 整份经历库替换
+        "libraryItems" => {
+            if let Some(person) = person_in(workspace, get("personId")) {
+                assign(person, "items", op.get("items"));
+            }
+        }
+        // 分区条目：整组替换
+        "sectionItems" => {
+            if let Some(block) =
+                block_in(workspace, get("personId"), get("resumeId"), get("pageId"), get("sectionId"))
+            {
+                assign(block, "items", op.get("items"));
+            }
+        }
+        // 单个条目的字段与措辞（前端把 patch 直接铺在条目上）
+        "entryPatch" => {
+            let Some(page) = page_in(workspace, get("personId"), get("resumeId"), get("pageId"))
+            else {
+                return;
+            };
+            let entry = page
+                .get_mut("blocks")
+                .and_then(Value::as_array_mut)
+                .and_then(|blocks| {
+                    blocks.iter_mut().find_map(|block| {
+                        block
+                            .get_mut("items")?
+                            .as_array_mut()?
+                            .iter_mut()
+                            .find(|item| item["id"].as_str() == Some(get("entryId")))
+                    })
+                });
+            if let Some(entry) = entry {
+                if let Some(patch) = op.get("patch") {
+                    assign(entry, "fields", patch.get("fields"));
+                    assign(entry, "bullets", patch.get("bullets"));
+                }
+            }
+        }
+        "addSection" => {
+            // 没有 id 的 addSection 落不了地（前端会自己生成一个），编不出对应的块
+            if get("id").is_empty() {
+                return;
+            }
+            let Some(page) = page_in(workspace, get("personId"), get("resumeId"), get("pageId"))
+            else {
+                return;
+            };
+            let Some(blocks) = page.get_mut("blocks").and_then(Value::as_array_mut) else {
+                return;
+            };
+            let block = json!({
+                "id": get("id"),
+                "kind": "section",
+                "title": op.get("title").cloned().unwrap_or_else(|| json!("")),
+                "items": [],
+            });
+            let at = op
+                .get("afterBlockId")
+                .and_then(Value::as_str)
+                .and_then(|after| blocks.iter().position(|block| block["id"].as_str() == Some(after)));
+            match at {
+                Some(index) => blocks.insert(index + 1, block),
+                None => blocks.push(block),
+            }
+        }
+        "sectionTitle" => {
+            if let Some(block) =
+                block_in(workspace, get("personId"), get("resumeId"), get("pageId"), get("sectionId"))
+            {
+                assign(block, "title", op.get("title"));
+            }
+        }
+        "removeSection" => {
+            if let Some(page) = page_in(workspace, get("personId"), get("resumeId"), get("pageId")) {
+                drop_from(page, "blocks", get("sectionId"));
+            }
+        }
+        // 清掉 role = op 里没有 role 这个键（前端也这么认）
+        "blockRole" => {
+            if let Some(block) =
+                block_in(workspace, get("personId"), get("resumeId"), get("pageId"), get("blockId"))
+            {
+                match op.get("role").and_then(Value::as_str) {
+                    Some(role) => block["role"] = json!(role),
+                    None => {
+                        if let Some(object) = block.as_object_mut() {
+                            object.remove("role");
+                        }
+                    }
+                }
+            }
+        }
+        "addPage" => {
+            if let Some(person) = person_in(workspace, get("personId")) {
+                if let Some(resume) = child_in(person, "resumes", get("resumeId")) {
+                    if let Some(pages) = resume.get_mut("pages").and_then(Value::as_array_mut) {
+                        pages.push(json!({
+                            "id": get("id"),
+                            "kind": "native",
+                            "label": op.get("label").cloned().unwrap_or_else(|| json!("")),
+                            "blocks": [],
+                        }));
+                    }
+                }
+            }
+        }
+        "removePage" => {
+            if let Some(person) = person_in(workspace, get("personId")) {
+                if let Some(resume) = child_in(person, "resumes", get("resumeId")) {
+                    drop_from(resume, "pages", get("pageId"));
+                }
+            }
+        }
+        "pageLabel" => {
+            if let Some(page) = page_in(workspace, get("personId"), get("resumeId"), get("pageId")) {
+                assign(page, "label", op.get("label"));
+            }
+        }
+        "createResume" => {
+            if let Some(person) = person_in(workspace, get("personId")) {
+                if let Some(resumes) = person.get_mut("resumes").and_then(Value::as_array_mut) {
+                    resumes.push(json!({
+                        "id": get("resumeId"),
+                        "personId": get("personId"),
+                        "title": op.get("title").cloned().unwrap_or_else(|| json!("")),
+                        "pages": [],
+                    }));
+                }
+            }
+        }
+        "renameResume" => {
+            if let Some(person) = person_in(workspace, get("personId")) {
+                if let Some(resume) = child_in(person, "resumes", get("resumeId")) {
+                    assign(resume, "title", op.get("title"));
+                }
+            }
+        }
+        "deleteResume" => {
+            if let Some(person) = person_in(workspace, get("personId")) {
+                drop_from(person, "resumes", get("resumeId"));
+            }
+        }
+        // 目标页数只影响下一轮的【页面事实】，读工具的字里看不到它
+        "resumeTargetPages" => {}
+        // 没覆盖到的类型：读结果略旧，但整轮照常跑
+        other => eprintln!("[edit] 工作副本没有镜像这种 op：{other}"),
+    }
+}
+
 /* ---------- 暂存区的挂载点 ---------- */
 
-/// 每轮开始前调用一次：清掉上一轮可能残留的暂存区。
+/// 每轮开始前调用一次：清掉上一轮可能残留的暂存区，并按本轮快照重建工作副本。
 ///
 /// 为什么需要它：取消、报错、网关 400 都可能让一轮在半路结束，
 /// 那时 `flush_all` 没被调用，暂存区里的半成品会活到下一轮 ——
 /// 下一轮用户问的是别的事，却会收到上一轮没提交的改动。
-pub fn begin(out: &Outbox) {
+///
+/// `workspace` 是前端这一轮上送的快照：工作副本从它出发，之后由 `mark` / `mark_op`
+/// 把本轮每条写入按序叠上去。
+pub fn begin(out: &Outbox, workspace: &Value) {
     let mut state = out.edits.lock().unwrap_or_else(|error| error.into_inner());
-    *state = EditState::default();
+    *state = EditState {
+        live: Some(workspace.clone()),
+        ..EditState::default()
+    };
+}
+
+/// 本轮工作副本（拿锁、克隆出来再返回，不把锁交给调用方）。
+///
+/// `None` = 没 `begin` 过（测试、离线），调用方回落到上送的快照。
+pub fn live(out: &Outbox) -> Option<Value> {
+    with_state(out, |state| state.live.clone())
 }
 
 /// 轮末结算：把本轮所有内容改动并成一条 `mutate` 信封。
@@ -2891,7 +3179,105 @@ mod tests {
     fn begin_discards_leftovers() {
         let h = Harness::new();
         h.run("set_field", json!({ "fieldId": "f1", "value": "李四" })).unwrap();
-        begin(&h.out);
+        begin(&h.out, &h.ws);
         assert!(h.flush().is_none());
+    }
+
+    /// 同一轮里写完立刻读，必须读得到刚写的字。
+    ///
+    /// 这就是真机上「照片一直没显示」的根因：读工具读的是静态快照，模型看不见
+    /// 自己刚写的字段，以为失败了，再写一遍 —— 用户看到的是重复字段。
+    #[test]
+    fn add_field_then_read_page_sees_it() {
+        let h = Harness::new();
+        begin(&h.out, &h.ws);
+        h.run(
+            "add_field",
+            json!({ "ownerId": "b1", "label": "照片", "value": "蓝底一寸" }),
+        )
+        .unwrap();
+
+        // 走真实分发：工作副本是在 `tools::call` 里装进 ctx 的
+        let text = crate::tools::call(
+            "read_page",
+            &json!({ "pageId": "pg1" }),
+            &h.ctx(),
+            crate::tools::Scope::Session,
+        )
+        .unwrap();
+        assert!(text.contains("照片"), "读不到刚加的字段：{text}");
+        assert!(text.contains("蓝底一寸"), "读不到刚写的值：{text}");
+
+        // 结算不等于这一轮结束：flush 之后工作副本要留着，后面可能还有工具调用
+        assert!(h.flush().is_some());
+        assert!(live(&h.out).is_some(), "flush 不该把工作副本清掉");
+    }
+
+    /// 对同一块的两个不同字段连续写：轮末信封里该块必须同时含两次改动。
+    #[test]
+    fn two_writes_to_the_same_block_do_not_clobber() {
+        let mut h = Harness::new();
+        // 这一块原快照里只有一个字段，补一个才能测「两个不同字段」
+        h.ws["people"][0]["resumes"][0]["pages"][0]["blocks"][0]["fields"]
+            .as_array_mut()
+            .expect("b1 的字段数组")
+            .push(json!({ "id": "f9", "label": "电话", "value": "" }));
+        begin(&h.out, &h.ws);
+
+        h.run("set_field", json!({ "fieldId": "f3", "value": "北京" })).unwrap();
+        h.run("set_field", json!({ "fieldId": "f9", "value": "13800000000" })).unwrap();
+
+        let ops = h.ops();
+        let op = ops
+            .iter()
+            .find(|op| op["type"] == json!("blockFields") && op["blockId"] == json!("b1"))
+            .unwrap_or_else(|| panic!("没有 b1 的 blockFields：{ops:?}"));
+        assert_eq!(
+            op["fields"],
+            json!([
+                { "id": "f3", "label": "城市", "value": "北京" },
+                { "id": "f9", "label": "电话", "value": "13800000000" },
+            ]),
+            "两次写入必须都留下：{op}"
+        );
+    }
+
+    /// 没覆盖的 op 类型只该让读结果旧一点，不能让整轮废掉。
+    #[test]
+    fn an_unknown_op_does_not_panic() {
+        let before = json!({ "people": [{ "id": "p1", "fields": [] }] });
+        let mut live = Some(before.clone());
+        apply_to_live(&mut live, &json!({ "type": "没有这个类型" }));
+        assert_eq!(live, Some(before), "未知 op 不许改动工作副本");
+    }
+
+    /// 一批工具结算过一次之后（`turn` 中途就这么做），这一轮还没结束：
+    /// 后面的写入必须基于含前一批改动的底本，不能再按原始快照重算。
+    #[test]
+    fn a_write_after_a_flush_still_sees_the_earlier_one() {
+        let h = Harness::new();
+        let scope = crate::tools::Scope::Session;
+        begin(&h.out, &h.ws);
+
+        crate::tools::call(
+            "add_field",
+            &json!({ "ownerId": "b1", "label": "照片", "value": "蓝底" }),
+            &h.ctx(),
+            scope,
+        )
+        .unwrap();
+        let first = h.flush().expect("第一批改动要结算");
+        assert_eq!(first["ops"][0]["fields"].as_array().unwrap().len(), 2);
+
+        crate::tools::call(
+            "add_field",
+            &json!({ "ownerId": "b1", "label": "到岗时间", "value": "随时" }),
+            &h.ctx(),
+            scope,
+        )
+        .unwrap();
+        let second = h.flush().expect("第二批改动要结算");
+        let fields = second["ops"][0]["fields"].as_array().unwrap();
+        assert_eq!(fields.len(), 3, "结算之后不许把已有字段丢掉：{fields:?}");
     }
 }

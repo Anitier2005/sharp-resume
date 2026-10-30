@@ -238,7 +238,7 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
     let specs = crate::tools::specs(scope);
     // 内容暂存区按轮计：先清一次，免得上一轮残留（取消 / 报错提前退出时没结算）
     // 悄悄漏进这一轮
-    crate::tools::edit::begin(ctx.out);
+    crate::tools::edit::begin(ctx.out, ctx.workspace);
     let mut messages = messages;
     let mut speech = String::new();
     let mut used: Vec<String> = Vec::new();

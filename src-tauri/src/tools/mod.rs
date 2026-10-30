@@ -4,8 +4,10 @@
 //! 会话 agent 和（后面的）页面排版 agent 共用这一层，区别只在「允许调用哪些名字」，
 //! 而不是各写一套。页面控制类工具将来也挂在这张表里，不另开旁路。
 //!
-//! 数据从哪来：前端每轮把工作区快照推上来，工具只读这份镜像。
-//! 写操作（P2）不直接改镜像，而是产出补丁指令回传给前端执行 —— 判断在 Rust，
+//! 数据从哪来：前端每轮把工作区快照推上来。读工具读的**不是**那份静态快照，
+//! 而是本轮工作副本（`ToolCtx::view`：快照 + 本轮已经暂存的写入）—— 否则模型写完
+//! 立刻回头读，读不到自己刚写的字，就会再写一遍。
+//! 写操作（P2）不直接改前端状态，而是产出补丁指令回传给前端执行 —— 判断在 Rust，
 //! 应用在前端，页面层不参与任何决策。
 
 pub mod ask;
@@ -43,9 +45,11 @@ pub struct Outbox {
     pub assets: Mutex<Vec<Asset>>,
     /// 本轮内容写入的暂存区。工具改它，轮末由 `agent::turn` flush 成一条 mutate 信封。
     ///
-    /// 为什么不直接往 `actions` 里塞内容指令：同一轮里模型常连着改同一个容器
-    /// （先改标题、再加一条），每次都基于同一份 `workspace` 快照算新数组，
-    /// 后一次会把前一次冲掉。攒在一处、轮末一次结算，才能保证顺序即语义。
+    /// 为什么需要暂存区而不是直接往 `actions` 里塞内容指令：同一个容器一轮里可能被改
+    /// 十次，每次都要基于「含前几次改动」的底本算新数组，否则后一次会冲掉前一次。
+    /// 这份底本就是 `EditState` 里的工作副本 —— 暂存的每一条写入入队时会**同步镜像**
+    /// 进去，所以读工具看得到刚写的字，同轮多次写同一容器也不会互相覆盖。
+    /// 轮末的信封格式没变：还是一条 `mutate`、一串同样的 op，前端 reducer 照旧应用。
     pub edits: Mutex<crate::tools::edit::EditState>,
     /// 本轮已经贴了几条纸面批注。
     ///
@@ -99,6 +103,33 @@ impl<'a> ToolCtx<'a> {
             out,
             root: None,
             facts: None,
+        }
+    }
+
+    /// 本轮工作副本：本轮开始时的快照，叠上本轮已经暂存的每一条写入。
+    ///
+    /// 为什么读工具要读它而不是 `workspace`：`workspace` 是前端上送的静态快照，
+    /// 一轮之内永不更新。模型 `add_field` 加一个字段、紧接着 `read_page`，
+    /// 读到的还是旧快照 —— 它以为没写进去，再写一遍，用户就看到重复字段。
+    ///
+    /// 没 `begin` 过（测试、离线）时回落到快照，行为与旧版一致。
+    pub fn view(&self) -> Value {
+        crate::tools::edit::live(self.out).unwrap_or_else(|| self.workspace.clone())
+    }
+
+    /// 换一份只读底本，其余（定位 / 出站口 / 环境）照旧。
+    ///
+    /// 分发层用它把 `view()` 的结果装回 ctx，这样工具内部照常写 `ctx.workspace`，
+    /// 读到的已经是工作副本 —— 不必在几十个工具入口各写一遍（漏一个就又是旧 bug）。
+    pub fn on<'b>(&'b self, workspace: &'b Value) -> ToolCtx<'b> {
+        ToolCtx {
+            workspace,
+            person_id: self.person_id,
+            resume_id: self.resume_id,
+            page_id: self.page_id,
+            out: self.out,
+            root: self.root,
+            facts: self.facts,
         }
     }
 }
@@ -745,6 +776,13 @@ pub fn call(name: &str, args: &Value, ctx: &ToolCtx, scope: Scope) -> Result<Str
     if scope == Scope::Layout && name == "ask_session" {
         return Err(LAYOUT_HAS_NO_ASK.into());
     }
+
+    // 所有工具都从这里进出，所以「读工作副本」只在这一处做：
+    // 工具内部照常读 `ctx.workspace`，拿到的已经是视图，谁也漏不了。
+    // 必须在分发**之前**取（`view()` 会锁 `out.edits`，工具里 `with_state` 也会锁，
+    // 同一线程重入会死锁）。
+    let view = ctx.view();
+    let ctx = &ctx.on(&view);
 
     match TOOLS.iter().find(|tool| tool.name == name && visible(tool, scope)) {
         Some(tool) => (tool.run)(args, ctx),
