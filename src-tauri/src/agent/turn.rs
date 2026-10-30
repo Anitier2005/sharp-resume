@@ -192,7 +192,9 @@ fn describe(name: &str, args: &Value) -> String {
         },
         "extract_images" => "在原件里找内嵌图片".to_string(),
         "read_source" => "读原件正文".to_string(),
-        "render_doc_page" => "渲染原件页图".to_string(),
+        "list_sources" => "列出这个人的原件".to_string(),
+        // 宽松命名：同一个工具既能渲染 PDF 页，也能把图片附件直接给视觉看
+        "render_doc_page" => "打开原件看一眼".to_string(),
         "set_target_pages" => match args["pages"].as_u64() {
             Some(pages) => format!("把目标定成 {pages} 页"),
             _ => "清掉目标页数".to_string(),
