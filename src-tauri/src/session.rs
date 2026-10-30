@@ -426,10 +426,10 @@ pub struct SendResult {
     /// 本轮原件的页数。前端存进内存，随下一次 `layout_submit` 传回来 ——
     /// 排版侧要靠它决定「沿用原件页数」；刷新即失效，不落库
     pub origin: Option<crate::agent::facts::Origin>,
-    /// 本轮原件的**样张**（第 1 页页图，已在材料池里）。前端并进 `resume.originSheet`：
-    /// 它挂在简历上而不是页上，排版 agent 每轮都能重新 `view` 一次对照版式。
+    /// 本轮原件的**指针**（stored / name / pages）。前端并进 `resume.originDoc`：
+    /// 不再预渲染页图 —— 要对照版式就看【原件结构】，要看某一页就调 `render_doc_page`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin_sheet: Option<crate::model::Asset>,
+    pub origin_doc: Option<crate::model::OriginDoc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -539,15 +539,15 @@ pub async fn chat_send(
             section: String::new(),
             images: Vec::new(),
             origin: None,
-            origin_sheet: None,
+            origin_doc: None,
         },
     };
     let attach_section = attached.section;
     let attach_images = attached.images;
     // 原件页数：随 SendResult 回传前端，下次排版提交时再带回来（不落库）
     let origin = attached.origin;
-    // 原件样张：前端并进 resume.originSheet 落库，排版轮靠它对照版式
-    let origin_sheet = attached.origin_sheet;
+    // 原件指针：前端并进 resume.originDoc 落库，之后 read_source / render_doc_page 都靠它
+    let origin_doc = attached.origin_doc;
     let mut materials = args.context.clone();
     if !attach_section.is_empty() {
         materials.push_str("\n\n");
@@ -717,7 +717,7 @@ pub async fn chat_send(
                 actions: turn.actions,
                 assets: turn.assets,
                 origin,
-                origin_sheet,
+                origin_doc,
             })
         }
         Ok(_) | Err(_) if flag.load(Ordering::SeqCst) => Err("已中断".into()),
@@ -836,13 +836,13 @@ mod tests {
                 name: "简历.pdf".into(),
                 pages: Some(3),
             }),
-            origin_sheet: None,
+            origin_doc: None,
         };
         let value = serde_json::to_value(&result).expect("SendResult 要能序列化");
         assert_eq!(value["origin"]["name"], "简历.pdf");
         assert_eq!(value["origin"]["pages"], 3);
-        // 没有样张时不出这个键：前端 `if (sent.originSheet)` 才好判
-        assert!(value.get("originSheet").is_none(), "{value}");
+        // 没有原件指针时不出这个键：前端 `if (sent.originDoc)` 才好判
+        assert!(value.get("originDoc").is_none(), "{value}");
     }
 
     #[test]

@@ -67,12 +67,11 @@ pub struct Materials {
     pub images: Vec<String>,
     /// 本轮第一个 PDF 附件。`pages: None` = 读不出（损坏 / 不是 PDF）
     pub origin: Option<crate::agent::facts::Origin>,
-    /// 原件样张：原件第 1 页的页图，已登记进材料池。
+    /// 原件文档指针：只记 stored / name / pages，**不再预渲染页图**。
     ///
-    /// 它是给**排版 agent** 的参考物，不是这一页的内容：不进 `blocks`，
-    /// 也不进材料段（会话 agent 已经有原件正文，再给它一张整页截图，
-    /// 它只会当成「用户材料里的一张图」）。
-    pub origin_sheet: Option<crate::model::Asset>,
+    /// 之前这里是一张页图（`Asset`），只覆盖第 1 页、又被压到看不清，还占着材料池；
+    /// 现在模型要看哪一页，自己调 `render_doc_page(stored, page)`。
+    pub origin_doc: Option<crate::model::OriginDoc>,
 }
 
 /// 解析结果缓存。
@@ -124,13 +123,13 @@ fn sniff_ext(data: &[u8]) -> Option<&'static str> {
 /// 单个附件进上下文的字数上限：200KB 字符足够一份简历，
 /// 再长的东西该让模型用工具分段读，而不是一次塞进 prompt
 const MAX_CHARS: usize = 200 * 1024;
-/// 一次请求最多几张图（含 PDF 页面与内嵌图）：再多 token 和请求体都撑不住
+/// 一次请求最多几张图（含 PDF 内嵌图）：再多 token 和请求体都撑不住
 const MAX_IMAGES: usize = 4;
-/// 附件里最多渲染几页
-const MAX_PAGES: usize = 3;
-/// 一份 PDF 最多附几张内嵌图。整页渲染已经占了名额，所以真实张数是
-/// `min(MAX_INNER, 剩余名额)` —— 别指望这两个上限能同时打满
+/// 一份 PDF 最多附几张内嵌图。页图不再默认渲染，名额基本都留给内嵌图
 const MAX_INNER: usize = 3;
+/// 【原件结构】最多列几块。一份简历 30~60 块，列满会把材料段撑成一篇文章；
+/// 超出的部分留给 `read_source`（它给全文，结构自然也在里面）
+const MAX_OUTLINE_BLOCKS: usize = 40;
 /// 正文超过这么多字，Projection 就只给摘要 + 指针。800 是一页简历正文的量级：
 /// 不超过它就整段给（省一次工具调用），超了说明是长文档，值得让模型按需读
 const SUMMARY_CHARS: usize = 800;
@@ -339,7 +338,7 @@ pub async fn materials(
     let mut images: Vec<String> = Vec::new();
     // 只取本轮第一个 PDF：原件页数是「这一轮上传了什么」这么一件事，不是清单
     let mut first_pdf: Option<(String, Option<u32>)> = None;
-    let mut origin_sheet: Option<crate::model::Asset> = None;
+    let mut origin_doc: Option<crate::model::OriginDoc> = None;
 
     for file in refs {
         let Some(stored) = non_empty(&file.stored) else {
@@ -358,7 +357,7 @@ pub async fn materials(
             }
         };
         // 与 parse 同一套判断：扩展名不可信时以字节为准，否则 附件标识 / 页数 /
-        // 页面渲染这些「只有 pdf 才有」的东西会跟着一起缺席
+        // 原件指针这些「只有 pdf 才有」的东西会跟着一起缺席
         let ext = sniff_ext(&bytes)
             .map(str::to_string)
             .unwrap_or(declared);
@@ -366,7 +365,7 @@ pub async fn materials(
         let mut is_origin = false;
         if ext == "pdf" && first_pdf.is_none() {
             first_pdf = Some((name.to_string(), parsed.pages));
-            // 样张只认这一份（第一个 PDF）：它是「原件长什么样」的唯一依据
+            // 原件指针只认这一份（第一个 PDF）：它是「原件是哪一份」的唯一依据
             is_origin = true;
         }
 
@@ -387,27 +386,19 @@ pub async fn materials(
         // 正文从此只活在库里。落库失败只打日志 —— 这一轮的材料还得照给
         persist(db, stored, name, &ext, parsed.pages, &parsed.text);
 
-        // 能看图的模型：PDF 再补上前几页，版式只能看图
-        let pages = if ext == "pdf" && vision {
-            render_pages(&bytes, MAX_PAGES)
-        } else {
-            Vec::new()
-        };
+        // 默认不渲染页图：版式事实改由【原件结构】给（见下方 docparse），
+        // 要真看某一页长什么样，模型自己调 render_doc_page —— 一次一页，按需付费。
+        // 原件也随之从「预渲染样张」改成指针：这里不落任何图，只记怎么找回这份文件。
+        if is_origin && origin_doc.is_none() {
+            origin_doc = Some(crate::model::OriginDoc {
+                stored: stored.to_string(),
+                name: name.to_string(),
+                pages: parsed.pages,
+            });
+        }
         let mut notes: Vec<String> = Vec::new();
-        if !pages.is_empty() {
-            notes.push(format!("（另附前 {} 页的图片，版式看图片）", pages.len()));
-            images.extend(pages.iter().cloned());
-        }
-        // 首轮原件的第一页页图同时登记成「样张」：排版 agent 拿不到这几张一次性附图
-        // （它们只活在这一轮的消息里），只能靠一个 assetId 自己去 `view` 重看。
-        // 只登记不交代 —— 材料段里一个字都不提，免得会话 agent 把它当页面内容
-        if is_origin && origin_sheet.is_none() {
-            if let Some(page) = pages.first() {
-                origin_sheet = register_sheet(root, name, page);
-            }
-        }
-        // 视觉模型为什么要单独给内嵌图：整页渲染是按页宽缩的，证件照在整页里
-        // 只有几十像素，模型认不出那张脸。内嵌图是原件分辨率，同一套解码矩阵现成。
+        // 视觉模型为什么要单独给内嵌图：页图已经不默认渲染，但证件照是**图**，
+        // 纸面上取不出来。内嵌图是原件分辨率，模型才认得出那张脸。
         if ext == "pdf" && vision {
             let (attached, available) = attach_inner_images(&bytes, &mut images);
             if attached > 0 {
@@ -415,7 +406,7 @@ pub async fn materials(
             } else if available == 0 {
                 notes.push("（这份 PDF 里没有可附的内嵌图）".to_string());
             } else {
-                // 有图但名额被页面渲染占满：不许说「没有」，那是假话
+                // 有图但名额被别的图占满：不许说「没有」，那是假话
                 notes.push(format!(
                     "（这份 PDF 里还有 {available} 张内嵌图，但这一轮的附图名额已满）"
                 ));
@@ -427,23 +418,43 @@ pub async fn materials(
             format!("\n{}", notes.join("\n"))
         };
 
+        // 带格式解析：能读出行内结构（层级/字号/对齐/表格骨架）就给结构大纲。
+        // 读不出（`None`）不算错误 —— 回落到纯文本，别伪造一份空结构。
+        let outline = crate::docparse::parse(&ext, &bytes);
+
+        // Projection：正文 ≤ 800 字照旧全文；超过就只给指针。
+        // 为什么不再整段拼：附件只在那一轮出现，模型没读完就结束时，几千字当场
+        // 永久消失（真机事故：2404 字的简历只剩「姓名 + 照片」）。全文已在 Fact 层，
+        // 模型按 stored 调 read_source 就能读回来。
+        let chars = parsed.text.trim().chars().count();
+        let long = chars > SUMMARY_CHARS;
         let text = if ext == "pdf" {
-            // Projection：正文 ≤ 800 字照旧全文；超过就只给摘要 + 一行指针。
-            // 为什么不再整段拼：附件只在那一轮出现，模型没读完就结束时，几千字当场
-            // 永久消失（真机事故：2404 字的简历只剩「姓名 + 照片」）。全文已在 Fact 层，
-            // 模型按 stored 调 read_source 就能读回来。
-            let chars = parsed.text.trim().chars().count();
-            if chars > SUMMARY_CHARS {
+            if long {
                 summary_text(chars, stored, &parsed.text)
             } else {
-                pdf_text(&bytes, &parsed, vision, ocr).await
+                pdf_text(&bytes, &parsed, stored, vision, ocr).await
             }
         } else {
             parsed.text.clone()
         };
+        let structure = outline
+            .as_ref()
+            .map(|outline| structure_section(outline, stored));
+        // 长正文 + 有结构：只给结构。大纲已经说清「原件长什么样」，
+        // 再叠一段摘要只是同一件事说两遍，全文交给 read_source
+        let projection = if text.trim().is_empty() {
+            String::new()
+        } else if long && structure.is_some() {
+            structure.clone().unwrap_or_default()
+        } else {
+            match &structure {
+                Some(section) => format!("{}\n\n{section}", text.trim()),
+                None => text.trim().to_string(),
+            }
+        };
 
-        // PDF 附件额外交代两件事：模型要拿 `stored` 才能调 extract_images（它看不到文件名），
-        // 页数是「原件几页」的唯一来源。扫描件（读不到内容）同样要交代 —— 有照片的正好是它
+        // PDF 附件额外交代两件事：模型要拿 `stored` 才能调 extract_images / render_doc_page
+        // （它看不到文件名），页数是「原件几页」的唯一来源。扫描件（读不到内容）同样要交代
         let marks = if ext == "pdf" {
             let pages = match parsed.pages {
                 Some(count) => format!("（原件共 {count} 页）"),
@@ -454,19 +465,18 @@ pub async fn materials(
             String::new()
         };
 
-        let body = if text.trim().is_empty() {
+        let body = if projection.is_empty() {
             if marks.is_empty() {
                 format!("（附件 {name}：读不到内容）")
             } else {
-                // 读不到正文时附图说明照样要给：扫描件正是最需要看图的那种
+                // 读不到正文时附图说明照样要给：扫描件正是最需要看页面的那种
                 format!(
                     "──── {name} ────\n{marks}（附件 {name}：读不到内容）{note}\n──── 文件结束 ────"
                 )
             }
         } else {
             format!(
-                "──── {name} ────\n{marks}{}{note}\n──── 文件结束 ────",
-                text.trim()
+                "──── {name} ────\n{marks}{projection}{note}\n──── 文件结束 ────",
             )
         };
         blocks.push(body);
@@ -486,33 +496,70 @@ pub async fn materials(
         section,
         images,
         origin,
-        origin_sheet,
+        origin_doc,
     }
 }
 
-/// 把原件第 1 页的页图登记进材料池，返回那条 `Asset`（`view` 靠它的 id 重看原图）。
+/// 结构大纲：把 `outline_json` 摊成「一行一块」。
 ///
-/// 登记失败只打日志、返回 None：样张是锦上添花，不能因为它让这一轮的材料组装失败。
-fn register_sheet(root: &Path, origin_name: &str, page_url: &str) -> Option<crate::model::Asset> {
-    let jpeg = data_url_bytes(page_url);
-    if jpeg.is_empty() {
-        return None;
-    }
-    // 去掉原件的扩展名：「简历.pdf 样张.jpg」在材料清单里读起来像两个文件
-    let stem = origin_name
-        .rsplit_once('.')
-        .map(|(head, _)| head)
-        .unwrap_or(origin_name)
-        .trim();
-    let name = format!("{stem} 样张.jpg");
-    let id = format!("a-{}", crate::session::uuid_like());
-    match crate::pool::put_at(root, &id, &name, &jpeg) {
-        Ok(asset) => Some(asset),
-        Err(error) => {
-            eprintln!("[attach] 原件样张没能登记（{name}）：{error}");
-            None
+/// 为什么不直接把 JSON 塞进材料段：模型读这个紧凑格式比读 JSON 快得多，
+/// token 也少一大半（键名、引号、缩进都省了）。逐块字段是 `k / pt / bold / align`，
+/// 与 `outline_json` 同一套口径 —— 两边说法不一致比缺字段更难查。
+fn structure_section(outline: &crate::docparse::DocOutline, stored: &str) -> String {
+    let value = outline.outline_json();
+    let pages = match value["pages"].as_u64() {
+        Some(count) => format!("共 {count} 页"),
+        None => "页数读不出".to_string(),
+    };
+    let body = match value["bodyPt"].as_f64() {
+        Some(pt) => format!("正文基准 {pt}pt"),
+        None => "正文基准读不出".to_string(),
+    };
+    let margin = match value["marginPt"].as_array() {
+        Some(sides) if !sides.is_empty() => {
+            let sides: Vec<String> = sides
+                .iter()
+                .map(|side| match side.as_f64() {
+                    Some(pt) => pt.to_string(),
+                    None => "?".to_string(),
+                })
+                .collect();
+            format!("版心边距 [{}]pt", sides.join(", "))
         }
+        _ => "版心边距读不出".to_string(),
+    };
+
+    let all = value["blocks"].as_array().cloned().unwrap_or_default();
+    let shown = all.len().min(MAX_OUTLINE_BLOCKS);
+    let mut lines: Vec<String> = vec![format!("【原件结构】{pages} · {body} · {margin}")];
+    for block in all.iter().take(MAX_OUTLINE_BLOCKS) {
+        let kind = block["k"].as_str().unwrap_or("?");
+        let mut head = String::from(kind);
+        if let Some(pt) = block["pt"].as_f64() {
+            head.push_str(&format!(" {pt}pt"));
+        }
+        if block["bold"].as_bool().unwrap_or(false) {
+            head.push_str(" bold");
+        }
+        if let Some(align) = block["align"].as_str() {
+            head.push_str(&format!(" {align}"));
+        }
+        let text = block["text"].as_str().unwrap_or("").trim();
+        lines.push(format!("{head} | {text}"));
     }
+    // 指针永远给：结构大纲里没有逐字全文，模型要写字就得去 read_source
+    if shown < all.len() {
+        lines.push(format!(
+            "（全部 {} 块，这里只列前 {shown} 块；全文与完整结构调 read_source，参数 stored = {stored}）",
+            all.len()
+        ));
+    } else {
+        lines.push(format!(
+            "（全部 {} 块；全文与完整结构调 read_source，参数 stored = {stored}）",
+            all.len()
+        ));
+    }
+    lines.join("\n")
 }
 
 fn cached(stored: &str, ext: &str, bytes: &[u8]) -> Parsed {
@@ -545,7 +592,13 @@ fn cached(stored: &str, ext: &str, bytes: &[u8]) -> Parsed {
 ///
 /// 为什么值得分档：原来只有一句「（附件 X：读不到内容）」，它分不清是扫描件、
 /// 加密、还是解析器不支持 —— 用户只能猜，模型也只能瞎试。三种成因给三条可 grep 的路。
-async fn pdf_text(bytes: &[u8], parsed: &Parsed, vision: bool, ocr: Option<&OcrConf>) -> String {
+async fn pdf_text(
+    bytes: &[u8],
+    parsed: &Parsed,
+    stored: &str,
+    vision: bool,
+    ocr: Option<&OcrConf>,
+) -> String {
     if !parsed.text.trim().is_empty() {
         return parsed.text.clone();
     }
@@ -554,8 +607,11 @@ async fn pdf_text(bytes: &[u8], parsed: &Parsed, vision: bool, ocr: Option<&OcrC
         return "（这份 PDF 解析不出文字（可能加密或结构异常）。把文字直接贴过来最快。）".into();
     }
     if vision {
-        // 模型能看页面图，缺的只是「没有文字层」这件事本身
-        return "（这份 PDF 没有文字层（扫描件），文字只能看附上的页面图片。）".into();
+        // 页图不再默认渲染（也就没有「附上的页面图片」可看）。这里给的是**怎么自己去看**：
+        // 扫描件的内容只存在于像素里，不说清这一句，模型只能回一句「我读不到」
+        return format!(
+            "（这份 PDF 没有文字层，内容只能看页面：调 render_doc_page，参数 stored = {stored}。）"
+        );
     }
     if !ocr_ready(ocr) {
         return "（这份 PDF 没有文字层（扫描件），当前也没配 OCR，所以读不到任何文字。要读它，请在 设置 → 模型 → OCR 配一个能看图的模型，或直接把文字贴过来。）".into();
@@ -793,7 +849,10 @@ mod tests {
         let materials = materials(&root, &refs, false, None, "test-model", &db).await;
         assert!(materials.section.contains(&format!("（附件标识：{stored}）")), "{}", materials.section);
         assert!(materials.section.contains("（原件共 1 页）"), "{}", materials.section);
-        assert!(materials.section.contains("谭 轶 天"), "正文要读得出来：{}", materials.section);
+        // 正文走纯文本投影时，PDF 里的字距会被提成空格（「谭 轶 天」）；
+        // 走结构大纲时又是「谭轶天」。这里只关心「读出来了」，所以先拍平空白再比
+        let flat: String = materials.section.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(flat.contains("谭轶天"), "正文要读得出来：{}", materials.section);
         assert_eq!(materials.origin.expect("原件信息").pages, Some(1));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1015,8 +1074,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// 视觉模型：除了整页渲染，还要把 PDF 里的内嵌图单独给一份 ——
-    /// 整页渲染里证件照只有几十像素，模型认不出那张脸
+    /// 视觉模型：页图不再默认渲染，但内嵌图还要给一份 —— 证件照是图，
+    /// 纸面上取不出来，而整页渲染里它只有几十像素，模型认不出那张脸
     #[tokio::test]
     async fn vision_models_also_get_the_pdf_inner_images() {
         let Some(bytes) = real_sample() else {
@@ -1032,12 +1091,18 @@ mod tests {
         let db = crate::db::Shared::new(root.join("app.db"));
         let materials = materials(&root, &refs, true, None, "vision-model", &db).await;
         assert!(
-            materials.images.len() >= 2,
-            "整页渲染 + 内嵌图至少两张，实际 {}：{}",
-            materials.images.len(),
+            !materials.images.is_empty(),
+            "这份样本里至少有一张内嵌图（证件照）：{}",
             materials.section
         );
         assert!(materials.section.contains("内嵌图"), "{}", materials.section);
+        // 页图不再默认渲染：附图只剩内嵌图，条数不该被「前 3 页」占满
+        assert!(
+            materials.images.len() <= MAX_INNER,
+            "附图最多 {} 张，实际 {}",
+            MAX_INNER,
+            materials.images.len()
+        );
         assert!(
             materials.images.iter().all(|url| url.starts_with("data:image/")),
             "只许塞 data URL"
@@ -1045,7 +1110,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// 内嵌图的名额受「整页渲染先占」约束：`(已附, 可解出总数)`
+    /// 内嵌图的名额受「别的图先占」约束：`(已附, 可解出总数)`
     #[test]
     fn inner_images_take_the_smallest_ones_and_respect_the_room() {
         let names = ["Im0", "Im1", "Im2", "Im3"];
@@ -1066,7 +1131,7 @@ mod tests {
         assert_eq!((attached, available), (MAX_INNER, 4), "空名额时最多 MAX_INNER 张");
         assert_eq!(urls.len(), 3);
 
-        // 名额已经被占掉 3 个（整页渲染），只剩 1 个给内嵌图
+        // 名额已经被别的图占掉 3 个，只剩 1 个给内嵌图
         let mut urls = vec!["data:image/jpeg;base64,AA".to_string(); MAX_IMAGES - 1];
         let (attached, available) = attach_inner_images(&bytes, &mut urls);
         assert_eq!((attached, available), (1, 4));
@@ -1088,34 +1153,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /* ---------- 原件样张 ---------- */
+    /* ---------- 原件指针 ---------- */
 
-    /// 登记样张这一步本身不依赖渲染器：给一段 data URL 就应该落进池子、
-    /// 拿到一条 image 资产，名字里带「样张」以便和用户自己的图分开
-    #[test]
-    fn a_page_image_is_registered_as_the_origin_sheet() {
-        let root = std::env::temp_dir().join(format!("sr-sheet-{}", crate::session::uuid_like()));
-        std::fs::create_dir_all(root.join("pool")).unwrap();
-        let jpeg = png_bytes(3, 3);
-        let url = crate::pdfimage::data_url_of("image/jpeg", &jpeg);
-
-        let sheet = register_sheet(&root, "我的简历.pdf", &url).expect("样张要登记成功");
-        assert!(sheet.id.starts_with("a-"), "{}", sheet.id);
-        assert_eq!(sheet.kind, "image");
-        assert_eq!(sheet.name, "我的简历 样张.jpg", "去掉原件的扩展名，别读起来像两个文件");
-        assert!(!sheet.stored.is_empty());
-        // 文件真的在池子里：`view` 只认池内存储名
-        assert_eq!(crate::pool::read_at(&root, &sheet.stored).unwrap(), jpeg);
-
-        // 空 data URL 不登记：宁可不给样张，也不要在池子里留一个 0 字节的图
-        assert!(register_sheet(&root, "坏.pdf", "data:image/jpeg;base64,").is_none());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// 有 PDF + 能看图 = 有样张；样张**不进材料段**（会话 agent 已经有原件正文，
-    /// 再给它一张整页截图只会被当成用户材料里的一张图）
+    /// 有 PDF = 有原件指针（stored / name / pages），**不再渲染任何页图**，
+    /// 也不往池子里放「样张」。
+    ///
+    /// 这是行为变更：原来是「第 1 页截图登记成资产」，现在只记怎么找回这份文件。
     #[tokio::test]
-    async fn a_pdf_with_vision_yields_an_origin_sheet_but_never_leaks_into_the_section() {
+    async fn a_pdf_yields_a_pointer_to_the_origin_instead_of_a_rendered_sheet() {
         let bytes = crate::pdfembed::fixtures::pdf_with_text(&["ACME Corp", "Backend Engineer"]);
         let (root, stored) = inbox_with(&bytes, "pdf");
         let refs = vec![AttachRef {
@@ -1126,39 +1171,28 @@ mod tests {
         let db = crate::db::Shared::new(root.join("app.db"));
         let materials = materials(&root, &refs, true, None, "vision-model", &db).await;
 
-        if materials.images.is_empty() {
-            // 这台机器没有 PDF 渲染器（非 Windows 且没装 poppler/gs）：只验「没有渲染就不伪造样张」
-            assert!(materials.origin_sheet.is_none(), "渲染不出页面就不该有样张");
-            eprintln!("skipped: 这台机器渲染不出 PDF 页面");
-            let _ = std::fs::remove_dir_all(&root);
-            return;
+        let doc = materials.origin_doc.clone().expect("有 PDF 就该有原件指针");
+        assert_eq!(doc.stored, stored, "指针必须带 stored，否则模型调不回这份文件");
+        assert_eq!(doc.name, "原件.pdf");
+        assert_eq!(doc.pages, Some(1), "页数照旧从 pdfembed 数出来");
+
+        // 默认不再渲染页图：这份 fixture 里没有内嵌图，附图应当为空
+        assert!(materials.images.is_empty(), "不许再默认附页图：{}", materials.section);
+        assert!(!materials.section.contains("样张"), "{}", materials.section);
+        // 池子里不该多出一个「样张.jpg」：那正是这次要拆掉的东西
+        if let Ok(entries) = std::fs::read_dir(root.join("pool")) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                assert!(!name.contains("样张"), "不该再登记样张：{name}");
+            }
         }
-
-        let sheet = materials.origin_sheet.clone().expect("有 PDF 且有视觉时必须有样张");
-        assert_eq!(sheet.kind, "image");
-        assert!(sheet.name.ends_with("样张.jpg"), "{}", sheet.name);
-        assert!(
-            crate::pool::read_at(&root, &sheet.stored).is_ok(),
-            "样张的字节要真的在池子里，否则 view 打不开"
-        );
-        // 四个地方都不许出现：材料段、正文、图片说明
-        assert!(
-            !materials.section.contains("样张"),
-            "样张是参考物，不是这一轮的材料：{}",
-            materials.section
-        );
-        assert!(
-            !materials.section.contains(&sheet.id),
-            "assetId 也不该进材料段：{}",
-            materials.section
-        );
-
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// 没有视觉能力就不登记：看不见图的模型既不会 view，也没人消费这条资产
+    /// 原件指针与「模型能不能看图」无关：它是 read_source / render_doc_page 的抓手，
+    /// 看不见图的模型同样要拿到 —— 否则下一轮连「原件是哪一份」都不知道
     #[tokio::test]
-    async fn a_pdf_without_vision_registers_no_sheet() {
+    async fn a_pdf_without_vision_still_gets_the_pointer() {
         let bytes = crate::pdfembed::fixtures::pdf_with_pages(1);
         let (root, stored) = inbox_with(&bytes, "pdf");
         let refs = vec![AttachRef {
@@ -1168,8 +1202,116 @@ mod tests {
         }];
         let db = crate::db::Shared::new(root.join("app.db"));
         let materials = materials(&root, &refs, false, None, "deepseek-chat", &db).await;
-        assert!(materials.origin_sheet.is_none());
+        let doc = materials.origin_doc.expect("没有视觉也要给指针");
+        assert_eq!(doc.name, "扫描件.pdf");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 扫描件 + 能看图：不再偷偷渲染页图，改为把「怎么自己去看」写清楚。
+    /// 偷偷渲染会让材料段多出一张模型没要过的图，还会和「没有文字层」这句话打架。
+    #[tokio::test]
+    async fn a_scanned_pdf_with_vision_points_at_render_doc_page() {
+        let bytes = crate::pdfembed::fixtures::pdf_with_pages(1);
+        let (root, stored) = inbox_with(&bytes, "pdf");
+        let refs = vec![AttachRef {
+            stored: stored.clone(),
+            name: "扫描件.pdf".into(),
+            ext: "pdf".into(),
+        }];
+        let db = crate::db::Shared::new(root.join("app.db"));
+        let materials = materials(&root, &refs, true, None, "vision-model", &db).await;
+
+        assert!(materials.section.contains("没有文字层"), "{}", materials.section);
+        assert!(materials.section.contains("render_doc_page"), "{}", materials.section);
+        // 只钉「参数名 + 值」这一截：句末的句号是文案的一部分（规格里就有），
+        // 断到「）前必须是 stored」会把一句正常的标点判成错
+        assert!(
+            materials.section.contains(&format!("参数 stored = {stored}")),
+            "指针里必须带 stored：{}",
+            materials.section
+        );
+        assert!(
+            !materials.section.contains("另附前"),
+            "页图不许再默认附上：{}",
+            materials.section
+        );
+        assert!(materials.images.is_empty(), "扫描件也不许偷偷渲染");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /* ---------- 【原件结构】 ---------- */
+
+    fn outline_for_test() -> crate::docparse::DocOutline {
+        use crate::docparse::{Align, BlockKind, BlockStyle, DocBlock, DocOutline};
+        let block = |kind, text: &str, size: f32, bold: bool, align| DocBlock {
+            kind,
+            text: text.into(),
+            style: BlockStyle {
+                size_pt: Some(size),
+                bold,
+                align,
+                ..Default::default()
+            },
+            table: None,
+        };
+        DocOutline {
+            pages: Some(1),
+            margin_pt: Some([56.7, 56.7, 56.7, 56.7]),
+            body_pt: Some(9.6),
+            blocks: vec![
+                block(BlockKind::Title, "谭轶天", 19.2, true, Align::Center),
+                block(BlockKind::Paragraph, "性别：男 年龄：20", 9.6, false, Align::Left),
+                block(BlockKind::Heading, "教育经历", 12.0, true, Align::Left),
+            ],
+        }
+    }
+
+    /// 结构大纲是给模型读的**紧凑文本**，不是 JSON：一行一块，头部交代页数/基准字号/边距
+    #[test]
+    fn the_structure_section_reads_as_one_line_per_block() {
+        let text = structure_section(&outline_for_test(), "abc123.pdf");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines[0], "【原件结构】共 1 页 · 正文基准 9.6pt · 版心边距 [56.7, 56.7, 56.7, 56.7]pt",
+            "{text}"
+        );
+        assert_eq!(lines[1], "title 19.2pt bold center | 谭轶天", "{text}");
+        assert_eq!(lines[2], "p 9.6pt left | 性别：男 年龄：20", "{text}");
+        assert_eq!(lines[3], "heading 12pt bold left | 教育经历", "{text}");
+        assert!(lines.last().unwrap().contains("参数 stored = abc123.pdf"), "{text}");
+        // JSON 的键名、引号、花括号都不该出现在材料段里
+        assert!(!text.contains('"'), "不要塞 JSON：{text}");
+        assert!(!text.contains("{"), "不要塞 JSON：{text}");
+    }
+
+    /// 块太多时只列前 MAX_OUTLINE_BLOCKS 块，并把「还有多少、去哪儿读」说清楚
+    #[test]
+    fn a_long_structure_lists_a_prefix_and_says_where_the_rest_is() {
+        use crate::docparse::{BlockKind, BlockStyle, DocBlock, DocOutline};
+        let blocks = (0..MAX_OUTLINE_BLOCKS + 5)
+            .map(|index| DocBlock {
+                kind: BlockKind::Paragraph,
+                text: format!("第 {index} 行"),
+                style: BlockStyle::default(),
+                table: None,
+            })
+            .collect();
+        let outline = DocOutline {
+            pages: None,
+            margin_pt: None,
+            body_pt: None,
+            blocks,
+        };
+        let text = structure_section(&outline, "abc.pdf");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 1 + MAX_OUTLINE_BLOCKS + 1, "头部 + 前 N 块 + 尾注");
+        assert!(lines[0].contains("页数读不出"), "{}", lines[0]);
+        assert!(
+            lines.last().unwrap().contains(&format!("全部 {} 块", MAX_OUTLINE_BLOCKS + 5)),
+            "{}",
+            lines.last().unwrap()
+        );
+        assert!(lines.last().unwrap().contains("read_source"), "{}", lines.last().unwrap());
     }
 
     /// 非视觉模型 + 没配 OCR：说清「读不了」在哪两处修，不许提「用提取出来的文字」
@@ -1244,9 +1386,11 @@ mod tests {
 
         assert!(materials.section.contains("ACME Corp"), "{}", materials.section);
         assert!(materials.section.contains("Shanghai"), "短正文要整段给：{}", materials.section);
+        // 短正文不许走「摘要投影」：它是唯一一条会把正文换成指针的路。
+        // （结构大纲的尾注里也会提 read_source，所以这里不能直接禁掉这个词）
         assert!(
-            !materials.section.contains("read_source"),
-            "没超 800 字不该让模型去读原件：{}",
+            !materials.section.contains("原件正文共"),
+            "没超 800 字不该把正文压成摘要：{}",
             materials.section
         );
         // 短正文照样入 Fact 层：下一轮没有附件了，正文只能从这里读
@@ -1287,18 +1431,30 @@ mod tests {
         assert!(chars > SUMMARY_CHARS, "样本要超过 {SUMMARY_CHARS} 字，实际 {chars}");
         assert!(doc.text.contains("LINE 59"), "Fact 层必须是全文");
 
-        assert!(
-            materials.section.contains(&format!("（原件正文共 {chars} 字")),
-            "要交代总字数：{}",
-            materials.section
-        );
-        assert!(
-            materials
-                .section
-                .contains(&format!("要全文调 read_source，参数 stored = {stored}）")),
-            "指针里必须带 stored：{}",
-            materials.section
-        );
+        // 两条合法的长正文投影：没有结构大纲时给「摘要 + 字数」，有结构大纲时只给大纲。
+        // 共同要求是**正文整段不许出现**，且指针里必须带 stored。
+        if materials.section.contains("【原件结构】") {
+            assert!(
+                materials
+                    .section
+                    .contains(&format!("全文与完整结构调 read_source，参数 stored = {stored}）")),
+                "结构大纲的尾注必须带 stored：{}",
+                materials.section
+            );
+        } else {
+            assert!(
+                materials.section.contains(&format!("（原件正文共 {chars} 字")),
+                "要交代总字数：{}",
+                materials.section
+            );
+            assert!(
+                materials
+                    .section
+                    .contains(&format!("要全文调 read_source，参数 stored = {stored}）")),
+                "指针里必须带 stored：{}",
+                materials.section
+            );
+        }
         assert!(
             !materials.section.contains("LINE 59"),
             "正文不许整段进 Projection：{}",
@@ -1349,5 +1505,30 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&png_root);
+    }
+
+    /// 临时：把真机那份 PDF 的材料段原文打出来（`--ignored --nocapture`）
+    #[tokio::test]
+    #[ignore]
+    async fn dump_materials_for_the_real_pdf() {
+        let path = "target/debug/SharpResumeData/inbox/bcf9d0ec3fd6b381.pdf";
+        let bytes = std::fs::read(path).expect("真机样本");
+        let (root, stored) = inbox_with(&bytes, "pdf");
+        let refs = vec![AttachRef {
+            stored: stored.clone(),
+            name: "谭轶天简历.pdf".into(),
+            ext: "pdf".into(),
+        }];
+        let db = crate::db::Shared::new(root.join("app.db"));
+        for vision in [false, true] {
+            let materials = materials(&root, &refs, vision, None, "deepseek-chat", &db).await;
+            println!("===== vision={vision} images={} =====", materials.images.len());
+            println!("{}", materials.section);
+            println!(
+                "origin_doc = {:?}",
+                materials.origin_doc.as_ref().map(|doc| (&doc.stored, &doc.name, doc.pages))
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

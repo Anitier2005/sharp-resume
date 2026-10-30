@@ -87,6 +87,24 @@ pub struct Asset {
     pub extra: Map<String, Value>,
 }
 
+/// 原件文档的指针：不预渲染，模型要看页图时自己调 render_doc_page。
+///
+/// 之前这里存的是一张「第 1 页截图」（`Asset`）。那张图有三个问题：只有第一页、
+/// 字被压到看不清、而且它是**渲染结果**——原件换了文件名或页数就对不上。
+/// 指针只记「怎么找回这份文件」，要看哪一页由模型当场说。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OriginDoc {
+    /// inbox 里的存储名（内容哈希 + 扩展名）。render_doc_page / read_source 都吃它
+    pub stored: String,
+    /// 用户看见的原文件名
+    #[serde(default)]
+    pub name: String,
+    /// 页数。读不出 = None，**绝不写 0**
+    #[serde(default)]
+    pub pages: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryItem {
@@ -423,6 +441,10 @@ pub struct Resume {
     /// （它写回时不带这个键就会丢），而样张要在每一次排版里都在。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_sheet: Option<Asset>,
+    /// 原件文档指针（stored / name / pages）。与上面那张样张并存一版：
+    /// 前端还在读 `originSheet`，等它切到 `originDoc` 之后样张这条再删。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_doc: Option<OriginDoc>,
     #[serde(flatten, default, skip_serializing_if = "is_empty")]
     pub extra: Map<String, Value>,
 }
