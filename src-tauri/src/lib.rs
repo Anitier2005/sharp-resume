@@ -3,6 +3,7 @@ mod assets;
 mod attach;
 mod capability;
 mod db;
+mod docparse;
 mod docx;
 mod export;
 mod extract;

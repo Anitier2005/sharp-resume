@@ -84,6 +84,12 @@ lopdf = { version = "0.34", default-features = false, features = ["nom_parser"] 
 
 # OCR 接口通道要把图片拼成 data URL，需要 base64。纯 Rust，无 C 依赖。
 base64 = "0.22"
+# 带格式解析 docx/pptx/xlsx 用：解压 + XML。
+# 两者本来就在依赖树里（flate2 由 png/reqwest 带进来，quick-xml 由 tauri 带进来），
+# 显式声明只是为了能 use；版本按 Cargo.lock 里已锁的那份写，不新增编译单元。
+flate2 = "1"
+quick-xml = "0.42"
+
 
 # NFKC：排版文字锁要比对「模型手写 HTML 的纯文本」与「结构化内容的纯文本」。
 # 全角字母、康熙部首、带圈数字这些视觉相同的字符必须归一到同一个码位，
