@@ -408,7 +408,7 @@ fn parse_colors(text: &str) -> Vec<&'static str> {
     out
 }
 
-const PROBE_PROMPT: &str = "这张图是 3 行 3 列的色块，按「第1行从左到右, 第2行从左到右, 第3行从左到右」的顺序，用 红/绿/蓝/黄/黑/白 六个词回答，逗号分隔，不要解释。";
+const PROBE_PROMPT: &str = include_str!("../../prompts/capability-probe.md");
 
 /// 探一次，写回设置，返回结论。
 ///

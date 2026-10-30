@@ -26,6 +26,8 @@ use crate::net::{AiRequest, ChatMessage, StreamChunk};
 
 /// system 模板随包硬编码：改 `prompts/system.md` 重新打包即可生效
 const SYSTEM_TEMPLATE: &str = include_str!("../../prompts/system.md");
+/// 上下文压缩用（超预算时把旧对话压成要点，见 `prompts/compact.md`）
+const COMPACT_PROMPT: &str = include_str!("../../prompts/compact.md");
 
 /// 用户没在模型配置里填「压缩预留」时的默认值：够放一轮摘要提示词 + 被摘要的那几段
 pub(crate) const DEFAULT_RESERVE: usize = 2_000;
@@ -280,11 +282,7 @@ async fn digest_for_dropped(
         api_key,
         model,
         messages: vec![
-            ChatMessage::system(
-                "把下面的对话压成一份要点，供后续继续对话时当背景。\
-                 必须保留：用户定下的口径与偏好、具体数字与时间、已确认的结论、还没做完的事。\
-                 不要写客套话，不要复述过程，不要评价。用第三人称陈述，不超过 400 字。",
-            ),
+            ChatMessage::system(COMPACT_PROMPT),
             ChatMessage::user(transcript),
         ],
         temperature: Some(0.1),
