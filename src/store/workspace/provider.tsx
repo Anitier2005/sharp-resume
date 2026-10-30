@@ -502,6 +502,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           多打出同样几页。 */}
       {person && measurePages.length > 0 && (
         <div
+          ref={measureHost}
           aria-hidden
           data-measure="host"
           data-print="hide"
