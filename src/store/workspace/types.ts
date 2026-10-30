@@ -98,7 +98,15 @@ export type Action =
     }
   | { type: "removePage"; personId: string; resumeId: string; pageId: string }
   | { type: "pageLabel"; personId: string; resumeId: string; pageId: string; label: string }
-  | { type: "pageHeader"; personId: string; resumeId: string; pageId: string; header: Field[] }
+  | {
+      type: "pageHeader";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      header: Field[];
+      /** 这页还没有页头块时，工具预生成的块 id（同一轮里建/读/改都打得到它） */
+      blockId?: string;
+    }
   | { type: "pageStyle"; personId: string; resumeId: string; pageId: string; style: PageStyle }
   /** 成品层：整页/块级手写覆盖。整体替换，合并逻辑在工具那侧做完 */
   | { type: "pageLayout"; personId: string; resumeId: string; pageId: string; layout: PageLayout }

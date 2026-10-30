@@ -15,8 +15,12 @@ import { uid } from "@/lib/uid";
 
 /* ---------- 构造 ---------- */
 
-export function newFieldsBlock(fields: Field[] = [], id?: string): Block {
-  return { id: id ?? uid("b"), kind: "fields", fields };
+/**
+ * 新字段块。`id` 由调用方给时照用：页头块在这页还不存在时，id 由 Rust 先定下来
+ * （`pageHeader` op 的 `blockId`），同一轮里「建页头 → 读页头 → 改页头」全靠它对上。
+ */
+export function newFieldsBlock(fields: Field[] = [], id: string = uid("b")): Block {
+  return { id, kind: "fields", fields };
 }
 
 /**
@@ -128,11 +132,16 @@ export function entriesOf(page: ResumePage): SectionEntry[] {
 
 /* ---------- 写入 ---------- */
 
-/** 写页头：改第一个 fields 块；这页还没有页头块就插到最前面 */
-export function withHeader(page: ResumePage, fields: Field[]): ResumePage {
+/**
+ * 写页头：改第一个 fields 块；这页还没有页头块就插到最前面。
+ *
+ * `id` 给了就照用（Rust 在 `pageHeader` op 里预生成的块 id）—— 后端这一轮的工作副本
+ * 里已经有这个 id 的块，前端再自己造一个就会和后端对不上，模型也就读不到自己刚写的东西。
+ */
+export function withHeader(page: ResumePage, fields: Field[], id?: string): ResumePage {
   const blocks = page.blocks ?? [];
   const at = blocks.findIndex((block) => block.kind === "fields");
-  if (at === -1) return { ...page, blocks: [newFieldsBlock(fields), ...blocks] };
+  if (at === -1) return { ...page, blocks: [newFieldsBlock(fields, id), ...blocks] };
   return {
     ...page,
     blocks: blocks.map((block, index) => (index === at ? { ...block, fields } : block)),

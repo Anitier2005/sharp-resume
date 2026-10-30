@@ -227,9 +227,15 @@ enum Owner {
     /// 但新建的页是**零预设**的，一个块都没有 —— 于是模型看到的页头上没有 id，
     /// 也就没有任何工具能把姓名写进简历。这个变体就是那个缺口：按「页 id」认领页头，
     /// 落库时下发一条 `pageHeader`（前端会自己插入字段块）。
+    ///
+    /// `block` 是「块还没建、这是给它预留的 id」：这一页还没有字段块时由 Rust 先定下来，
+    /// 写进 op 的 `blockId`，前端照这个 id 建块。否则同一轮里「建页头 → 读页头 → 改页头」
+    /// 三段都拿不到同一个 id，模型只能反复重写（真机上的原话就是「页头仍然是空的」）。
+    /// 这一页已经有字段块时是 `None`：整组替换，不需要新建。
     Header {
         spot: Spot,
         label: String,
+        block: Option<String>,
     },
 }
 
@@ -324,6 +330,12 @@ pub struct EditState {
     new_resumes: HashSet<String>,
     /// 本轮已经删掉的 id：再改它就是模型在自说自话，直接报错比静默丢弃好
     removed: HashSet<String>,
+    /// 本轮给「还不存在的页头块」预留的 id，键同 `Owner::Header::key`。
+    ///
+    /// 只为一件事存在：同一页在同一轮里写多次页头，必须拿到**同一个** blockId。
+    /// 每次现生成的话，一次 flush 建一个块，纸上会落下两三个页头。
+    /// `flush` 不清它（结算不等于这一轮结束），下一轮 `begin` 整份重建时自然清空。
+    headers: HashMap<String, String>,
     /// 本轮工作副本：`begin` 时的快照 + 本轮已暂存写入按序应用后的样子。
     ///
     /// 谁读它：`ToolCtx::view`，也就是所有读工具看到的底本。
@@ -437,14 +449,22 @@ impl EditState {
                     }),
                     // Entry 的字段改动永远走 entryPatch，不会走到这里
                     Owner::Entry { .. } => return None,
-                    // 前端 `withHeader` 认「第一个 fields 块」：整组替换，没有就插一个
-                    Owner::Header { .. } => json!({
-                        "type": "pageHeader",
-                        "personId": spot.person,
-                        "resumeId": spot.resume,
-                        "pageId": spot.page,
-                        "header": fields,
-                    }),
+                    // 前端 `withHeader` 认「第一个 fields 块」：整组替换，没有就按
+                    // `blockId` 插一个。块还不存在时 id 由 `mark` 那一刻定下（见
+                    // `EditState::headers`），所以这一轮后面所有写入都打得到它。
+                    Owner::Header { block, .. } => {
+                        let mut op = json!({
+                            "type": "pageHeader",
+                            "personId": spot.person,
+                            "resumeId": spot.resume,
+                            "pageId": spot.page,
+                            "header": fields,
+                        });
+                        if let Some(block) = block {
+                            op["blockId"] = json!(block);
+                        }
+                        op
+                    }
                 })
             }
             Dirty::Items(section) => {
@@ -514,6 +534,35 @@ fn page_in<'a>(
     child_in(child_in(person_in(workspace, person)?, "resumes", resume)?, "pages", page)
 }
 
+/// 只读版的 `page_in`：给「这一页现在长什么样」这类判断用
+fn page_json<'a>(workspace: &'a Value, spot: &Spot) -> Option<&'a Value> {
+    workspace
+        .get("people")?
+        .as_array()?
+        .iter()
+        .find(|person| person["id"].as_str() == Some(spot.person.as_str()))?
+        .get("resumes")?
+        .as_array()?
+        .iter()
+        .find(|resume| resume["id"].as_str() == Some(spot.resume.as_str()))?
+        .get("pages")?
+        .as_array()?
+        .iter()
+        .find(|page| page["id"].as_str() == Some(spot.page.as_str()))
+}
+
+/// 这一页有没有页头块（= 第一个 fields 块，和前端 `withHeader` 同一条规则）
+fn has_fields_block(page: &Value) -> bool {
+    page.get("blocks")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .any(|block| block["kind"].as_str() == Some("fields"))
+        })
+        .unwrap_or(false)
+}
+
 /// 人 → 简历 → 页 → 块
 fn block_in<'a>(
     workspace: &'a mut Value,
@@ -565,21 +614,35 @@ fn apply_to_live(live: &mut Option<Value>, op: &Value) {
             }
         }
         // 页头 = 这一页第一个字段块（和前端 `withHeader` 同一条规则）。
-        // 块还不存在时前端会自己插一个、id 由它生成 —— 我们猜不出那个 id，
-        // 所以不插假块（插了之后同轮的 blockFields 会打在一个前端不认识的 id 上）。
-        // 这一种情况下工作副本保持原样，读工具读不到刚写的页头字段。
+        // 块还不存在时 op 里带着 `blockId`（Rust 在本轮 `mark` 那一刻定下的），
+        // 就照这个 id 在页首插一个 —— 这样同一轮里后面的 `read_page` / `set_field`
+        // 都能看见也都能打中它。没有 `blockId` 又不该建块（老形状）时保持原样。
         "pageHeader" => {
-            if let Some(page) = page_in(workspace, get("personId"), get("resumeId"), get("pageId")) {
-                if let Some(block) = page
-                    .get_mut("blocks")
-                    .and_then(Value::as_array_mut)
-                    .and_then(|blocks| {
-                        blocks.iter_mut().find(|block| block["kind"].as_str() == Some("fields"))
-                    })
-                {
-                    assign(block, "fields", op.get("header"));
-                }
+            let Some(page) = page_in(workspace, get("personId"), get("resumeId"), get("pageId"))
+            else {
+                return;
+            };
+            let Some(blocks) = page.get_mut("blocks").and_then(Value::as_array_mut) else {
+                return;
+            };
+            if let Some(block) = blocks
+                .iter_mut()
+                .find(|block| block["kind"].as_str() == Some("fields"))
+            {
+                assign(block, "fields", op.get("header"));
+                return;
             }
+            let Some(block_id) = op.get("blockId").and_then(Value::as_str) else {
+                return;
+            };
+            blocks.insert(
+                0,
+                json!({
+                    "id": block_id,
+                    "kind": "fields",
+                    "fields": op.get("header").cloned().unwrap_or_else(|| json!([])),
+                }),
+            );
         }
         // 整份经历库替换
         "libraryItems" => {
@@ -932,6 +995,8 @@ fn find_owner_by_id(ctx: &ToolCtx, owner_id: &str) -> Result<Owner, String> {
             return Ok(Owner::Header {
                 spot,
                 label: format!("{name}的页头"),
+                // 块还没建（也可能已经有了）：id 在 `mark_owner` 里定
+                block: None,
             });
         }
         for block in list(page, "blocks") {
@@ -1113,7 +1178,16 @@ fn seed_fields(st: &EditState, ctx: &ToolCtx, owner: &Owner) -> Result<Vec<Value
             Ok(list(&block, "fields"))
         }
         Owner::Header { .. } => {
-            let page_id = owner.spot().page.clone();
+            let spot = owner.spot();
+            // 先看工作副本：同一轮里刚建出来的页头块就在里面。
+            // 不读它的话，「建页头 → 再写一次页头」会从快照重新播种，
+            // 把前一次写的字段整组覆盖掉（快照里这页还是空的）。
+            if let Some(page) = st.live.as_ref().and_then(|live| page_json(live, spot)) {
+                if has_fields_block(page) {
+                    return Ok(header_fields(page));
+                }
+            }
+            let page_id = spot.page.clone();
             let page = pages_of(ctx)?
                 .into_iter()
                 .find(|(spot, _, _)| spot.page == page_id)
@@ -1736,6 +1810,39 @@ fn field_ids_of(fields: &[Value]) -> Vec<String> {
         .collect()
 }
 
+/// 页头块 id 的定夺点 —— 在 `mark` **之前**跑，因为 op 的形状取决于它。
+///
+/// 顺序有讲究：`headers` 里已经有这一页的预留 id 就直接用（同一轮第二次写也拿到同一个）；
+/// 这一页本来就有字段块就 `None`（整组替换，老路径不变）；都没有才现造一个。
+///
+/// `ctx.workspace` 在真实分发里**已经是本轮工作副本**（`tools::call` 换过只读底本），
+/// 所以这里看到的是「这一轮到现在为止」的页，而不是前端上送的快照。
+fn header_owner(st: &mut EditState, ctx: &ToolCtx, spot: Spot, label: String) -> Owner {
+    let key = format!("fields:h:{}:{}", spot.resume, spot.page);
+    if let Some(block) = st.headers.get(&key) {
+        return Owner::Header {
+            spot,
+            label,
+            block: Some(block.clone()),
+        };
+    }
+    let has_block = page_json(ctx.workspace, &spot).map(has_fields_block).unwrap_or(false);
+    if has_block {
+        return Owner::Header {
+            spot,
+            label,
+            block: None,
+        };
+    }
+    let id = uid("b");
+    st.headers.insert(key, id.clone());
+    Owner::Header {
+        spot,
+        label,
+        block: Some(id),
+    }
+}
+
 fn mark_owner(st: &mut EditState, ctx: &ToolCtx, owner: &Owner) {
     match owner {
         Owner::Entry { entry, .. } => {
@@ -1745,6 +1852,11 @@ fn mark_owner(st: &mut EditState, ctx: &ToolCtx, owner: &Owner) {
                     section,
                 });
             }
+        }
+        // 页头：块 id 在这里定下来，op 才能带上 blockId
+        Owner::Header { spot, label, .. } => {
+            let resolved = header_owner(st, ctx, spot.clone(), label.clone());
+            st.mark(Dirty::Fields(resolved));
         }
         _ => st.mark(Dirty::Fields(owner.clone())),
     }
@@ -2750,7 +2862,77 @@ mod tests {
         assert_eq!(header[0]["label"], json!("姓名"));
     }
 
-    /// 已经有页头字段块时，页 id 落到同一份数据上 —— 不能长出第二个页头
+    /// 页头块不存在时，id 必须由 Rust 先定下来写进 op —— 否则前端自己造一个，
+    /// 这一轮的工作副本里就没有这个块，`read_page` 读不到刚写的页头，
+    /// 模型会以为没写进去，反复重写（真机上就是这么把页头写丢的）。
+    #[test]
+    fn add_field_on_a_page_without_a_header_creates_one_with_a_known_id() {
+        let h = Harness::new();
+        begin(&h.out, &h.ws);
+        h.run("add_field", json!({ "ownerId": "pg2", "label": "姓名", "value": "李四" }))
+            .unwrap();
+
+        let ops = h.ops();
+        assert_eq!(ops[0]["type"], json!("pageHeader"));
+        let block_id = ops[0]["blockId"].as_str().unwrap_or("").to_string();
+        assert!(!block_id.is_empty(), "页头 op 必须带 blockId：{}", ops[0]);
+
+        // 紧接着读：这一轮的工作副本里就该有那个块和那几个字段
+        let text = crate::tools::call(
+            "read_page",
+            &json!({ "pageId": "pg2" }),
+            &h.ctx(),
+            crate::tools::Scope::Session,
+        )
+        .unwrap();
+        assert!(text.contains(&block_id), "读不到刚建的页头块：{text}");
+        assert!(text.contains("李四"), "读不到刚写的字段：{text}");
+        assert!(text.contains("页头"), "这个块要被认成页头：{text}");
+    }
+
+    /// 同一页在同一轮里写两次页头，必须拿到同一个 blockId ——
+    /// 每次现造的话，一次 flush 建一个块，纸上会落下两三个页头。
+    #[test]
+    fn two_header_writes_in_one_round_share_one_block_id() {
+        let h = Harness::new();
+        begin(&h.out, &h.ws);
+        h.run("add_field", json!({ "ownerId": "pg2", "label": "姓名", "value": "李四" }))
+            .unwrap();
+        let first = h.ops();
+        let first_id = first[0]["blockId"].as_str().unwrap_or("").to_string();
+        assert!(!first_id.is_empty(), "第一次就得有 id：{}", first[0]);
+
+        h.run("add_field", json!({ "ownerId": "pg2", "label": "电话", "value": "13800000000" }))
+            .unwrap();
+        let second = h.ops();
+        assert_eq!(
+            second[0]["blockId"].as_str().unwrap_or(""),
+            first_id,
+            "同一轮两次写入必须是同一个块：{}",
+            second[0]
+        );
+        // 第二次是从工作副本里播种的：前一次的字段不能被覆盖掉
+        assert_eq!(second[0]["header"].as_array().unwrap().len(), 2, "{}", second[0]);
+
+        // 工作副本里只能有一个页头块，id 就是那个预留的
+        let live = live(&h.out).expect("begin 过就该有工作副本");
+        let page = live["people"][0]["resumes"][0]["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|page| page["id"] == json!("pg2"))
+            .unwrap();
+        let headers: Vec<&Value> = page["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|block| block["kind"] == json!("fields"))
+            .collect();
+        assert_eq!(headers.len(), 1, "页头块只能有一个：{headers:?}");
+        assert_eq!(headers[0]["id"], json!(first_id));
+    }
+
+    /// 已经有页头块时，op 还是老形状（不带 blockId）：整组替换，不新建
     #[test]
     fn page_id_targets_the_existing_header_block() {
         let h = Harness::new();
@@ -2759,6 +2941,8 @@ mod tests {
 
         let ops = h.ops();
         assert_eq!(ops[0]["type"], json!("pageHeader"));
+        // 页头块本来就在：整组替换，op 不带 blockId（老形状不变）
+        assert!(ops[0].get("blockId").is_none(), "{}", ops[0]);
         let header = ops[0]["header"].as_array().unwrap();
         assert_eq!(header.len(), 2, "原有字段要保留：{header:?}");
         assert_eq!(header[0]["label"], json!("城市"));

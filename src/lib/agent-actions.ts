@@ -196,6 +196,9 @@ const OP_SPEC: Record<string, OpSpec> = {
   removePage: { ids: ["personId", "resumeId", "pageId"] },
   // label / title 允许是空串（用户可以先建页再起名），所以不进 ids
   pageLabel: { ids: ["personId", "resumeId", "pageId"] },
+  // blockId 是工具在「这页还没有页头块」时预生成的块 id，原样透传给 reducer。
+  // 它不进 optionalIds：那条校验会「空串 → 整条 op 丢掉」，而页头写入不该因为
+  // 一个 id 不好看就消失（真坏了 reducer 也只是照旧自己造一个块）。
   pageHeader: { ids: ["personId", "resumeId", "pageId"], arrays: ["header"] },
   pageStyle: { ids: ["personId", "resumeId", "pageId"], objects: ["style"] },
   pageLayout: { ids: ["personId", "resumeId", "pageId"], objects: ["layout"] },

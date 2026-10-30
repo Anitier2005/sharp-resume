@@ -326,10 +326,16 @@ export function reducer(state: Workspace, action: Action): Workspace {
         label: action.label,
       }));
 
-    case "pageHeader":
+    case "pageHeader": {
+      // blockId 是工具在「这页还没有页头块」时预生成的 id，必须透传：
+      // 后端这一轮的工作副本里已经有这个 id 的块，前端自己造一个就和它走散了。
+      // 空串/非字符串等于没给 —— 退回让 blocks.ts 自己生成，绝不能用空串当块 id
+      const blockId =
+        typeof action.blockId === "string" && action.blockId ? action.blockId : undefined;
       return mapPage(state, action.personId, action.resumeId, action.pageId, (page) =>
-        withHeader(page, action.header),
+        withHeader(page, action.header, blockId),
       );
+    }
 
     /* ---------- 分区与条目（都是块） ---------- */
 
