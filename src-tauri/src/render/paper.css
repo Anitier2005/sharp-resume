@@ -285,6 +285,27 @@
   break-inside: avoid;
 }
 
+/* 分区自己分栏时，栏必须开在**列表**上，不能开在 section 上。
+   开在 section 上时，整块 `.entry` 是一个不可分的盒子，会被整个塞进第一栏，
+   第二栏永远空着（真机：技能与兴趣 8 条全挤在左栏，标题还独占一栏）。
+   挪到 `ul` 上，`li` 是同级兄弟，multicol 才能把它们摊到各栏。 */
+.doc .sec.cols-2,
+.doc .sec.cols-3 {
+  columns: auto;
+}
+.doc .sec.cols-2 > .entry > .bullets {
+  columns: 2;
+  column-gap: 18px;
+}
+.doc .sec.cols-3 > .entry > .bullets {
+  columns: 3;
+  column-gap: 12px;
+}
+.doc .sec.cols-2 > .entry > .bullets > li,
+.doc .sec.cols-3 > .entry > .bullets > li {
+  break-inside: avoid;
+}
+
 /* 两栏网格：左右各自成块，不会像 columns 那样流断 */
 .doc .grid-2 {
   display: grid;
