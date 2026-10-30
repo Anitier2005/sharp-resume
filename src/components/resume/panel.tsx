@@ -26,6 +26,8 @@ import { pageToDocx } from "@/lib/docx";
 import { saveAsset } from "@/lib/assets";
 import { nextPageLabel } from "@/lib/pages";
 import { TOLERANCE_MAX } from "@/lib/measure";
+import { A4_H, A4_W, A4_W_PX } from "@/lib/paper-size";
+import { paginate, resetPagination } from "@/lib/paginate";
 import { displayName, type ResumePage } from "@/types";
 import { Paper } from "./paper";
 import { ResumeForm } from "./form";
@@ -41,12 +43,26 @@ type MenuFrom = "tab" | "fold";
 /** 纸面缩放边界：再小看不清字，再大只是在滚一张糊掉的位图 */
 const MIN_ZOOM = 25;
 const MAX_ZOOM = 400;
-/** 状态栏菜单里的固定档位 */
-const ZOOM_PRESETS = [50, 75, 100, 150, 200, 300, 400];
+/**
+ * 状态栏菜单里的固定档位。
+ *
+ * 纸现在是 1:1 的真 A4（794px 宽），所以 **100% 就是真实 A4 大小** —— 在
+ * 2K 屏上它几乎占满半个窗口。47% 才是「改前那张 374px 小纸」的等价观感，
+ * 默认档就是它；需要按打印尺寸核对时再切到 100%。
+ */
+const ZOOM_PRESETS = [47, 50, 75, 100, 150, 200, 300, 400];
 /** `.canvas` 的左右内边距之和：算「可用宽度」时要先扣掉 */
 const CANVAS_PAD = 40;
-/** A4 缩略纸的固定宽度（paper.module.css 的 .wrap）；缩放只走 CSS zoom，不改它 */
-const PAPER_W = 374;
+/** 真 A4 在 96dpi 下的 px 宽度（= 210mm）：缩放只走 CSS zoom，不改纸本身 */
+const PAPER_W = A4_W_PX;
+/**
+ * 默认观感倍率：374 / 793.7 ≈ 47%。
+ *
+ * 纸从缩略改 1:1 之后，100% 会突然变成「一张占满半个屏幕的 A4」，
+ * 那不是用户熟悉的预览。默认档把视觉宽度拉回改前的 374px，
+ * 尺寸变了、看起来没变。
+ */
+const DEFAULT_ZOOM = Math.round((374 / A4_W_PX) * 100);
 
 const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(value)));
 
@@ -81,7 +97,7 @@ export function ResumePanel() {
   // 排版不再由「切到预览」触发：内容一变就自动通知排版 agent，
   // 归 provider 统一发起（那里是 state 的唯一汇聚点）。
   // 预览只是一个看法，顺手烧一次模型调用既费钱又不是用户要的时机。
-  const [zoom, setZoom] = useState(100);
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   /**
@@ -117,8 +133,13 @@ export function ResumePanel() {
     const el = canvasRef.current;
     if (!el) return null;
     const ratio = (el.clientWidth - CANVAS_PAD) / PAPER_W;
-    // 自动适配保持原来的观感：只缩小不放大，否则窄纸在宽面板里会被拉成一片糊
-    if (kind === "page") return clampZoom(Math.min(1, Math.max(0.68, ratio)) * 100);
+    // 整页档：上限是「和改前那张小纸等宽」的 47%，面板再宽也不继续放大 ——
+    // 1:1 的 A4 铺满宽面板只会变成一屏糊字，反而看不出整页结构。
+    // 面板太窄时按上限的 68% 收缩，和改前「最小 68%」的观感对齐。
+    if (kind === "page") {
+      const cap = DEFAULT_ZOOM / 100;
+      return clampZoom(Math.max(cap * 0.68, Math.min(cap, ratio)) * 100);
+    }
     return clampZoom(ratio * 100);
   }, []);
 
@@ -208,6 +229,19 @@ export function ResumePanel() {
     pageMeasure?.status === "ok" && pageMeasure.onePage && pageMeasure.contentPx
       ? pageMeasure.contentPx / pageMeasure.onePage
       : null;
+  /**
+   * 分页结果的挂载点：Paged.js 切好的那几张纸。
+   * 同时它也是一个「是否真分页成功」的开关 —— `paged` 为 false 时退回单张纸。
+   */
+  const pagedRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * 单张纸那一份。它有两个身份：分页失败时的回退档，以及**分页的内容来源**
+   * （编辑态根本没有纸面 DOM，只有预览这一份能克隆）。
+   */
+  const flatRef = useRef<HTMLDivElement | null>(null);
+  const [paged, setPaged] = useState(false);
+  /** 分页序号：切页之后上一轮迟到的结果直接丢掉，不许它盖掉新页 */
+  const pagedSeq = useRef(0);
 
   // 只在预览态有纸面，所以跟着 mode 重跑；切页也要重判（见 fit 里的分支）
   useEffect(() => {
@@ -334,6 +368,82 @@ export function ResumePanel() {
     for (const node of Array.from(strip.children)) observer.observe(node);
     return () => observer.disconnect();
   }, [measure, visible, showMore]);
+
+  /**
+   * 真分页：把这一页的成品切成若干张 A4。
+   *
+   * 为什么不能只画一条虚线：虚线只说得出「大约在这儿被切断」，说不出切断之后
+   * 什么样 —— 段落会不会被劈成两半、小标题会不会孤零零留在上一页，都得真排一遍
+   * 才看得见。预览的意义就是「所见即所印」，所以这里用 Paged.js 真的切一次。
+   *
+   * 三条纪律：
+   *   1. 失败必退档。抛错、0 张纸，都退回单张纸 + 虚线，只留一条 console.warn。
+   *      预览是只读的展示位，它白屏等于用户的内容丢了。
+   *   2. 分页结果是 cloneNode 的副本，事件不会跟过来 —— 那一块不许挂任何交互。
+   *   3. 只认预览这棵树。编辑态的分页没有意义，多跑一次只是白烧 CPU。
+   *
+   * 成品是**异步**编译出来的（Paper 内部 debounce + 一次 IPC），所以不能只在
+   * 进预览时跑一次：盯住回退档那棵树，DOM 一变就重排，否则模型改完内容，
+   * 分页还停在上一版。
+   */
+  useEffect(() => {
+    if (!preview) {
+      setPaged(false);
+      return;
+    }
+    const target = pagedRef.current;
+    const flat = flatRef.current;
+    if (!target || !flat) return;
+
+    let alive = true;
+    let timer = 0;
+
+    const run = async () => {
+      const source = flat.querySelector<HTMLElement>(".doc");
+      if (!source) {
+        setPaged(false);
+        return;
+      }
+      const seq = ++pagedSeq.current;
+      try {
+        await paginate(source, target, A4_W, A4_H, () => !alive || seq !== pagedSeq.current);
+        if (!alive || seq !== pagedSeq.current) return;
+        const count = target.querySelectorAll(".pagedjs_page").length;
+        if (!count) {
+          // 空白页切不出纸。退回单张纸 —— 它会显示「这一页还没有内容」，
+          // 比一个空白的预览区可信。
+          console.warn("[preview] 分页得到 0 张纸，退回单张纸");
+          resetPagination();
+        }
+        setPaged(count > 0);
+      } catch (error) {
+        if (!alive || seq !== pagedSeq.current) return;
+        console.warn("[preview] Paged.js 分页失败，退回单张纸 + 虚线", error);
+        resetPagination();
+        setPaged(false);
+      }
+    };
+    /** 一次编译会连着改好几处 DOM，攒一下再跑，别每处都重排一遍 */
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void run(), 180);
+    };
+
+    setPaged(false);
+    void run();
+    const observer = new MutationObserver(schedule);
+    observer.observe(flat, { childList: true, subtree: true, characterData: true });
+    return () => {
+      alive = false;
+      observer.disconnect();
+      window.clearTimeout(timer);
+      // 旧纸和它的样式一起收掉：Paged.js 插进 <head> 的样式不会自己走，
+      // 留着会把 `.doc` 的 padding 也一起抹掉（那里有一条从 @media print
+      // 展开出来的规则），回退档的单张纸就贴着纸边排了。
+      target.replaceChildren();
+      resetPagination();
+    };
+  }, [preview, page?.id]);
 
   // 纸面高度不再在这里量：测量统一归 provider 的离屏宿主（两套公式必然漂移），
   // 这里只读 pageMeasure（provider 的离屏实测），见下面的分页虚线与导出门。
@@ -734,18 +844,39 @@ export function ResumePanel() {
 
       {preview ? (
         <div className={styles.canvas} ref={canvasRef} data-print="flow">
+          {/* 真分页打出来的纸已经自带 16mm 页边距，@page 再给一次就等于打了两次边距
+              （内容会被整体缩小一圈）。@page 没法按选择器分支，只能换一条规则覆盖 ——
+              后注入的同名规则生效。 */}
+          {paged && (
+            <style>{`@media print { @page { size: ${A4_W} ${A4_H}; margin: 0; } }`}</style>
+          )}
           <div className={paperStyles.wrap} data-print="page" style={{ zoom: zoom / 100 }}>
-            <Paper person={person} page={page} />
-            {/* 虚线本身要跟着缩放走，但页高来自离屏实测（1:1），所以这里乘 zoom */}
-            {pages !== null && pages > TOLERANCE_MAX && (
-              <div
-                className={paperStyles.break}
-                style={{ top: (pageMeasure?.onePage ?? 0) * (zoom / 100) }}
-                aria-hidden
-              >
-                <span>A4</span>
-              </div>
-            )}
+            {/* 真分页的结果：几张真 A4 竖着排。这里是 cloneNode 的副本，
+                事件不会跟过来，所以一个交互也不许挂（点击、Hover 都没有意义）。 */}
+            <div
+              ref={pagedRef}
+              className={paperStyles.paged}
+              data-paged
+              // 用 style 而不是 hidden 属性：`.paged { display: flex }` 会盖掉
+              // [hidden] 的 UA 规则（那是 display:none !important 之外的一条普通规则）
+              style={{ display: paged ? undefined : "none" }}
+            />
+            {/* 回退档：单张纸 + A4 虚线，只在分页不可用时露面。
+                它必须一直挂着 —— 分页的内容来源就是这里。 */}
+            <div ref={flatRef} style={{ display: paged ? "none" : undefined }}>
+              <Paper person={person} page={page} />
+              {/* 虚线本身就在被缩放的坐标系里，top 直接用未缩放的 px：
+                  再乘一次 zoom 会缩两遍（47% 时会画到半页高的地方）。 */}
+              {!paged && pages !== null && pages > TOLERANCE_MAX && (
+                <div
+                  className={paperStyles.break}
+                  style={{ top: pageMeasure?.onePage ?? 0 }}
+                  aria-hidden
+                >
+                  <span>A4</span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       ) : (

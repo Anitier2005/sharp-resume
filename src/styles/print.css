@@ -54,6 +54,23 @@
     box-shadow: none;
   }
 
+  /* 真分页（Paged.js）的输出：每张纸自己就是一张 A4，页边距已经画在纸里，
+     所以这里只负责「一张一页」并去掉屏幕上的投影。
+     @page 的覆盖见 panel 注入的那一条 —— @page 不能按选择器分支。 */
+  [data-paged] {
+    display: block;
+    gap: 0;
+  }
+  [data-paged] .pagedjs_page {
+    break-after: page;
+    box-shadow: none;
+    border-radius: 0;
+  }
+  /* 最后一张不再强制分页，否则会多打一张白纸 */
+  [data-paged] .pagedjs_page:last-child {
+    break-after: auto;
+  }
+
   @page {
     margin: 16mm;
   }

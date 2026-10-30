@@ -16,6 +16,7 @@ import { loadWorkspace, saveWorkspace } from "@/lib/storage";
 import { describeChange, diff, flatten, type Flat } from "@/lib/changes";
 import { submitLayout } from "@/lib/layout";
 import { originOf, TOLERANCE_MAX, usePageMeasure } from "@/lib/measure";
+import { A4_W_PX } from "@/lib/paper-size";
 import {
   applyAgentActions,
   chatBridge,
@@ -716,8 +717,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
       {/* 编辑态没有纸面 DOM（面板只在预览分支挂 .paper），而默认视图就是编辑。
           实测只能从这份离屏实例取；预览那份只管显示，不许另起一套公式。
-          宽度必须固定：纸是 A4 等比缩略，跟着面板变就把字号与分页一起量歪了。
-          data-print="hide"：打印只留纸面元素，不藏这份就会多打出同样一页。 */}
+          宽度必须固定：纸是 1:1 的 A4（210mm = 793.7px），跟着面板变就把
+          字号与分页一起量歪了 —— 以前这里写 374，等于在缩略纸上量真 A4 的内容，
+          页数会大出约一倍。data-print="hide"：打印只留纸面元素，不藏这份就会
+          多打出同样一页。 */}
       {person && page && (
         <div
           aria-hidden
@@ -727,7 +730,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             position: "absolute",
             left: -9999,
             top: 0,
-            width: 374,
+            width: A4_W_PX,
             visibility: "hidden",
             pointerEvents: "none",
             zIndex: -1,

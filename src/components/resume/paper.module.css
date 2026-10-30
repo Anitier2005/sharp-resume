@@ -1,19 +1,27 @@
 /* ==========================================================================
-   纸面（A4 等比预览）
+   纸面（1:1 真 A4）
 
-   这里所有字号刻意用 px，不跟 UI 缩放：
-   纸面是 1mm ≈ 1.78px 的等比缩略（.paper 最小高 528px ≈ 297mm），
-   字号代表印刷字号，跟着 UI 缩放会让「预览 ≈ 导出」失真、A4 分页估算漂移。
-   需要更大的阅读尺寸请用状态栏的缩放控件。
+   纸就是 A4：210mm × 297mm（96dpi 下 ≈ 794px × 1123px），不再做等比缩略。
+
+   为什么要 1:1：这里和 `render/paper.css` 的字号、间距、页边距全是绝对 px。
+   缩略纸宽 374px 时一行只排得下 30 来个字，真 A4 一排 60 多个 —— 同一份内容
+   量出来的页数是真打印的两倍，排版 agent 于是被反复告知「实测 2.8 页、超出
+   1.8 页」，只好一路压字号、砍内容。纸先对齐物理尺寸，测量才有意义。
+
+   看起来和以前差不多大：默认缩放 47%（374 / 794 ≈ 0.47）。
+   缩放只走 CSS zoom，不改纸本身尺寸；字号跟着纸张一起缩，所以「预览 ≡ 打印」。
    ========================================================================== */
 
 /* 纸面外层：承载缩放与分页标记。
-   宽度固定、不跟容器收缩 —— 纸是 A4 等比缩略，一旦跟着面板变窄，
-   字号与分页估算就失真，整页扫描件（PDF/Word 原件）更会被压成一团糊。
-   面板放不下时由 .canvas 横向滚动，而不是把纸挤小。 */
+   宽度固定、不跟容器收缩 —— 一旦跟着面板变窄，字号与分页估算就失真，
+   整页扫描件（PDF/Word 原件）更会被压成一团糊。
+   面板放不下时由 .canvas 横向滚动，而不是把纸挤小。
+   `--paper-w/h` 是纸的唯一尺寸来源，.paper 与纸外的定位都读它。 */
 .wrap {
+  --paper-w: 210mm;
+  --paper-h: 297mm;
   position: relative;
-  width: 374px;
+  width: var(--paper-w);
   /* 弹性布局里不加这条会被压缩：`overflow:auto` 的父容器不会自己撑开子元素 */
   flex: none;
   margin: 0 auto;
@@ -21,8 +29,11 @@
 
 .paper {
   width: 100%;
-  max-width: 374px;
-  min-height: 528px;
+  /* 高度只给下限，**不能用 height**：内容比一页高时要真的长出去，
+     `usePageMeasure` 正是拿 offsetHeight 当「这一页有多高」。写死高度会把它
+     永远量成 297mm，页数恒等于 1 —— 那比量不准更糟，是完全量不到。 */
+  min-height: var(--paper-h, 297mm);
+  box-sizing: border-box;
   align-self: flex-start;
   /* 页边距归内容层（预设 CSS 里的 .doc padding）：纸只负责尺寸、底色与边框。
      以前这里用 --p-margin 写死内边距，等于把页边距锁在纸这一级，
@@ -32,6 +43,34 @@
   border: 1px solid var(--paper-line);
   border-radius: 3px;
   box-shadow: var(--shadow-paper);
+}
+
+/* ---------- 真分页（Paged.js 的输出） ---------- */
+/* 分页可用时，这里是几张真 A4 纸竖着排；不可用时整块不显示，退回单张纸 + 虚线。
+   `.pagedjs_page` 是 Paged.js 自己的类名，只能走 :global。 */
+.paged {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.paged :global(.pagedjs_page) {
+  background: var(--paper);
+  border-radius: 3px;
+  box-shadow: var(--shadow-paper);
+}
+
+/* ---------- 离屏测量宿主 ---------- */
+/* 宿主按**打印口径**量：@page 的 16mm 边距在这里用纸的内边距模拟，内容层不再留
+   第二次（对应 `@media print` 里 `.doc { padding: 0 }`）。
+   不这么做的话，宿主里是「34px 内容内边距 + 0 页边距」，真打印是「0 + 16mm」，
+   内容区宽度差了 7%、高度差 5%，实测页数会系统性偏大。
+   这条规则只命中宿主，看得见的预览不受影响。 */
+[data-measure="host"] .paper {
+  padding: 16mm;
+}
+[data-measure="host"] .paper :global(.doc) {
+  padding: 0;
 }
 
 /* 编译结果还没回来：留一块空白占位，避免先闪一下旧内容 */
