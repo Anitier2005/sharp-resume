@@ -243,6 +243,37 @@
   background: var(--bg-canvas);
   overflow: auto;
 }
+/* 能滚才给「抓手」：内容比画布大时按住就能平移。
+   `grab` 只在真能滚的时候加 —— 放得下也显示抓手，等于骗用户拖一下。 */
+.canvas[data-pannable] {
+  cursor: grab;
+}
+/* 拖拽中：手指攥起来，并且**临时**禁掉文字选择。
+   常驻 user-select:none 会把「选一段复制」一起废掉，所以只在这一个状态下挂。
+   必须连子元素一起压住：纸面自己标了 `data-selectable`（那是 Ctrl+A 与拖选的
+   入口），只写画布没用 —— 选择权在纸面上，拖两下就带出一片反白。 */
+.canvas[data-panning],
+.canvas[data-panning] * {
+  cursor: grabbing;
+  user-select: none !important;
+}
+
+/* ---------- 实际纸张数 ---------- */
+/* 和缩放并排，顶在预览底栏最左边（`margin-right: auto` 把它和右侧的缩放推开）。
+   不浮在纸面上：纸的右上角常常是证件照，压上去就成了「挡内容」。
+   pointer-events: none —— 它只是说个数，不该抢到任何一次点击。 */
+.sheets {
+  margin-right: auto;
+  align-self: center;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.65625rem;
+  line-height: 1.6;
+  color: var(--fg-3);
+  pointer-events: none;
+  user-select: none;
+}
 
 /* ---------- 状态栏 ---------- */
 /* 只剩缩放：整条不再画边框与底色，滚轮区看起来是连成一片的。

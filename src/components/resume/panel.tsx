@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useWorkspace } from "@/store/workspace";
 import { useToast } from "@/components/ui/toast-context";
@@ -66,6 +67,20 @@ const DEFAULT_ZOOM = Math.round((374 / A4_W_PX) * 100);
 
 const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(value)));
 
+/**
+ * 自动适配用的取整：**向下**取整，不四舍五入。
+ *
+ * 45.9% 舍成 46% 只多 1px，可纸有 794 宽，1px 就够让画布长出横向滚动条
+ * （多出来那条把整页往右挤，用户看到的反而是「纸被切了一刀」）。
+ * 适配这件事宁可少 1%，不许多 1px。
+ */
+const autoZoom = (ratio: number) => clampZoom(Math.floor(ratio * 100 + 1e-9));
+
+/** 判「能不能拖」用的容差：1px 的亚像素误差不算可滚 */
+const SCROLL_EPS = 1;
+/** 拖拽阈值：小于它算点击的手抖，不算要平移 */
+const PAN_THRESHOLD = 3;
+
 /** 图片判定与 `saveAsset` 保持同一口径（MIME 或扩展名任一命中） */
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif", "svg"]);
 function isImageFile(file: File): boolean {
@@ -121,6 +136,14 @@ export function ResumePanel() {
    * width = 铺满宽度（宽面板就该铺满，允许超过 100%，上限 400%）。
    */
   const fitMode = useRef<"page" | "width">("page");
+  /**
+   * 「再适配一次」的入口。
+   *
+   * 适配不只在画布尺寸变的时候要做：**分页完成**换掉的是内容层（一张 210mm
+   * 的占位变成 N 张真纸），画布自己的盒子可能一点没变，ResizeObserver 不会响。
+   * 分页那一支要能主动叫一次，所以把适配函数挂到 ref 上。
+   */
+  const refit = useRef<() => void>(() => {});
 
   /** 只改倍率本身：所有写入都经过它，zoomRef 才不会和 state 走散 */
   const applyZoom = useCallback((next: number) => {
@@ -128,20 +151,41 @@ export function ResumePanel() {
     setZoom(next);
   }, []);
 
-  /** 按画布可用宽度算一档倍率；量不到画布（不在预览）返回 null */
-  const fitZoom = useCallback((kind: "page" | "width") => {
-    const el = canvasRef.current;
-    if (!el) return null;
-    const ratio = (el.clientWidth - CANVAS_PAD) / PAPER_W;
-    // 整页档：上限是「和改前那张小纸等宽」的 47%，面板再宽也不继续放大 ——
-    // 1:1 的 A4 铺满宽面板只会变成一屏糊字，反而看不出整页结构。
-    // 面板太窄时按上限的 68% 收缩，和改前「最小 68%」的观感对齐。
-    if (kind === "page") {
-      const cap = DEFAULT_ZOOM / 100;
-      return clampZoom(Math.max(cap * 0.68, Math.min(cap, ratio)) * 100);
-    }
-    return clampZoom(ratio * 100);
+  /**
+   * 纸的**排版宽度**（未经缩放的 px）。
+   *
+   * 分页之后纸是 Paged.js 造的 `.pagedjs_page`，它的 `offsetWidth` 是 794
+   * （它自己按 mm 取整算出来的），和常量 `A4_W_PX` 的 793.7 差 0.3px ——
+   * 在 47% 档上这点差被四舍五入放大成 1px 的横向溢出。所以有真纸就量真纸，
+   * 没有（回退档的单张纸，宽度就是 `.wrap` 的 210mm）才退回常量。
+   *
+   * `offsetWidth` 读的是**布局**宽度，不跟着祖先的 `zoom` 变
+   * （zoom 只改绘制和 `getBoundingClientRect`），所以这里读到的永远是
+   * 794 而不是「794×当前倍率」—— 正好是算比例该用的基准。
+   */
+  const paperWidth = useCallback(() => {
+    const page = pagedRef.current?.querySelector<HTMLElement>(".pagedjs_page");
+    const measured = page?.offsetWidth ?? 0;
+    return measured > 0 ? measured : PAPER_W;
   }, []);
+
+  /** 按画布可用宽度算一档倍率；量不到画布（不在预览）返回 null */
+  const fitZoom = useCallback(
+    (kind: "page" | "width") => {
+      const el = canvasRef.current;
+      if (!el) return null;
+      const ratio = (el.clientWidth - CANVAS_PAD) / paperWidth();
+      // 整页档：上限是「和改前那张小纸等宽」的 47%，面板再宽也不继续放大 ——
+      // 1:1 的 A4 铺满宽面板只会变成一屏糊字，反而看不出整页结构。
+      // 面板太窄时按上限的 68% 收缩，和改前「最小 68%」的观感对齐。
+      if (kind === "page") {
+        const cap = DEFAULT_ZOOM / 100;
+        return autoZoom(Math.max(cap * 0.68, Math.min(cap, ratio)));
+      }
+      return autoZoom(ratio);
+    },
+    [paperWidth],
+  );
 
   /**
    * 改倍率并把画布滚动位置按比例校正。
@@ -240,8 +284,32 @@ export function ResumePanel() {
    */
   const flatRef = useRef<HTMLDivElement | null>(null);
   const [paged, setPaged] = useState(false);
+  /**
+   * 分页切出来的**纸张数**（≠「第 N 页 / 共 M 页」里的页数）。
+   *
+   * 这两个数说的是两件事：页是简历的段数，纸是这一页排出来占了几张 A4。
+   * 一页切成两张纸时，状态栏仍然写着「第 1 页 / 共 3 页」—— 用户于是以为
+   * 「没分页」。所以纸张数必须在预览区自己说出来。
+   */
+  const [sheets, setSheets] = useState(0);
   /** 分页序号：切页之后上一轮迟到的结果直接丢掉，不许它盖掉新页 */
   const pagedSeq = useRef(0);
+
+  /**
+   * 内容比画布大才挂 `data-pannable`（CSS 靠它给抓手手势）。
+   *
+   * 直接写 DOM 而不是进 state：这是「把量到的结果标到外部对象上」，
+   * 进 state 只会多一轮渲染，滚动条一出现/消失还会跟着抖。
+   */
+  const syncPannable = useCallback(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const scrollable =
+      el.scrollWidth > el.clientWidth + SCROLL_EPS ||
+      el.scrollHeight > el.clientHeight + SCROLL_EPS;
+    if (scrollable) el.dataset.pannable = "1";
+    else delete el.dataset.pannable;
+  }, []);
 
   // 只在预览态有纸面，所以跟着 mode 重跑；切页也要重判（见 fit 里的分支）
   useEffect(() => {
@@ -260,11 +328,110 @@ export function ResumePanel() {
     // 切页 / 进预览：回到自动档 —— 上一页手动调的倍率不该跟过来
     manual.current = false;
     fitMode.current = "page";
+    refit.current = fit;
     fit();
+    syncPannable();
     const observer = new ResizeObserver(fit);
     observer.observe(el);
-    return () => observer.disconnect();
-  }, [mode, page?.id, page?.kind, fitZoom, zoomTo]);
+    return () => {
+      observer.disconnect();
+      refit.current = () => {};
+    };
+  }, [mode, page?.id, page?.kind, fitZoom, zoomTo, syncPannable]);
+
+  /**
+   * 分页结果换了内容层，就地再适配一次。
+   *
+   * 必须放在 layout 阶段：分页那一步 `setPaged(true)` 之后，画布里的东西从
+   * 「一张 210mm 的占位」变成「N 张真纸」，而画布自己的盒子常常一点没变
+   * （滚动条早就在了）—— ResizeObserver 不会响，于是倍率停在按**旧内容**
+   * 算出来的那一档上。47% 的档位量给 794 的纸正好，量给别的宽度就会整张溢出。
+   * 放到 layout 里重算，用户看不到中间那一帧。
+   */
+  useLayoutEffect(() => {
+    if (!preview) return;
+    refit.current();
+    syncPannable();
+  }, [preview, paged, sheets, syncPannable]);
+
+  // 倍率一变，能不能拖也跟着变（放大到 100% 才需要拖）
+  useEffect(() => {
+    syncPannable();
+  }, [zoom, paged, syncPannable]);
+
+  /**
+   * 按住拖动 = 平移画布。
+   *
+   * 为什么要有：纸是 1:1 的真 A4，47% 时整张放得下，可一旦放大到 100% 以上，
+   * 一屏只看得到纸的一角 —— 只靠滚动条拖，鼠标得先跑到底下那条细线上，
+   * 手感和「这张纸能不能动」完全不是一回事。预览里没有需要拖选的正文
+   * （那是只读成品），所以左键整块让给平移，不会抢走别的交互。
+   *
+   * 三条纪律：
+   *   1. 只在真能滚的时候接管，否则「拖了没反应」比不能拖更让人困惑；
+   *   2. 从按钮上起手不算拖拽 —— 回退档纸面上还有批注针要点；
+   *   3. 拖动期间临时 `user-select: none`，松手就摘掉：常驻会把预览里
+   *      「选一段文字复制」也一起废掉。
+   */
+  const panState = useRef<{
+    x: number;
+    y: number;
+    left: number;
+    top: number;
+    id: number;
+    moved: boolean;
+  } | null>(null);
+  const [panning, setPanning] = useState(false);
+
+  const panStart = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const el = event.currentTarget;
+    if ((event.target as HTMLElement).closest("button, a, input, textarea, select")) return;
+    if (
+      el.scrollWidth <= el.clientWidth + SCROLL_EPS &&
+      el.scrollHeight <= el.clientHeight + SCROLL_EPS
+    ) {
+      return;
+    }
+    panState.current = {
+      x: event.clientX,
+      y: event.clientY,
+      left: el.scrollLeft,
+      top: el.scrollTop,
+      id: event.pointerId,
+      moved: false,
+    };
+    // 捕获指针：鼠标滑出画布（甚至滑出窗口）也还在拖，不会半路丢掉 move
+    el.setPointerCapture(event.pointerId);
+  }, []);
+
+  const panMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = panState.current;
+    if (!pan || pan.id !== event.pointerId) return;
+    const dx = event.clientX - pan.x;
+    const dy = event.clientY - pan.y;
+    if (!pan.moved) {
+      // 手抖 1px 不算拖：过阈值才认，免得点一下就把画面挪走
+      if (Math.hypot(dx, dy) < PAN_THRESHOLD) return;
+      pan.moved = true;
+      setPanning(true);
+      // 认了拖拽就把已经选起来的文字清掉，松手不会留下一片反白
+      window.getSelection()?.removeAllRanges();
+    }
+    const el = event.currentTarget;
+    el.scrollLeft = pan.left - dx;
+    el.scrollTop = pan.top - dy;
+  }, []);
+
+  const panEnd = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = panState.current;
+    if (!pan) return;
+    panState.current = null;
+    const el = event.currentTarget;
+    // 捕获一定要还回去：留着的话后续的 pointer 事件会全被这个节点截走
+    if (el.hasPointerCapture(pan.id)) el.releasePointerCapture(pan.id);
+    if (pan.moved) setPanning(false);
+  }, []);
 
   // Ctrl+滚轮缩放。必须用原生监听器：React 把 onWheel 挂在根节点上是 passive 的，
   // 里面调 preventDefault 只会得到一条控制台警告，画布照旧滚。
@@ -389,6 +556,7 @@ export function ResumePanel() {
   useEffect(() => {
     if (!preview) {
       setPaged(false);
+      setSheets(0);
       return;
     }
     const target = pagedRef.current;
@@ -402,6 +570,7 @@ export function ResumePanel() {
       const source = flat.querySelector<HTMLElement>(".doc");
       if (!source) {
         setPaged(false);
+        setSheets(0);
         return;
       }
       const seq = ++pagedSeq.current;
@@ -415,11 +584,13 @@ export function ResumePanel() {
           console.warn("[preview] 分页得到 0 张纸，退回单张纸");
           resetPagination();
         }
+        setSheets(count);
         setPaged(count > 0);
       } catch (error) {
         if (!alive || seq !== pagedSeq.current) return;
         console.warn("[preview] Paged.js 分页失败，退回单张纸 + 虚线", error);
         resetPagination();
+        setSheets(0);
         setPaged(false);
       }
     };
@@ -843,7 +1014,18 @@ export function ResumePanel() {
       </div>
 
       {preview ? (
-        <div className={styles.canvas} ref={canvasRef} data-print="flow">
+        <div
+          className={styles.canvas}
+          ref={canvasRef}
+          data-print="flow"
+          // data-pannable 由 syncPannable 直接写（量到才挂），这里只管拖拽态
+          data-panning={panning ? "1" : undefined}
+          onPointerDown={panStart}
+          onPointerMove={panMove}
+          onPointerUp={panEnd}
+          onPointerCancel={panEnd}
+          onLostPointerCapture={panEnd}
+        >
           {/* 真分页打出来的纸已经自带 16mm 页边距，@page 再给一次就等于打了两次边距
               （内容会被整体缩小一圈）。@page 没法按选择器分支，只能换一条规则覆盖 ——
               后注入的同名规则生效。 */}
@@ -904,9 +1086,19 @@ export function ResumePanel() {
         />
       )}
 
-      {/* 只留缩放：页码、字数、保存状态都在窗口底部的统一状态栏里 */}
+      {/* 只留缩放与纸张数：页码、字数、保存状态都在窗口底部的统一状态栏里 */}
       {preview && (
         <div className={styles.foot} data-print="hide">
+          {/* 实际纸张数：分页成功才有。
+              它说的是「这一页排出来占了几张 A4」，和状态栏那个「第 N 页 / 共 M 页」
+              （简历的段数）不是一回事 —— 一页切成两张纸时，后者仍然写着「共 1 页」，
+              用户就会以为分页没生效。放在底栏而不是浮在纸上：纸面右上角常常是
+              证件照，压上去就是「挡内容」。 */}
+          {paged && sheets > 0 && (
+            <div className={styles.sheets} aria-live="polite">
+              共 {sheets} 张纸
+            </div>
+          )}
           <div className={styles.zoomCtl}>
             <button
               type="button"
