@@ -222,6 +222,7 @@ pub fn run(
                 &person.items,
                 &assets,
                 &accent,
+                &crate::docx::DocxOptions::for_page(&resume.paper, page),
             );
             crate::storage::atomic_write(&target, &bytes)?;
         }
