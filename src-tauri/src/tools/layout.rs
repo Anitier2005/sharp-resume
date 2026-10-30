@@ -15,6 +15,7 @@
 //! 组件清单见 `render::GUIDE`，由 `read_layout_guide` 按需取，不占常驻上下文。
 
 use serde_json::{json, Value};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::render;
 use crate::tools::{push_action, ToolCtx};
@@ -59,6 +60,267 @@ fn page_id_of(args: &Value, ctx: &ToolCtx) -> String {
 /// 悄悄截断会产出一份半截的版面，比报错更难查。
 const MAX_PART_CHARS: usize = 6_000;
 const MAX_HTML_CHARS: usize = 30_000;
+
+/// 页头版式的合法值，直接问生成器要 —— 校验与生成必须是同一份清单，
+/// 否则会出现「工具认了、`render_head` 不认」的空操作。
+const HEAD_STYLES: [&str; 5] = render::HEAD_STYLES;
+
+/* ---------- 文字锁 ---------- */
+
+/// 排版模型能改版面，不能改内容。
+///
+/// 这条锁是**比对纯文本**而不是比对 HTML：class、标签、包裹方式随便换，
+/// 只要印在纸上的字一个不多一个不少就放行。它挡的是真实发生过的事 ——
+/// 排版模型为了「压进一页」把要点里的半句话删掉／改写，用户看到的是
+/// 一份自己没写过的简历。
+///
+/// 归一规则（两边用同一套，否则会误伤正当的排版）：
+///   1. 去掉零宽字符、软连字符（复制粘贴带进来的，纸上根本看不见）
+///   2. NFKC：全角字母、康熙部首、带圈数字这些「长得一样、码位不同」的字符归一
+///   3. 压空白：换行、多空格、制表符都变一个空格
+fn normalize_text(raw: &str) -> String {
+    let visible: String = raw.chars().filter(|ch| !is_invisible(*ch)).collect();
+    collapse(&visible.nfkc().collect::<String>())
+}
+
+fn is_invisible(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{00ad}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{2060}'..='\u{2064}' | '\u{feff}'
+    )
+}
+
+/// 一段 HTML 印在纸上的样子：去标签、解实体、归一。
+///
+/// 这是文字的**定义**，不只是内部工具：单测与以后的差异高亮都从这里取。
+#[allow(dead_code)]
+pub(crate) fn text_of_html(html: &str) -> String {
+    normalize_text(&strip_html(html))
+}
+
+/// 去标签 + 解实体 + 压空白，但**不做 NFKC**。
+///
+/// 比对走归一后的文本；报错里引原文要走这个 —— 归一会把全角冒号压成半角，
+/// 「原文：职位:实习生」这种字面量模型认不出来是自己写的哪一句。
+fn strip_html(html: &str) -> String {
+    let mut raw = String::with_capacity(html.len());
+    let mut chars = html.chars().peekable();
+    let mut in_tag = false;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => {
+                in_tag = false;
+                // 标签两侧本来是两个词：`<h2>工作</h2><li>要点</li>` 直接拆会粘成
+                // 「工作要点」。补空格再压空白，两边才对得上
+                raw.push(' ');
+            }
+            _ if in_tag => {}
+            '&' => raw.push_str(&take_entity(&mut chars)),
+            _ => raw.push(ch),
+        }
+    }
+    collapse(&raw)
+}
+
+/// 换行、多空格、制表符都压成一个空格
+fn collapse(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// 读一个 `&…;` 实体。认不出来就原样吐回 `&name` —— 宁可多留一个 & 也不吞字。
+fn take_entity(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
+    let mut name = String::new();
+    let mut closed = false;
+    while let Some(&ch) = chars.peek() {
+        if ch == ';' {
+            chars.next();
+            closed = true;
+            break;
+        }
+        if name.len() >= 8 || !(ch.is_ascii_alphanumeric() || ch == '#') {
+            break;
+        }
+        name.push(ch);
+        chars.next();
+    }
+    if closed {
+        if let Some(text) = decode_entity(&name) {
+            return text;
+        }
+    }
+    format!("&{name}")
+}
+
+fn decode_entity(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    let named = match lower.as_str() {
+        "amp" => "&",
+        "lt" => "<",
+        "gt" => ">",
+        "quot" => "\"",
+        "apos" => "'",
+        "nbsp" => " ",
+        "middot" => "·",
+        "hellip" => "…",
+        "mdash" => "—",
+        "ndash" => "–",
+        "ldquo" => "“",
+        "rdquo" => "”",
+        "lsquo" => "‘",
+        "rsquo" => "’",
+        "bull" => "•",
+        "times" => "×",
+        _ => "",
+    };
+    if !named.is_empty() {
+        return Some(named.to_string());
+    }
+    let code = if let Some(hex) = lower.strip_prefix("#x") {
+        u32::from_str_radix(hex, 16).ok()?
+    } else if let Some(decimal) = lower.strip_prefix('#') {
+        decimal.parse::<u32>().ok()?
+    } else {
+        return None;
+    };
+    char::from_u32(code).map(|ch| ch.to_string())
+}
+
+/// 一个字段印在纸上的样子。
+///
+/// `lead` = 首字段：页头与条目的第一个字段只印值、不印标签（「张三」而不是
+/// 「姓名：张三」）。其余按「标签：值」印，与前端 `fieldText` 同一规则。
+/// 图片字段返回空串：它的文字是图注，页头那张证件照更是一个字都不印。
+fn field_text(field: &Value, lead: bool) -> String {
+    if field
+        .get("assetId")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.trim().is_empty())
+    {
+        return String::new();
+    }
+    let value = field.get("value").and_then(Value::as_str).unwrap_or("").trim();
+    let label = field.get("label").and_then(Value::as_str).unwrap_or("").trim();
+    if lead {
+        return if value.is_empty() {
+            label.to_string()
+        } else {
+            value.to_string()
+        };
+    }
+    match (label.is_empty(), value.is_empty()) {
+        (true, _) => value.to_string(),
+        (false, true) => format!("{label}："),
+        (false, false) => format!("{label}：{value}"),
+    }
+}
+
+fn strings_of(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 块的结构化纯文本（归一后）。
+///
+/// 生成器对同一份内容有几种排法（页头把首字段当大标题、字段组全部带标签、
+/// tags/kv/table 每条只取第一个字段），纯文本因此不止一种合法形态。
+/// 这里给出**一种**（页头/分区那种最常见的），比对时用 `text_variants` 取全集。
+#[allow(dead_code)]
+pub(crate) fn text_of_block(block: &Value) -> String {
+    text_variants(block).remove(0)
+}
+
+/// 这一块的纯文本可能长成的所有样子（归一后）。命中任意一种就算没改字。
+pub(crate) fn text_variants(block: &Value) -> Vec<String> {
+    raw_variants(block)
+        .iter()
+        .map(|text| normalize_text(text))
+        .collect()
+}
+
+/// 同上，但不做 NFKC —— 报错里引原文要用它，见 `strip_html` 的注释。
+fn raw_variants(block: &Value) -> Vec<String> {
+    let title = block.get("title").and_then(Value::as_str).unwrap_or("").trim();
+    let fields = block.get("fields").and_then(Value::as_array);
+    let items = block.get("items").and_then(Value::as_array);
+
+    // 三种形态：页头（首字段只取值，条目全展开）/ 字段组（全部带标签）/ 每条只取首字段
+    // （tags、kv、table 三档每条只印第一个字段）
+    let shapes: Vec<(bool, bool)> = vec![(true, true), (false, true), (true, false)];
+
+    let mut out = Vec::new();
+    for (lead_fields, all_entry_fields) in shapes {
+        let mut parts: Vec<String> = Vec::new();
+        if !title.is_empty() {
+            parts.push(title.to_string());
+        }
+        if let Some(fields) = fields {
+            for (index, field) in fields.iter().enumerate() {
+                let lead = lead_fields && index == 0;
+                let text = field_text(field, lead);
+                if !text.is_empty() {
+                    parts.push(text);
+                }
+            }
+        }
+        if let Some(items) = items {
+            for item in items {
+                if let Some(fields) = item.get("fields").and_then(Value::as_array) {
+                    for (index, field) in fields.iter().enumerate() {
+                        // 形态三：每条只有首字段进纸面（tags / kv / table）
+                        if !all_entry_fields && index > 0 {
+                            continue;
+                        }
+                        let text = field_text(field, index == 0);
+                        if !text.is_empty() {
+                            parts.push(text);
+                        }
+                    }
+                }
+                parts.extend(strings_of(item.get("bullets")));
+            }
+        }
+        parts.extend(strings_of(block.get("caption")));
+        out.push(collapse(&parts.join(" ")));
+    }
+    out.dedup();
+    out
+}
+
+/// 报错里引原文时截前 40 字：够认出是哪一段，又不至于把一整段回显给模型。
+fn preview(text: &str) -> String {
+    let head: String = text.chars().take(40).collect();
+    format!("{head}…")
+}
+
+/// 块的「标题」：报错时要说清是哪一块。分区有 title，字段组只能拿第一个值。
+fn block_label(block: &Value) -> String {
+    let title = block.get("title").and_then(Value::as_str).unwrap_or("").trim();
+    if !title.is_empty() {
+        return title.to_string();
+    }
+    if let Some(value) = block
+        .get("fields")
+        .and_then(Value::as_array)
+        .and_then(|fields| fields.first())
+    {
+        let text = field_text(value, true);
+        if !text.is_empty() {
+            return text;
+        }
+    }
+    block.get("id").and_then(Value::as_str).unwrap_or("").to_string()
+}
+
 
 /* ---------- 会话 agent：转交 ---------- */
 
@@ -126,8 +388,13 @@ pub fn set_layout_params() -> Value {
             "pageId": { "type": "string", "description": "要排的页；不传就是当前页" },
             "preset": {
                 "type": "string",
-                "enum": ["classic", "compact", "roomy", "custom"],
-                "description": "整体疏密。compact 把内容压进一页、roomy 更透气、classic 是默认；custom 表示字号间距都被你手改过"
+                "enum": ["classic", "compact", "dense", "roomy", "custom"],
+                "description": "整体疏密。compact 把内容压进一页、dense 是原件级（字号行距都贴着原件）、roomy 更透气、classic 是默认；custom 表示字号间距都被你手改过"
+            },
+            "head": {
+                "type": "string",
+                "enum": ["", "center", "bare", "thick", "aside"],
+                "description": "页头版式。aside 是原件最常见的排法：姓名与联系方式居中、照片贴右上角；center 整体居中；bare 不画分隔线；thick 粗分隔线。不传就维持现状，传空串回到生成器默认"
             },
             "parts": {
                 "type": "object",
@@ -195,6 +462,28 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         notes.push(format!("预设 {preset}"));
     }
 
+    if let Some(head) = args.get("head").and_then(Value::as_str) {
+        let head = head.trim();
+        if !HEAD_STYLES.contains(&head) {
+            return Err(format!("head 只能是 {}", HEAD_STYLES[1..].join(" / ")));
+        }
+        if head.is_empty() {
+            layout.remove("head");
+            notes.push("页头回到生成器默认".to_string());
+        } else {
+            layout.insert("head".into(), json!(head));
+            // 绝对定位关着时照片只能跟文字并排。这不是失败，是还没到那一步 ——
+            // 但必须说出来：模型看不见渲染结果，不说它就会以为照片已经在右上角了
+            if head == "aside" && !render::ALLOW_ABSOLUTE {
+                notes.push(
+                    "页头 aside：照片无法绝对定位，已降级为左右两栏（等分页引擎接上再开）".to_string(),
+                );
+            } else {
+                notes.push(format!("页头 {head}"));
+            }
+        }
+    }
+
     if let Some(html) = args.get("html").and_then(Value::as_str) {
         let html = html.trim();
         if html.is_empty() {
@@ -216,14 +505,10 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         if parts.is_empty() {
             return Err("parts 是空的：要么给至少一个块，要么用 reset 清空".into());
         }
-        let known: Vec<&str> = page
+        let blocks: Vec<&Value> = page
             .get("blocks")
             .and_then(Value::as_array)
-            .map(|list| {
-                list.iter()
-                    .filter_map(|block| block.get("id").and_then(Value::as_str))
-                    .collect()
-            })
+            .map(|list| list.iter().collect())
             .unwrap_or_default();
 
         let mut merged = layout
@@ -233,16 +518,24 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
             .unwrap_or_default();
 
         for (block_id, raw) in parts {
-            if !known.contains(&block_id.as_str()) {
-                return Err(format!(
-                    "没有 id 为 {block_id} 的块。这一页的块是：{}（先用 read_page 看准确 id）",
-                    if known.is_empty() {
-                        "（没有块）".to_string()
-                    } else {
-                        known.join(" / ")
-                    }
-                ));
-            }
+            let index = blocks
+                .iter()
+                .position(|block| block.get("id").and_then(Value::as_str) == Some(block_id.as_str()))
+                .ok_or_else(|| {
+                    format!(
+                        "块 {block_id} 不存在。这一页的块是：{}（先用 read_page 看准确 id）",
+                        if blocks.is_empty() {
+                            "（没有块）".to_string()
+                        } else {
+                            blocks
+                                .iter()
+                                .filter_map(|block| block.get("id").and_then(Value::as_str))
+                                .collect::<Vec<_>>()
+                                .join(" / ")
+                        }
+                    )
+                })?;
+            let block = blocks[index];
             let html = raw
                 .as_str()
                 .ok_or_else(|| format!("块 {block_id} 的 HTML 必须是字符串"))?;
@@ -258,6 +551,21 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
                     "块 {block_id} 的 HTML 有 {len} 字，超过 {MAX_PART_CHARS} 字上限。只写这一块真正需要的内容"
                 ));
             }
+            // 文字锁：只比印在纸上的字。图片块没有文字，跳过
+            // （媒体块的 caption 不算 —— 它不是模型改的那部分内容）
+            if block.get("kind").and_then(Value::as_str) != Some("media") {
+                let written_raw = strip_html(html);
+                let written = normalize_text(&written_raw);
+                if !text_variants(block).iter().any(|text| text == &written) {
+                    return Err(format!(
+                        "第 {} 块「{}」的文字被改动了，排版不许改内容。原文：{}；你写的是：{}。要改内容请调 ask_session。",
+                        index + 1,
+                        block_label(block),
+                        preview(&raw_variants(block).remove(0)),
+                        preview(&written_raw)
+                    ));
+                }
+            }
             merged.insert(block_id.clone(), json!(html));
             notes.push(format!("块 {block_id} 手写 {len} 字"));
         }
@@ -270,7 +578,7 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
     }
 
     if notes.is_empty() {
-        return Err("没有要改的项：至少给 preset / parts / html / reset 之一".into());
+        return Err("没有要改的项：至少给 preset / head / parts / html / reset 之一".into());
     }
 
     push_action(
@@ -512,9 +820,114 @@ mod tests {
         json!({ "people": [{ "id": "p1", "resumes": [{
             "id": "r1",
             "pages": [{ "id": "pg1", "label": "第一页", "blocks": [
-                { "id": "b1", "kind": "section", "title": "工作" }
+                { "id": "b1", "kind": "fields", "fields": [
+                    { "id": "f1", "label": "姓名", "value": "谭轶天" },
+                    { "id": "f2", "label": "联系", "value": "男 · 20 岁 · 159****1234" },
+                    { "id": "f3", "label": "照片", "value": "", "assetId": "a1" }
+                ]},
+                { "id": "b2", "kind": "section", "title": "实习与项目经历", "items": [{
+                    "id": "e1",
+                    "fields": [
+                        { "id": "e1a", "label": "公司", "value": "铁未来" },
+                        { "id": "e1b", "label": "职位", "value": "实习生" }
+                    ],
+                    "bullets": ["通过定性方法定位入门难点并改进赛制，同时调整模型参数增强经济模拟的真实性"]
+                }]},
+                { "id": "b3", "kind": "media", "assetId": "a1", "caption": "作品" }
             ] }]
         }]}] })
+    }
+
+    /// 文字锁：改一个字（定性 → 定量）必须被拒，且文案指到具体块
+    #[test]
+    fn text_lock_rejects_a_single_changed_word() {
+        let err = run(
+            None,
+            json!({ "parts": { "b2": "<section class=\"sec\"><h2>实习与项目经历</h2><div class=\"entry\"><b>铁未来</b><div class=\"meta\">职位：实习生</div><ul><li>通过定量方法定位入门难点并改进赛制，同时调整模型参数增强经济模拟的真实性</li></ul></div></section>" } }),
+        )
+        .unwrap_err();
+        assert!(err.starts_with("第 2 块「实习与项目经历」的文字被改动了"), "{err}");
+        assert!(err.contains("排版不许改内容"), "{err}");
+        assert!(err.contains("原文：实习与项目经历 铁未来 职位：实习生 通过定性方法"), "{err}");
+        assert!(err.contains("你写的是：实习与项目经历 铁未来 职位：实习生 通过定量方法"), "{err}");
+        assert!(err.ends_with("要改内容请调 ask_session。"), "{err}");
+    }
+
+    /// 文字锁：只换 class / 结构 / 标签，一个字不改 —— 必须放行
+    #[test]
+    fn text_lock_lets_a_pure_relayout_through() {
+        let text = run(
+            None,
+            json!({ "parts": { "b2": "<section class=\"sec tight\"><h2 class=\"t\">实习与项目经历</h2><div class=\"entry row\"><b>铁未来</b><span class=\"meta\">职位：实习生</span><ul class=\"bullets\"><li>通过定性方法定位入门难点并改进赛制，同时调整模型参数增强经济模拟的真实性</li></ul></div></section>" } }),
+        )
+        .unwrap();
+        assert!(text.contains("这一页的版面已更新"), "{text}");
+        assert!(text.contains("块 b2 手写"), "{text}");
+    }
+
+    /// 图片块没有文字，不该被文字锁拦住
+    #[test]
+    fn text_lock_skips_media_blocks() {
+        let text = run(
+            None,
+            json!({ "parts": { "b3": "<figure class=\"fig wide\"><img src=\"asset:a1\" alt=\"\"><figcaption>作品</figcaption></figure>" } }),
+        )
+        .unwrap();
+        assert!(text.contains("块 b3 手写"), "{text}");
+    }
+
+    /// 不存在的块要报「块 x 不存在」，不要静默放行
+    #[test]
+    fn unknown_block_is_an_error() {
+        let err = run(None, json!({ "parts": { "b9": "<p>随便写</p>" } })).unwrap_err();
+        assert!(err.contains("块 b9 不存在"), "{err}");
+    }
+
+    #[test]
+    fn text_of_html_strips_tags() {
+        assert_eq!(
+            text_of_html("<section><h2>标题</h2><ul><li>要点</li></ul></section>"),
+            "标题 要点"
+        );
+    }
+
+    #[test]
+    fn text_of_html_collapses_whitespace() {
+        assert_eq!(text_of_html("  <p>工作\n\n   经历\t·  实习 </p> "), "工作 经历 · 实习");
+    }
+
+    /// 全角字母、零宽字符都是「看着一样、码位不同」，不归一会误伤正当排版
+    #[test]
+    fn text_of_html_normalizes_fullwidth_and_zero_width() {
+        assert_eq!(text_of_html("<b>ＡＢＣ１２３</b>"), "ABC123");
+        assert_eq!(text_of_html("工\u{200b}作"), "工作");
+    }
+
+    /// 块文本按「首字段取值、其余标签：值、要点照抄」拼。
+    /// 注意 NFKC 会把全角冒号压成半角 —— 比对两边都归一，所以锁不受影响；
+    /// 报错里引的原文走的是不归一的那份（见 `strip_html`）。
+    #[test]
+    fn text_of_block_follows_the_generator_shape() {
+        let ws = workspace();
+        let page = &ws["people"][0]["resumes"][0]["pages"][0];
+        let head = &page["blocks"][0];
+        assert_eq!(text_of_block(head), "谭轶天 联系:男 · 20 岁 · 159****1234");
+        let section = &page["blocks"][1];
+        assert!(text_of_block(section).starts_with("实习与项目经历 铁未来 职位:实习生 通过定性方法"));
+    }
+
+    /// head: aside 在绝对定位关着的时候必须自己说出来「已降级」
+    #[test]
+    fn head_aside_says_it_was_downgraded() {
+        let text = run(None, json!({ "head": "aside" })).unwrap();
+        assert!(text.contains("已降级"), "{text}");
+        assert!(text.contains("照片无法绝对定位"), "{text}");
+    }
+
+    #[test]
+    fn dense_is_a_legal_preset() {
+        let text = run(None, json!({ "preset": "dense" })).unwrap();
+        assert!(text.contains("预设 dense"), "{text}");
     }
 
     /// 目标 1 页；传 1000.0 = 实测 1.00 页，1180.0 = 1.18 页溢出

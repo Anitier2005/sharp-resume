@@ -29,8 +29,20 @@ pub const PRESET_CSS: &str = include_str!("paper.css");
 
 const DEFAULT_PRESET: &str = "classic";
 
-/// 版式预设。前三个只差字号与间距，`custom` 表示「完全由 agent 接管」。
-pub const PRESETS: [&str; 4] = ["classic", "compact", "roomy", "custom"];
+/// 版式预设。前四个只差字号与间距，`custom` 表示「完全由 agent 接管」。
+///
+/// `dense` 是「原件级」：正文 9.6px / 行高 1.42 / 无内边距。它存在的理由不是
+/// 「再挤一点」，而是让一份本来就密的原件能被忠实复刻 —— 排版的第一个目标是
+/// 像原件，装进一页是第二个目标。
+pub const PRESETS: [&str; 5] = ["classic", "compact", "dense", "roomy", "custom"];
+
+/// 页头版式。空串 = 生成器默认（照片在右、文字在左）。
+///
+/// 前三个是纸面上的 class（手写 parts 也能加），`aside` 是整块版式：
+/// 姓名与联系方式居中、照片绝对定位在右上角 —— 原件最常见的排法。
+/// 校验（set_page_layout）与生成（render_head）读同一份清单，免得
+/// 「工具认了、生成器不认」。
+pub const HEAD_STYLES: [&str; 5] = ["", "center", "bare", "thick", "aside"];
 
 /// 允许出现在成品里的标签。
 ///
@@ -77,8 +89,8 @@ const SPLIT_UNSUPPORTED: &str = "split 只适合手写片段（parts），结构
 /// `style` 里允许的属性。
 ///
 /// 只开「排版」这一类：字体、间距、颜色、盒模型、布局、边框、分栏。
-/// 刻意不开 `position`（分页会失控）、`transform`（Word 表达不了）、
-/// `animation`（没有意义）、`z-index`（同上）。
+/// 刻意不开 `position`（分页会失控，见 `ALLOW_ABSOLUTE`）、`animation`（没有意义）、
+/// `z-index`（同上）。`transform` 只放行平移：缩放 / 旋转在 Word 里没有对应。
 const CSS_PROPS: &[&str] = &[
     // 字体与文本
     "font-size", "font-weight", "font-family", "font-style", "line-height", "letter-spacing",
@@ -101,6 +113,20 @@ const CSS_PROPS: &[&str] = &[
     "columns", "column-count", "break-inside", "page-break-inside", "float", "clear",
 ];
 
+/// 绝对定位总开关。
+///
+/// 关着的时候 `position` / `top` / `left` / `right` / `bottom` / `z-index` 一律被
+/// 清洗掉：绝对定位的元素不知道自己在第几页，一跨页就压到页脚外面 —— 屏幕上看
+/// 着对，导出的 PDF 是错的。要开必须先有真分页引擎（Paged.js）兜底，由它把
+/// 绝对定位元素按页切分。
+///
+/// 留成常量而不是配置项：这是**能力边界**，不是偏好，模型不该有机会把它打开。
+pub const ALLOW_ABSOLUTE: bool = false;
+
+/// 只在 `ALLOW_ABSOLUTE` 为真时才进白名单的定位属性。
+/// `width` / `height` 本来就在 `CSS_PROPS` 里（做卡片、图框用得到），不重复列。
+const ABSOLUTE_PROPS: &[&str] = &["position", "top", "left", "right", "bottom", "z-index"];
+
 /// 成品层的存储形态。
 ///
 /// 只存「怎么排」，不存内容 —— 内容永远以 blocks 为准。
@@ -121,8 +147,11 @@ pub const GUIDE: &str = r#"【这一页默认长什么样】
 
 【四档介入，从轻到重】
 1. 什么都不写 —— 生成器负责，零成本。内容量正常、没有特殊要求就用这档。
-2. preset —— 换整体疏密：classic / compact（内容多，压到一页）/ roomy（内容少，透气）
+2. preset —— 换整体疏密：classic / compact（内容多，压到一页）/ dense（原件级，字号与行距都贴着原件）/
+   roomy（内容少，透气）
 3. parts[blockId] —— 只重写某一块，其余照常生成。想改一段的排法时用这档。
+   这一档**只改结构、class、样式，一个字都不能改**：文字和这一块的结构化内容对不上
+   会被直接拒绝，并告诉你是哪一块。
 4. html —— 整页接管。作品集、或结构化确实表达不了的版面才用。
    一旦设了 html，parts 与 preset 都不再起作用。
 
@@ -170,10 +199,15 @@ pub const GUIDE: &str = r#"【这一页默认长什么样】
 表格
   table / table.plain  技能矩阵、时间线；plain 去掉行分隔线
 
-页头（加在 header 上）
+页头（加在 header 上，也可以直接用 set_page_layout 的 head 选项）
   head.center          居中，里面的照片顺便变成圆形
   head.bare            不放分隔线
   head.thick           粗分隔线
+  head.aside           姓名与联系方式居中、照片贴右上角（原件最常见的排法）
+                      用 head 选项选它；自己手写页头会丢掉这套结构
+
+**页头请用 head 选项，不要手写 <h1>。** 手写的页头会绕开 .head .top/.txt/.name/.meta
+这套结构：名字居不居得中、照片在不在右上、导出的 Word 对不对得上，全靠它。
 
 【能写的标签】
 section header footer div p span h1 h2 h3 h4 h5 h6 strong b em i u small mark br hr
@@ -182,8 +216,9 @@ svg g path circle rect line polyline polygon ellipse text
 
 【不能写】
 script、style、iframe、form、input —— 会被剥掉。
-CSS 里不能有 position、transform、animation、transition、z-index、float 之外的定位能力。
-理由很实际：分页靠正常文档流，绝对定位的元素不知道自己该落在第几页，会压到页脚外面。
+CSS 里不能有 position、animation、transition、z-index —— 绝对定位的元素不知道自己
+该落在第几页，会压到页脚外面（分页引擎接上之前一律关着）。
+transform 只认 translate(...)：缩放在 Word 里没有对应，放开了就是「屏幕上对、导出去错」。
 
 【图片怎么放】
 src 写 asset:<id>，id 从 read_person 的材料清单里取。
@@ -211,6 +246,13 @@ pub struct PageLayout {
     /// 逐块手写片段：blockId → HTML
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub parts: HashMap<String, String>,
+    /// 页头版式，取值见 `HEAD_STYLES`。
+    ///
+    /// 存成布局的一项，而不是让模型手写页头：页头结构一旦被手写覆盖，
+    /// 「姓名居中 + 联系方式居中 + 照片右上」这个原件版式就没了 —— 而它正是
+    /// 用户认得出「这是我那份简历」的地方。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub head: String,
     /// 未知字段原样保留：新版本写的成品，旧版本读一遍再存不能把它丢掉
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, Value>,
@@ -322,7 +364,7 @@ fn render_blocks(
         match block.kind.as_str() {
             "fields" => {
                 if Some(index) == first_fields {
-                    out.push_str(&render_head(block, person, warnings));
+                    out.push_str(&render_head(block, person, layout.head.trim(), warnings));
                 } else if !block.fields.is_empty() {
                     out.push_str(&render_group(block, person, warnings));
                 }
@@ -420,7 +462,16 @@ impl SectionRole {
 }
 
 /// 页头：第一个文本字段是大标题，其余按「标签：值」排；照片与文字并排
-fn render_head(block: &Block, person: &Person, warnings: &mut Vec<String>) -> String {
+///
+/// `head` 是版面里选定的页头版式（取值见 `HEAD_STYLES`，空 = 默认）。
+/// `aside` 是原件最常见的排法：姓名与联系方式居中，照片贴在右上角。
+/// 照片必须出到正常流外面 —— 证件照一旦参与那两行居中文字，居中就不是视觉居中了。
+fn render_head(
+    block: &Block,
+    person: &Person,
+    head: &str,
+    warnings: &mut Vec<String>,
+) -> String {
     let (texts, images) = split_fields(&block.fields);
 
     // 照片优先用页头里显式指定的那张字段图；旧数据没指定时退回人身上第一张，
@@ -461,18 +512,61 @@ fn render_head(block: &Block, person: &Person, warnings: &mut Vec<String>) -> St
         text.push_str(&format!(r#"<div class="meta">{}</div>"#, escape(&line)));
     }
 
-    let inner = match photo {
-        Some(asset_id) => format!(
-            r#"<div class="top"><div class="txt">{text}</div><img class="photo" src="asset:{}" alt=""></div>"#,
-            escape(&asset_id)
-        ),
-        None => text,
+    // `aside` 依赖绝对定位。开关关着时按默认的两栏排 —— 照片在右、文字在左，
+    // 仍然是一份能用的页头，只是不如原件那么像。
+    // 「已降级」这句话由 set_page_layout 返回给模型，这里不重复说。
+    let aside = head == "aside" && ALLOW_ABSOLUTE;
+
+    let inner = if aside {
+        aside_inner(&text, photo.as_deref())
+    } else {
+        match photo {
+            Some(asset_id) => format!(
+                r#"<div class="top"><div class="txt">{text}</div><img class="photo" src="asset:{}" alt=""></div>"#,
+                escape(&asset_id)
+            ),
+            None => text,
+        }
+    };
+
+    let class = match head {
+        "aside" if aside => "head aside",
+        // 降级时不要留 aside：留着会去匹配一条不存在的规则，纸上什么都不会变
+        "center" => "head center",
+        "bare" => "head bare",
+        "thick" => "head thick",
+        _ => "head",
+    };
+
+    // 居中写成内联样式，不新建 `.head.aside` 规则：paper.css 是共用样式表，
+    // 为一条还没启用的分支加类，比把这条声明就近写在生成处更容易看清是谁要的
+    let style = if aside {
+        r#" style="text-align:center""#
+    } else {
+        ""
     };
 
     format!(
-        r#"<header class="head"{}>{inner}<div class="rule"></div></header>"#,
+        r#"<header class="{class}"{style}{}>{inner}<div class="rule"></div></header>"#,
         block_attr(&block.id)
     )
+}
+
+/// 页头 `aside` 的内层：居中的文字 + 贴在右上角的照片。
+///
+/// 独立成函数是为了能单测 —— 这条分支要等分页引擎接上（`ALLOW_ABSOLUTE`）才真正
+/// 出到纸上，测试不该靠翻开关才能跑到它。
+/// `abs` 只负责「脱出文档流」，偏移写成内联样式：类里写死 top/right 就绑死了一种纸。
+fn aside_inner(text: &str, photo: Option<&str>) -> String {
+    let image = photo
+        .map(|asset_id| {
+            format!(
+                r#"<img class="photo abs" style="top:0;right:0" src="asset:{}" alt="">"#,
+                escape(asset_id)
+            )
+        })
+        .unwrap_or_default();
+    format!(r#"<div class="txt">{text}</div>{image}"#)
 }
 
 /// 扫一段手写 HTML 里的 `asset:<id>`，把不存在的记成警告。
@@ -919,6 +1013,108 @@ fn escape(text: &str) -> String {
 
 /* ---------- 清洗 ---------- */
 
+/// `style` 实际生效的属性集合：静态清单 + `transform` + 开关打开时的定位属性。
+///
+/// 为什么不在常量里一次写全：`position` 能不能用取决于有没有真分页引擎，
+/// 两个状态必须只有一处来源 —— 常量 `ALLOW_ABSOLUTE`。
+fn style_props() -> HashSet<&'static str> {
+    let mut set: HashSet<&'static str> = CSS_PROPS.iter().copied().collect();
+    // transform 的名字要留在白名单里，值另行把关（见 strip_bad_transform）
+    set.insert("transform");
+    if ALLOW_ABSOLUTE {
+        set.extend(ABSOLUTE_PROPS.iter().copied());
+    }
+    set
+}
+
+/// `transform` 只放行平移。
+///
+/// 缩放 / 旋转 / 斜切在 Word 里表达不了：预览看着对，导出就是另一张纸。
+/// 平移能落到 OOXML 的绝对偏移上，所以留它 —— 照片微调时用得到。
+/// 大小写不敏感（`Translate(...)` 同样合法），函数之间允许空格或逗号分隔。
+pub(crate) fn transform_allowed(value: &str) -> bool {
+    let chars: Vec<char> = value.trim().chars().collect();
+    let mut index = 0;
+    let mut seen = false;
+    while index < chars.len() {
+        let ch = chars[index];
+        if ch.is_alphabetic() {
+            let start = index;
+            while index < chars.len() && (chars[index].is_alphabetic() || chars[index] == '-') {
+                index += 1;
+            }
+            let name: String = chars[start..index].iter().collect::<String>().to_ascii_lowercase();
+            // 函数名后面必须紧跟左括号，否则是裸关键字（`none`、`inherit` 也算）
+            if index >= chars.len() || chars[index] != '(' {
+                return false;
+            }
+            if !matches!(name.as_str(), "translate" | "translatex" | "translatey") {
+                return false;
+            }
+            seen = true;
+            let mut depth = 0usize;
+            while index < chars.len() {
+                match chars[index] {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            index += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                index += 1;
+            }
+            // 括号没闭合：这句声明本身是坏的，留着只会让后面的属性一起失效
+            if depth != 0 {
+                return false;
+            }
+            continue;
+        }
+        if ch.is_whitespace() || ch == ',' {
+            index += 1;
+            continue;
+        }
+        // 函数外面出现别的字符 = 语法垃圾
+        return false;
+    }
+    seen
+}
+
+/// 干掉 `style` 里不被接受的 `transform` 声明，其余声明原样保留。
+///
+/// 不能只靠属性名白名单：白名单只认名字，`transform: scale(0.9)` 会整条放行。
+/// 而拒绝整条 style 又太狠 —— 同一行里可能还有一个合法的 `margin`。
+fn strip_bad_transform(style: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut dropped = false;
+    for decl in style.split(';') {
+        let decl = decl.trim();
+        if decl.is_empty() {
+            continue;
+        }
+        let (name, value) = match decl.split_once(':') {
+            Some(pair) => pair,
+            // 不完整的声明交给 ammonia 自己处理
+            None => {
+                kept.push(decl);
+                continue;
+            }
+        };
+        if name.trim().eq_ignore_ascii_case("transform") && !transform_allowed(value) {
+            dropped = true;
+            continue;
+        }
+        kept.push(decl);
+    }
+    if !dropped {
+        return style.to_string();
+    }
+    kept.join("; ")
+}
+
 fn sanitizer() -> &'static ammonia::Builder<'static> {
     static BUILDER: OnceLock<ammonia::Builder<'static>> = OnceLock::new();
     BUILDER.get_or_init(|| {
@@ -930,16 +1126,25 @@ fn sanitizer() -> &'static ammonia::Builder<'static> {
             // 那个回调只对「已经通过白名单」的属性执行。
             .generic_attributes(GENERIC_ATTRS.iter().copied().collect::<HashSet<_>>())
             // 只允许排版类属性；非法声明与 @ 规则会被这里剔掉
-            .filter_style_properties(CSS_PROPS.iter().copied().collect::<HashSet<_>>())
+            .filter_style_properties(style_props())
             // 图片走 asset: 协议，由前端换成真实地址；data: 一律不放行，
             // 否则模型可以塞一段 data:text/html 进来
             .url_schemes(["asset", "http", "https", "mailto"].into_iter().collect())
             .attribute_filter(|_element, attribute, value| {
+                if attribute != "style" {
+                    return Some(Cow::Borrowed(value));
+                }
                 // style 里带 url(...) 等于绕过协议白名单（背景图可以指向任意地址）
-                if attribute == "style" && value.contains("url(") {
+                if value.contains("url(") {
                     return None;
                 }
-                Some(Cow::Borrowed(value))
+                // transform 的值单独把关：只放行 translate，缩放在 Word 里没有对应
+                let cleaned = strip_bad_transform(value);
+                if cleaned == value {
+                    Some(Cow::Borrowed(value))
+                } else {
+                    Some(Cow::Owned(cleaned))
+                }
             });
         builder
     })
@@ -1150,6 +1355,91 @@ mod tests {
         // position 不在白名单里，必须被剔除；font-size 保留
         assert!(!out.html.contains("position"), "{}", out.html);
         assert!(out.html.contains("font-size"), "{}", out.html);
+    }
+
+
+    /// transform 只认平移：缩放/旋转在 Word 里没有对应，放开了就是「屏幕对、导出错」
+    #[test]
+    fn transform_allows_translate_only() {
+        assert!(transform_allowed("translate(0, -2px)"));
+        assert!(transform_allowed("Translate(-4px,2px)"));
+        assert!(transform_allowed("translateX(3px) translateY(0)"));
+        assert!(!transform_allowed("scale(0.9)"));
+        assert!(!transform_allowed("rotate(3deg)"));
+        assert!(!transform_allowed("skewX(4deg)"));
+        assert!(!transform_allowed("translate(1px, 0) scale(2)"));
+        assert!(!transform_allowed("translate(1px, 0) rotate(1deg)"));
+        assert!(!transform_allowed("none"));
+        assert!(!transform_allowed(""));
+    }
+
+    /// 清洗后：translate 留着，scale 整条剔掉，同行别的声明不受牵连
+    #[test]
+    fn sanitize_keeps_translate_and_drops_scale() {
+        let out = sanitize(
+            r#"<p style="transform: translate(1px, 2px); font-size: 12px">甲</p><p style="transform: scale(0.8); margin-top: 2px">乙</p>"#,
+        );
+        assert!(out.contains("translate(1px, 2px)"), "{out}");
+        assert!(!out.contains("scale"), "{out}");
+        // ammonia 会把 style 重新序列化成没有空格的紧凑形式
+        assert!(out.contains("font-size:12px"), "{out}");
+        assert!(out.contains("margin-top:2px"), "{out}");
+    }
+
+    /// position 仍由开关把着（当前 false）：模型写绝对定位一个字都进不来
+    #[test]
+    fn absolute_positioning_stays_off_while_the_switch_is_false() {
+        assert!(!ALLOW_ABSOLUTE, "开关保持 false，等分页引擎接上");
+        let out = sanitize(r#"<div style="position: absolute; top: 0; z-index: 3">甲</div>"#);
+        assert!(!out.contains("position"), "{out}");
+        assert!(!out.contains("z-index"), "{out}");
+        let props = style_props();
+        for prop in ABSOLUTE_PROPS {
+            assert!(!props.contains(prop), "{prop} 不该在白名单里");
+        }
+    }
+
+    /// head: aside 依赖绝对定位，开关关着就降级成左右两栏（照片仍在，只是进正常流）
+    #[test]
+    fn head_aside_falls_back_to_two_columns() {
+        let mut page = page();
+        page.layout = Some(PageLayout {
+            head: "aside".into(),
+            ..Default::default()
+        });
+        let out = compile(&page, &person());
+        if ALLOW_ABSOLUTE {
+            assert!(out.html.contains(r#"class="head aside""#), "{}", out.html);
+        } else {
+            assert!(out.html.contains(r#"<header class="head""#), "{}", out.html);
+            assert!(out.html.contains(r#"<div class="top">"#), "{}", out.html);
+            assert!(!out.html.contains("abs"), "降级后不该留 aside 的附属 class：{}", out.html);
+        }
+    }
+
+    /// head: center 这类纸面 class 走选项时也要生效
+    #[test]
+    fn head_option_picks_the_paper_class() {
+        let mut page = page();
+        page.layout = Some(PageLayout {
+            head: "center".into(),
+            ..Default::default()
+        });
+        let out = compile(&page, &person());
+        assert!(out.html.contains(r#"<header class="head center""#), "{}", out.html);
+    }
+
+    /// aside 真正出到纸上的形状：文字在流里、照片脱出文档流并钉在右上角。
+    /// 直接测内层，不依赖开关（开关翻成 true 之前这条分支跑不到）
+    #[test]
+    fn aside_inner_pins_the_photo_to_the_top_right() {
+        let inner = aside_inner(r#"<h1 class="name">张三</h1>"#, Some("a-photo"));
+        assert!(inner.contains(r#"<div class="txt"><h1 class="name">张三</h1></div>"#), "{inner}");
+        assert!(inner.contains(r#"class="photo abs""#), "{inner}");
+        assert!(inner.contains("style=\"top:0;right:0\""), "{inner}");
+        // 没有照片时只留文字，不要一个空的 img
+        let bare = aside_inner("张三", None);
+        assert!(!bare.contains("<img"), "{bare}");
     }
 
     #[test]

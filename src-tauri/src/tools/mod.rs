@@ -999,6 +999,9 @@ mod tests {
 
     /// 连着改两次版面：第二次必须看到第一次的结果。
     /// 曾经以快照为基线，第二次会把第一次的 preset 与块一起抹掉。
+    ///
+    /// 手写片段必须带着块里原有的字（b1 是空字段组、b2 的标题是「工作」）：
+    /// 文字锁会拒掉任何改字的片段，这条测试只关心合并行为。
     #[test]
     fn layout_tool_accumulates_within_one_turn() {
         let ws = sample_ws();
@@ -1007,14 +1010,14 @@ mod tests {
 
         call(
             "set_page_layout",
-            &json!({ "preset": "compact", "parts": { "b1": "<h1>A</h1>" } }),
+            &json!({ "preset": "compact", "parts": { "b1": "<div class=\"row\"></div>" } }),
             &ctx,
             Scope::Layout,
         )
         .unwrap();
         call(
             "set_page_layout",
-            &json!({ "parts": { "b2": "<section>B</section>" } }),
+            &json!({ "parts": { "b2": "<section class=\"sec tight\"><h2>工作</h2></section>" } }),
             &ctx,
             Scope::Layout,
         )
@@ -1026,8 +1029,15 @@ mod tests {
         assert_eq!(actions[1]["type"], json!("patchPageLayout"));
         assert_eq!(actions[1]["pageId"], json!("pg1"));
         assert_eq!(layout["preset"], json!("compact"), "没传的预设不能被清掉");
-        assert_eq!(layout["parts"]["b1"], json!("<h1>A</h1>"), "上一块要留着");
-        assert_eq!(layout["parts"]["b2"], json!("<section>B</section>"));
+        assert_eq!(
+            layout["parts"]["b1"],
+            json!("<div class=\"row\"></div>"),
+            "上一块要留着"
+        );
+        assert_eq!(
+            layout["parts"]["b2"],
+            json!("<section class=\"sec tight\"><h2>工作</h2></section>")
+        );
     }
 
     #[test]

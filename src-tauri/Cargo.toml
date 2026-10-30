@@ -85,6 +85,12 @@ lopdf = { version = "0.34", default-features = false, features = ["nom_parser"] 
 # OCR 接口通道要把图片拼成 data URL，需要 base64。纯 Rust，无 C 依赖。
 base64 = "0.22"
 
+# NFKC：排版文字锁要比对「模型手写 HTML 的纯文本」与「结构化内容的纯文本」。
+# 全角字母、康熙部首、带圈数字这些视觉相同的字符必须归一到同一个码位，
+# 否则模型用全角括号排版本、结构化内容是半角，锁会误伤一次正当的排版。
+# 本来就在依赖树里（url/idna 带进来的），显式声明只为能 use。
+unicode-normalization = "0.1"
+
 
 # 读取 Windows「辅助功能 → 文本大小」的实际缩放值，供 UI 字号跟随。
 [target.'cfg(windows)'.dependencies]
