@@ -116,7 +116,7 @@ fn search(
     for body in bodies {
         let Ok(message) = serde_json::from_str::<Value>(&body) else { continue };
         let message_role = message.get("role").and_then(Value::as_str).unwrap_or("user");
-        // 工具内部轮（internal）不进检索：它们是排版 agent 的往返，翻出来只会误导
+        // 工具内部轮（internal）不进检索：它们是内部往返，翻出来只会误导
         if message.get("internal").and_then(Value::as_bool).unwrap_or(false) {
             continue;
         }

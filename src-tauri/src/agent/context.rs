@@ -29,6 +29,68 @@ fn display_name(fields: &Value) -> String {
         .unwrap_or_else(|| "（未填写）".to_string())
 }
 
+/// 这一页现在的版面状态，一行说清。
+///
+/// 只陈述事实（预设 / 页头 / 手写了几块 / 有没有整页接管），不建议下一步做什么 ——
+/// 判断留给模型。不说清的话它会重复改同一块，或者把已有覆盖整片冲掉。
+fn layout_line(page: &Value) -> String {
+    let layout = page.get("layout");
+    let field = |key: &str| {
+        layout
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let preset = field("preset");
+    let head = field("head");
+    let html = field("html");
+    let parts = layout
+        .and_then(|value| value.get("parts"))
+        .and_then(Value::as_object)
+        .map(|map| map.len())
+        .unwrap_or(0);
+
+    // 整页接管时 preset / head / parts 都不生效，但 preset 仍是这条数据的现状，
+    // 一并说出来，模型才不会以为「没写预设」。
+    if !html.is_empty() {
+        return if preset.is_empty() {
+            "- 版面：整页接管（html）\n".to_string()
+        } else {
+            format!("- 版面：preset={preset} · 整页接管（html）\n")
+        };
+    }
+
+    let mut bits: Vec<String> = Vec::new();
+    if !preset.is_empty() {
+        bits.push(format!("preset={preset}"));
+    }
+    if !head.is_empty() {
+        bits.push(format!("页头={head}"));
+    }
+    if parts > 0 {
+        bits.push(format!("{parts} 块手写覆盖"));
+    }
+    if bits.is_empty() {
+        "- 版面：生成器默认（未接管）\n".to_string()
+    } else {
+        format!("- 版面：{}\n", bits.join(" · "))
+    }
+}
+
+/// 这一页的原件指针（`stored`）。挂在**简历**上：页的 `layout` 每轮被整体覆盖，
+/// 原件不会跟着变。空串/缺字段就是没有原件，不要凭这个字段的有无去催模型。
+fn origin_stored(resume: &Value) -> Option<String> {
+    resume
+        .get("originDoc")
+        .and_then(|doc| doc.get("stored"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 pub fn locate(
     workspace: &Value,
     person_id: &str,
@@ -71,6 +133,17 @@ pub fn locate(
                                 if label.is_empty() { "未命名".to_string() } else { label },
                                 page_id
                             ));
+                            // 这一页「现在是什么状态」与「它从哪来」：都是位置与事实，
+                            // 页内容仍由前端的 context 段给，两处不重复。
+                            out.push_str(&layout_line(page));
+                            // 整页原件页本身就是原件，叫它去复刻自己没有意义
+                            if text(page, "kind") != "file" {
+                                if let Some(stored) = origin_stored(resume) {
+                                    out.push_str(&format!(
+                                        "- 这一页有原件：调 render_doc_page（stored = {stored}、page = 1）看版式，按它复刻\n"
+                                    ));
+                                }
+                            }
                         }
                         None => {
                             out.push_str(&format!("- 当前页：id = {page_id}（在这份简历里找不到）\n"));
@@ -176,5 +249,87 @@ mod tests {
         assert!(first.contains(&measure_line(&before)), "{first}");
         assert!(second.contains(&measure_line(&after)), "{second}");
         assert_ne!(first, second, "第二次必须用新测量值");
+    }
+
+    /* ---------- 版面现状：三种形态各钉一条 ---------- */
+
+    fn located(ws: &Value) -> String {
+        let facts = PageFacts::assemble(ws, "p1", "r1", "pg1", None, None, Some(1));
+        locate(ws, "p1", "r1", "pg1", "edit", &facts, &unknown())
+    }
+
+    /// 结构化排版：预设 + 页头 + 几块手写，三段都要在，缺的段不许占位
+    #[test]
+    fn layout_line_names_preset_head_and_handwritten_blocks() {
+        let mut ws = workspace();
+        ws["people"][0]["resumes"][0]["pages"][0]["layout"] = serde_json::json!({
+            "preset": "compact",
+            "head": "aside",
+            "parts": { "b1": "<p>x</p>", "b2": "<p>y</p>", "b3": "<p>z</p>" }
+        });
+        let text = located(&ws);
+        assert!(
+            text.contains("- 版面：preset=compact · 页头=aside · 3 块手写覆盖"),
+            "{text}"
+        );
+
+        // 没设页头就不许凭空印一句「页头=」
+        ws["people"][0]["resumes"][0]["pages"][0]["layout"] =
+            serde_json::json!({ "preset": "compact", "parts": { "b1": "<p>x</p>" } });
+        let text = located(&ws);
+        assert!(text.contains("- 版面：preset=compact · 1 块手写覆盖"), "{text}");
+        assert!(!text.contains("页头="), "{text}");
+    }
+
+    /// 整页接管：模型必须知道生成器已经不介入了，否则它会去改 parts
+    #[test]
+    fn layout_line_says_whole_page_takeover() {
+        let mut ws = workspace();
+        ws["people"][0]["resumes"][0]["pages"][0]["layout"] = serde_json::json!({
+            "preset": "compact",
+            "html": "<section>接管</section>"
+        });
+        let text = located(&ws);
+        assert!(text.contains("- 版面：preset=compact · 整页接管（html）"), "{text}");
+        assert!(!text.contains("块手写覆盖"), "{text}");
+    }
+
+    /// 老数据没有 layout 字段：说「生成器默认」，不许留空也不许报错
+    #[test]
+    fn layout_line_defaults_to_generator_for_old_pages() {
+        let text = located(&workspace());
+        assert!(text.contains("- 版面：生成器默认（未接管）"), "{text}");
+    }
+
+    /// 有原件就必须给指针：这是被删掉的排版 agent 每轮都能看到的那句话，
+    /// 合并之后只能由定位头补上，否则模型永远不知道该去核对原件版式
+    #[test]
+    fn origin_pointer_is_given_when_the_resume_has_one() {
+        let mut ws = workspace();
+        ws["people"][0]["resumes"][0]["originDoc"] = serde_json::json!({
+            "stored": "abcd1234.pdf",
+            "name": "简历.pdf",
+            "pages": 3
+        });
+        let text = located(&ws);
+        assert!(
+            text.contains(
+                "- 这一页有原件：调 render_doc_page（stored = abcd1234.pdf、page = 1）看版式，按它复刻"
+            ),
+            "{text}"
+        );
+
+        // 整页原件页本身就是原件：叫它去复刻自己没意义
+        ws["people"][0]["resumes"][0]["pages"][0]["kind"] = serde_json::json!("file");
+        let text = located(&ws);
+        assert!(!text.contains("这一页有原件"), "{text}");
+    }
+
+    /// 没有原件时一个字都不提，免得模型去找一张不存在的图
+    #[test]
+    fn origin_pointer_is_silent_without_one() {
+        let text = located(&workspace());
+        assert!(!text.contains("render_doc_page"), "{text}");
+        assert!(!text.contains("这一页有原件"), "{text}");
     }
 }

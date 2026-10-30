@@ -123,25 +123,20 @@ mod tests {
     use crate::tools::{Outbox, ToolCtx};
     use serde_json::json;
 
-    /// 排版 agent 必须真能调它 —— 否则「先调 view_asset 看原件样张」这句话
-    /// 就只是一句提示词，模型拿着 assetId 去要一个越权的工具。
+    /// view_asset 必须真的能调到工具自己的判断 —— 否则「先调 view_asset 看原件样张」
+    /// 这句话就只是一句提示词。
     ///
-    /// 这里故意用非视觉模型：它会走到工具自己的拒绝分支，而不是「角色不能用」。
+    /// 这里故意用非视觉模型：它会走到工具自己的拒绝分支。
     #[test]
-    fn the_layout_agent_can_reach_view_asset() {
+    fn view_asset_reaches_its_own_vision_guard() {
         let workspace = json!({ "people": [{ "id": "p1", "assets": [], "items": [], "resumes": [] }] });
         let mut out = Outbox::default();
         out.model = "deepseek-chat".into();
         let ctx = ToolCtx::of(&workspace, "p1", "r1", "pg1", &out);
 
-        let error = crate::tools::call(
-            "view_asset",
-            &json!({ "assetId": "a-sheet" }),
-            &ctx,
-            crate::tools::Scope::Layout,
-        )
-        .unwrap_err();
-        assert!(!error.contains("不能用"), "排版侧被权限挡在门外：{error}");
+        let error = crate::tools::call("view_asset", &json!({ "assetId": "a-sheet" }), &ctx)
+            .unwrap_err();
+        assert!(!error.contains("没有名为"), "{error}");
         assert!(error.contains("不支持看图"), "应当走到工具自身的判断：{error}");
     }
 

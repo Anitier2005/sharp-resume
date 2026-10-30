@@ -828,7 +828,7 @@ mod tests {
                 temperature: Some(0.0),
                 reasoning: None,
                 max_tokens: None,
-                tools: Some(crate::tools::specs(crate::tools::Scope::Session)),
+                tools: Some(crate::tools::specs()),
             },
             &cancel,
             &mut |_| {},
@@ -841,7 +841,7 @@ mod tests {
         let call = &first.tool_calls[0];
         let args: serde_json::Value =
             serde_json::from_str(&call.function.arguments).unwrap_or_else(|_| serde_json::json!({}));
-        let result = crate::tools::call(&call.function.name, &args, &ctx, crate::tools::Scope::Session)
+        let result = crate::tools::call(&call.function.name, &args, &ctx)
             .unwrap_or_else(|error| panic!("工具 {} 执行失败：{error}", call.function.name));
         assert!(
             result.contains("← 当前") && result.contains("English"),
@@ -860,7 +860,7 @@ mod tests {
                 temperature: Some(0.0),
                 reasoning: None,
                 max_tokens: None,
-                tools: Some(crate::tools::specs(crate::tools::Scope::Session)),
+                tools: Some(crate::tools::specs()),
             },
             &cancel,
             &mut |_| {},

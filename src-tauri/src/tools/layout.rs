@@ -1,19 +1,15 @@
-//! 排版工具。
+//! 排版工具（会话 agent 直接调用，没有第二个 agent 可转交）。
 //!
-//! 这里有两条完全不同的路径，别混：
-//!   `request_layout` —— **会话 agent** 用。它不排版，只把意图转给该页的排版 agent。
-//!   `set_page_layout` —— **排版 agent** 用。它拥有这一页版面的全部决定权。
+//! 三个入口，按力度从轻到重：
+//!   `read_layout_guide` —— 组件手册：有哪些 class、能写哪些标签，按需取、不占常驻上下文。
+//!   `set_page_layout`   —— 改这一页的成品版面（预设 / 块级手写 / 整页接管）。
+//!   `note_on_page`      —— 把一句话贴在纸面上给用户看（不进导出、不进会话流）。
 //!
-//! 另有唯一一条「说不了就传出去」的通道，只在排版侧：
-//!   `note_on_page` —— 把一句话贴在纸面上给用户看（不进导出、不进会话流）。
-//! 排版 agent 不能写内容，也不能提问 —— 批注就是它唯一的出口。曾经的
-//! `ask_session` 会把问题变成一条插进会话流的用户可见消息，用户看到的是排版语气
-//! 的问句挂在对话里，噪音全落在会话上，已整条摘掉。
+//! 这里的工具只改版面，**不改内容**：任何入口都过文字锁（见下），改字请回到内容工具。
 //!
 //! 为什么拿掉旧的 `set_page_style`：那是「参数层」——只能从疏密三档、边距倍数、
 //! 对齐两项里挑，本质是替 agent 做了排版决策。现在给它的是成品层：
 //! 预设（一次性切换整体疏密）、块级手写（改一段）、整页接管（换一种版面语言）。
-//! 组件清单见 `render::GUIDE`，由 `read_layout_guide` 按需取，不占常驻上下文。
 
 use serde_json::{json, Value};
 use unicode_normalization::UnicodeNormalization;
@@ -377,50 +373,7 @@ fn block_label(block: &Value) -> String {
 }
 
 
-/* ---------- 会话 agent：转交 ---------- */
-
-pub fn request_layout_params() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "pageId": { "type": "string", "description": "要让哪一页重新排版；不传就是当前页" },
-            "brief": {
-                "type": "string",
-                "description": "给排版 agent 的要求，比如「内容超了一页，压到一页内」「留白太多，显得空」。写意图，不要写具体像素"
-            }
-        },
-        "required": ["brief"],
-        "additionalProperties": false
-    })
-}
-
-pub fn request_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
-    let brief = args
-        .get("brief")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("");
-    if brief.is_empty() {
-        return Err("brief 不能为空：要说清楚想让版式变成什么样".into());
-    }
-
-    let pages = pages_of(ctx)?;
-    let page_id = page_id_of(args, ctx);
-    if !pages
-        .iter()
-        .any(|item| item.get("id").and_then(Value::as_str) == Some(page_id.as_str()))
-    {
-        return Err(format!("没有 id 为 {page_id} 的页面"));
-    }
-
-    push_action(
-        ctx,
-        json!({ "type": "requestLayout", "pageId": page_id, "brief": brief }),
-    )?;
-    Ok("已把排版要求转给这一页的排版 agent；它会自己决定具体版面".into())
-}
-
-/* ---------- 排版 agent：组件手册 ---------- */
+/* ---------- 组件手册 ---------- */
 
 pub fn guide_params() -> Value {
     json!({
@@ -434,7 +387,7 @@ pub fn read_layout_guide(_args: &Value, _ctx: &ToolCtx) -> Result<String, String
     Ok(render::GUIDE.to_string())
 }
 
-/* ---------- 排版 agent：写成品 ---------- */
+/* ---------- 写成品 ---------- */
 
 pub fn set_layout_params() -> Value {
     json!({
@@ -562,7 +515,7 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
             let written = normalize_text(&strip_html(html));
             if written != original {
                 return Err(format!(
-                    "整页接管不能改字：这一页原文共 {} 字，你写的是 {} 字。要改内容请用 note_on_page 留批注。",
+                    "整页接管不能改字：这一页原文共 {} 字，你写的是 {} 字。改字请用内容工具（set_field / update_entry），这里只改版面。",
                     original.chars().count(),
                     written.chars().count()
                 ));
@@ -623,7 +576,7 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
                 let written = normalize_text(&written_raw);
                 if !text_variants(block).iter().any(|text| text == &written) {
                     return Err(format!(
-                        "第 {} 块「{}」的文字被改动了，排版不许改内容。原文：{}；你写的是：{}。要改内容请用 note_on_page 留批注。",
+                        "第 {} 块「{}」的文字被改动了，这里只改版面、不改字。原文：{}；你写的是：{}。改字请用内容工具（set_field / update_entry）。",
                         index + 1,
                         block_label(block),
                         preview(&raw_variants(block).remove(0)),
@@ -679,7 +632,7 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
 /// 实测滞后一轮的说明。只在量不到 / 旧数作废时追加，有实测值时一个字都不多说。
 const MEASURE_LAG_HINT: &str = "页数要等这一轮结束、纸面重新排完才会更新 —— 同一轮里连改两次不会让数字变，别据此判断「版面没用」，也别凭这个去要求删内容。";
 
-/* ---------- 排版 agent：留批注 ---------- */
+/* ---------- 留批注 ---------- */
 
 /// 批注的长度上限。200 字大约是两行批注气泡；再长用户点开看到的是一段正文，
 /// 那不如直接改版面。
@@ -820,7 +773,7 @@ pub fn note_on_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
 
     Ok(format!(
         "批注已贴在{}，用户会直接在纸面上看到。\n\
-         它是给用户看的，不是给你自己记笔记 —— 你自己动不了内容，觉得该改就在批注里说清；这一轮还能再留 {} 条，说完继续排版，不用停下来等。",
+         它是给用户看的，不是给自己记笔记 —— 批注不改任何内容，该改的字用内容工具改。这一轮还能再留 {} 条，说完继续，不用停下来等。",
         if block_id.is_some() { "这一块旁边" } else { "页边" },
         MAX_NOTES_PER_TURN.saturating_sub(
             ctx.out.notes.load(std::sync::atomic::Ordering::SeqCst)
@@ -865,10 +818,10 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.starts_with("第 2 块「实习与项目经历」的文字被改动了"), "{err}");
-        assert!(err.contains("排版不许改内容"), "{err}");
+        assert!(err.contains("这里只改版面、不改字"), "{err}");
         assert!(err.contains("原文：实习与项目经历 铁未来 职位：实习生 通过定性方法"), "{err}");
         assert!(err.contains("你写的是：实习与项目经历 铁未来 职位：实习生 通过定量方法"), "{err}");
-        assert!(err.ends_with("要改内容请用 note_on_page 留批注。"), "{err}");
+        assert!(err.contains("改字请用内容工具"), "{err}");
     }
 
     /// 文字锁：只换 class / 结构 / 标签，一个字不改 —— 必须放行
@@ -922,7 +875,7 @@ mod tests {
         .unwrap_err();
         assert!(err.starts_with("整页接管不能改字：这一页原文共"), "{err}");
         assert!(err.contains("你写的是"), "{err}");
-        assert!(err.ends_with("要改内容请用 note_on_page 留批注。"), "{err}");
+        assert!(err.contains("改字请用内容工具"), "{err}");
         assert!(!err.contains("第 1 块"), "整页这条路不该报块号：{err}");
     }
 

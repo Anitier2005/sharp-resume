@@ -14,7 +14,7 @@ use std::sync::atomic::AtomicBool;
 use serde_json::Value;
 
 use crate::net::{self, AiRequest, ChatMessage, StreamChunk};
-use crate::tools::{Scope, ToolCtx};
+use crate::tools::ToolCtx;
 
 /// **没有轮次上限。** 这里只记一件事：停下来的理由必须是「它绕圈」或「它不说话」，
 /// 不是「它做了几次」。
@@ -199,6 +199,18 @@ fn describe(name: &str, args: &Value) -> String {
         },
         "set_open_pages" => "调整快捷标签".to_string(),
         "set_ui" => "调整界面".to_string(),
+        "read_layout_guide" => "读组件手册".to_string(),
+        "set_page_layout" => match args["preset"].as_str().filter(|value| !value.trim().is_empty()) {
+            Some(preset) => format!("换成 {preset} 档"),
+            None => match args["parts"].as_object().filter(|parts| !parts.is_empty()) {
+                Some(parts) => format!("重写 {} 块的排法", parts.len()),
+                None => match args["html"].as_str().filter(|html| !html.trim().is_empty()) {
+                    Some(_) => "整页接管".to_string(),
+                    None => "调整版面".to_string(),
+                },
+            },
+        },
+        "note_on_page" => "在纸面留批注".to_string(),
         other => format!("调用 {other}"),
     }
 }
@@ -222,20 +234,18 @@ fn looks_like_tool_rejection(message: &str) -> bool {
 }
 
 /// 事件出口用闭包而不是 `Channel`：
-/// 会话是「前端发起、边跑边推给它」，排版是「后端自己发起、没人等着」，
-/// 后一种情况根本造不出 Channel（它需要一个 webview 端），
-/// 硬要一个就会逼出「伪造通道」这种假东西。
+/// 命令层有前端在等，边跑边推；闭包让测试与离线路径也能直接收集事件，
+/// 不必伪造一个 webview 端。
 pub async fn run<E: FnMut(StreamChunk) + Send>(
     template: &AiRequest,
     messages: Vec<ChatMessage>,
     ctx: &ToolCtx<'_>,
     cancel: &AtomicBool,
     mut on_event: E,
-    scope: Scope,
 ) -> Result<TurnResult, String> {
     use std::sync::atomic::Ordering;
 
-    let specs = crate::tools::specs(scope);
+    let specs = crate::tools::specs();
     // 内容暂存区按轮计：先清一次，免得上一轮残留（取消 / 报错提前退出时没结算）
     // 悄悄漏进这一轮
     crate::tools::edit::begin(ctx.out, ctx.workspace);
@@ -354,7 +364,7 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
                 describe(&name, &args),
             ));
 
-            let result = match crate::tools::call(&name, &args, ctx, scope) {
+            let result = match crate::tools::call(&name, &args, ctx) {
                 Ok(text) => text,
                 Err(error) => format!("工具执行失败：{error}"),
             };
@@ -423,6 +433,37 @@ mod tests {
 
         let cleared = describe("set_target_pages", &json!({}));
         assert!(cleared.contains("清掉目标页数"), "{cleared}");
+    }
+
+    #[test]
+    fn layout_tools_are_described_in_words() {
+        // 状态栏要显示「读组件手册」「换成 compact 档」「整页接管」，
+        // 不是「调用 set_page_layout」—— 这三个工具现在归会话 agent 自己调，
+        // 退化成工具名会让用户看不懂它在干什么
+        let guide = describe("read_layout_guide", &json!({}));
+        assert!(guide.contains("组件手册"), "{guide}");
+
+        let preset = describe("set_page_layout", &json!({ "preset": "compact" }));
+        assert!(preset.contains("compact"), "{preset}");
+        assert!(!preset.contains("set_page_layout"), "{preset}");
+
+        let parts = describe(
+            "set_page_layout",
+            &json!({ "parts": { "b1": "<p>x</p>", "b2": "<p>y</p>" } }),
+        );
+        assert!(parts.contains("2 块"), "{parts}");
+
+        let html = describe("set_page_layout", &json!({ "html": "<section></section>" }));
+        assert!(html.contains("整页接管"), "{html}");
+
+        // 什么都没给（只有 reset 之类）也要有一句人话，不能漏到兜底分支
+        let plain = describe("set_page_layout", &json!({ "reset": true }));
+        assert!(plain.contains("调整版面"), "{plain}");
+        assert!(!plain.contains("set_page_layout"), "{plain}");
+
+        let note = describe("note_on_page", &json!({ "text": "这一栏会挤出页" }));
+        assert!(note.contains("批注"), "{note}");
+        assert!(!note.contains("note_on_page"), "{note}");
     }
 
     /* ---------- 终止判定：五种输入各钉一条 ---------- */

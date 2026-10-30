@@ -410,7 +410,7 @@ fn header_hint(page: &Value) -> String {
     )
 }
 
-/// 纸面上的批注：排版 agent 留的话就靠这一段传给会话 agent。
+/// 纸面上的批注：agent 留的话就靠这一段回到下一轮的上下文里。
 
 /// 本轮暂存还没落库的改动。
 ///
@@ -621,7 +621,7 @@ mod tests {
     }
 
     /// 读页必须读 blocks。曾经读 v4 的 header / sections，v5 之后恒为空，
-    /// 两个 agent 都只能看到「这一页什么都没有」—— 排版就是在闭眼干活
+    /// 拿到的是一页空白 —— 排版就是在闭眼干活
     #[test]
     fn page_text_comes_from_blocks_not_legacy_fields() {
         let text = with_ctx(|ctx| read_page(&json!({}), ctx).unwrap());
@@ -730,7 +730,7 @@ mod tests {
         assert!(text.contains("· role kv"), "{text}");
     }
 
-    /// 排版 agent 的批注要能被会话 agent 读到 —— 它不能提问，批注是它唯一的出口
+    /// 批注要能被下一轮读到 —— 它是纸面上唯一「说给用户听」的通道
     #[test]
     fn read_page_appends_layout_notes() {
         let ws = json!({

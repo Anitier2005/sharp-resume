@@ -682,7 +682,6 @@ pub fn run() {
             session::chat_clear,
             session::chat_cancel,
             session::chat_send,
-            agent::layout::layout_submit,
             render::compile_page,
             assets::asset_put,
             assets::asset_get,
@@ -719,9 +718,6 @@ pub fn run() {
             history::history_search
         ])
         .manage(session::Sessions::default())
-        // 排版信箱：每页一份，跨命令存活。放在 manage 里而不是每次新建，
-        // 否则「同一个页面同时只跑一个」这个约束就不存在了
-        .manage(agent::layout::Layouts::default())
         .run(tauri::generate_context!());
     if let Err(error) = outcome {
         report_fatal_run_error(error);

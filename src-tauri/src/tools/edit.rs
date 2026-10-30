@@ -2878,13 +2878,8 @@ mod tests {
         assert!(!block_id.is_empty(), "页头 op 必须带 blockId：{}", ops[0]);
 
         // 紧接着读：这一轮的工作副本里就该有那个块和那几个字段
-        let text = crate::tools::call(
-            "read_page",
-            &json!({ "pageId": "pg2" }),
-            &h.ctx(),
-            crate::tools::Scope::Session,
-        )
-        .unwrap();
+        let text =
+            crate::tools::call("read_page", &json!({ "pageId": "pg2" }), &h.ctx()).unwrap();
         assert!(text.contains(&block_id), "读不到刚建的页头块：{text}");
         assert!(text.contains("李四"), "读不到刚写的字段：{text}");
         assert!(text.contains("页头"), "这个块要被认成页头：{text}");
@@ -3382,13 +3377,8 @@ mod tests {
         .unwrap();
 
         // 走真实分发：工作副本是在 `tools::call` 里装进 ctx 的
-        let text = crate::tools::call(
-            "read_page",
-            &json!({ "pageId": "pg1" }),
-            &h.ctx(),
-            crate::tools::Scope::Session,
-        )
-        .unwrap();
+        let text =
+            crate::tools::call("read_page", &json!({ "pageId": "pg1" }), &h.ctx()).unwrap();
         assert!(text.contains("照片"), "读不到刚加的字段：{text}");
         assert!(text.contains("蓝底一寸"), "读不到刚写的值：{text}");
 
@@ -3440,14 +3430,12 @@ mod tests {
     #[test]
     fn a_write_after_a_flush_still_sees_the_earlier_one() {
         let h = Harness::new();
-        let scope = crate::tools::Scope::Session;
         begin(&h.out, &h.ws);
 
         crate::tools::call(
             "add_field",
             &json!({ "ownerId": "b1", "label": "照片", "value": "蓝底" }),
             &h.ctx(),
-            scope,
         )
         .unwrap();
         let first = h.flush().expect("第一批改动要结算");
@@ -3457,7 +3445,6 @@ mod tests {
             "add_field",
             &json!({ "ownerId": "b1", "label": "到岗时间", "value": "随时" }),
             &h.ctx(),
-            scope,
         )
         .unwrap();
         let second = h.flush().expect("第二批改动要结算");

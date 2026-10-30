@@ -232,7 +232,8 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
              -- 只有那一刻才回收文件；一直没被用过的新资产要留着
              refs     INTEGER NOT NULL DEFAULT 0
          );
-         -- 会话：scope 是 personId（会话 agent）或 layout:<resumeId>:<pageId>（页排版 agent）
+         -- 会话：scope 就是 personId（一个人一条）。历史上还有 layout:<resumeId>:<pageId>
+         -- 的页排版会话，随那一层一起删掉；老行不再有人读，留着也不影响
          CREATE TABLE IF NOT EXISTS chat (
              scope TEXT NOT NULL,
              ord   INTEGER NOT NULL,

@@ -1,8 +1,8 @@
 //! 统一工具层。
 //!
 //! 所有 agent 能力都从这里进出：注册表 → JSON Schema → 执行分发。
-//! 会话 agent 和（后面的）页面排版 agent 共用这一层，区别只在「允许调用哪些名字」，
-//! 而不是各写一套。页面控制类工具将来也挂在这张表里，不另开旁路。
+//! 只有一条 agent 循环（`agent::turn::run`），所以这张表就是它能用的**全部**工具 ——
+//! 没有角色过滤，也没有「某一边不该看见」的旁路。加工具只改这一处。
 //!
 //! 数据从哪来：前端每轮把工作区快照推上来。读工具读的**不是**那份静态快照，
 //! 而是本轮工作副本（`ToolCtx::view`：快照 + 本轮已经暂存的写入）—— 否则模型写完
@@ -185,36 +185,17 @@ pub fn push_asset(ctx: &ToolCtx, asset: Asset) -> Result<(), String> {
     Ok(())
 }
 
-/// 工具归属：统一的注册表，但不同 agent 看到的能力不同。
-///
-/// 分配方式是**每个工具声明一份角色列表**（`Tool::scopes`），而不是反过来
-/// 维护「每个角色有哪些工具」—— 那样同一个事实存两遍，加一个工具就要记得改两处。
-///
-/// 新增一个 agent 的成本：这个枚举加一项 → 想给它的工具在列表里加上它。
-/// 分发、越权拒绝、schema 生成、测试断言全部不用动。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Scope {
-    /// 会话 agent：和用户对话、读内容、转交排版
-    Session,
-    /// 页排版 agent：拥有这一页版面的全部决定权
-    Layout,
-}
-
-/// 两个 agent 都能用
-pub const EVERYONE: &[Scope] = &[Scope::Session, Scope::Layout];
-
+/// 工具注册表里的一行。
 pub struct Tool {
     pub name: &'static str,
     /// 写给模型看的：什么时候该用它。措辞直接决定它会不会乱调。
     pub description: &'static str,
     pub params: fn() -> Value,
     pub run: fn(&Value, &ToolCtx) -> Result<String, String>,
-    /// 谁能调。这是唯一的能力配置点。
-    pub scopes: &'static [Scope],
     /// 有没有副作用：会改数据、写文件、发起外部调用。
     ///
-    /// 目前只用于把「只读工具」和「会改变状态的工具」分开，便于
-    /// `read_person` 这类工具在将来做并行；也让审查时一眼能看出哪些是写操作。
+    /// 只用于区分「只读工具」与「会改变状态的工具」，让审查时一眼能看出哪些是写操作；
+    /// 全量清单的护栏测试也靠它做只读/写两侧的快照。
     pub writes: bool,
 }
 
@@ -225,7 +206,6 @@ pub const TOOLS: &[Tool] = &[
                       用户问「我的信息里有什么」「还缺什么」时先调这个。",
         params: read::no_params,
         run: read::read_person,
-        scopes: EVERYONE,
         writes: false,
     },
     Tool {
@@ -234,7 +214,6 @@ pub const TOOLS: &[Tool] = &[
                       不确定「一共几页」「第几页叫什么」时必须调它，不要猜。",
         params: read::no_params,
         run: read::list_pages,
-        scopes: EVERYONE,
         writes: false,
     },
     Tool {
@@ -244,7 +223,6 @@ pub const TOOLS: &[Tool] = &[
                       任何涉及「这一页写了什么」的问题都必须先读，不许凭记忆回答。",
         params: read::page_params,
         run: read::read_page,
-        scopes: EVERYONE,
         writes: false,
     },
     Tool {
@@ -253,7 +231,6 @@ pub const TOOLS: &[Tool] = &[
                       或要改写却没有足够细节时调它。",
         params: read::library_params,
         run: read::read_library,
-        scopes: EVERYONE,
         writes: false,
     },
     /* ---------- 内容写入 ----------
@@ -270,7 +247,6 @@ pub const TOOLS: &[Tool] = &[
                       字段 id 从 read_person / read_page 的输出里取，不要按标签猜；只想清空内容就把 value 给空串。",
         params: edit::set_field_params,
         run: edit::set_field,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -281,7 +257,6 @@ pub const TOOLS: &[Tool] = &[
                       所以别为了加一项先去改别的字段；改已有字段请用 set_field。",
         params: edit::add_field_params,
         run: edit::add_field,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -290,7 +265,6 @@ pub const TOOLS: &[Tool] = &[
                       只是想清空文字不要用它 —— 那会让表单少一行，用户会以为界面出错了；清空请用 set_field 传 value: \"\"。",
         params: edit::remove_field_params,
         run: edit::remove_field,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -300,7 +274,6 @@ pub const TOOLS: &[Tool] = &[
                       这条素材经历库里已经有就传 refId，不要先把库里的字段抄一遍 —— 抄一遍之后两边就不同步了。",
         params: edit::add_entry_params,
         run: edit::add_entry,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -310,7 +283,6 @@ pub const TOOLS: &[Tool] = &[
                       要整段重写就把 bullets 全量给；只想换位置请用 move_entry，别删了再新建。",
         params: edit::update_entry_params,
         run: edit::update_entry,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -319,7 +291,6 @@ pub const TOOLS: &[Tool] = &[
                       删整栏请用 remove_section，别循环删条目。",
         params: edit::remove_entry_params,
         run: edit::remove_entry,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -328,7 +299,6 @@ pub const TOOLS: &[Tool] = &[
                       产物是分区内的条目顺序变了，内容一个字都没动。",
         params: edit::move_entry_params,
         run: edit::move_entry,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -337,7 +307,6 @@ pub const TOOLS: &[Tool] = &[
                       产物是页面上多一个空分区，标题有了但还没有条目 —— 紧接着还要 add_entry 才有内容。",
         params: edit::add_section_params,
         run: edit::add_section,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -346,7 +315,6 @@ pub const TOOLS: &[Tool] = &[
                       产物只是标题变了，里面的条目一条不动。",
         params: edit::set_section_title_params,
         run: edit::set_section_title,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -357,7 +325,6 @@ pub const TOOLS: &[Tool] = &[
                       只是暂时不想让它出现就先别删，问问用户是要删还是要挪到别的页。",
         params: edit::remove_section_params,
         run: edit::remove_section,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -368,7 +335,6 @@ pub const TOOLS: &[Tool] = &[
                       不确定就用 plain，别为了「看起来更专业」乱设。",
         params: edit::set_block_role_params,
         run: edit::set_block_role,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -378,7 +344,6 @@ pub const TOOLS: &[Tool] = &[
                       空的整页原件（证书 PDF）不是这个工具的事，那种要用户自己传文件。",
         params: edit::add_page_params,
         run: edit::add_page,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -389,7 +354,6 @@ pub const TOOLS: &[Tool] = &[
                       只想清空内容不要删页。",
         params: edit::delete_page_params,
         run: edit::delete_page,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -398,7 +362,6 @@ pub const TOOLS: &[Tool] = &[
                       产物只是页名变了，页里的内容不受影响。",
         params: edit::rename_page_params,
         run: edit::rename_page,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -408,7 +371,6 @@ pub const TOOLS: &[Tool] = &[
                       只是想在现有简历里加页，请用 add_page。",
         params: edit::add_resume_params,
         run: edit::add_resume,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -416,7 +378,6 @@ pub const TOOLS: &[Tool] = &[
         description: "改简历标题（侧栏里显示的那份名字）。产物只是标题变了，页与内容都不动。",
         params: edit::rename_resume_params,
         run: edit::rename_resume,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -427,7 +388,6 @@ pub const TOOLS: &[Tool] = &[
                       用户只是想换个版本看，请先 open_resume 切过去。",
         params: edit::delete_resume_params,
         run: edit::delete_resume,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -437,7 +397,6 @@ pub const TOOLS: &[Tool] = &[
                       想改已经印在纸上的内容，请用 update_entry，别在库里改完指望它会同步。",
         params: edit::save_library_item_params,
         run: edit::save_library_item,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -446,7 +405,6 @@ pub const TOOLS: &[Tool] = &[
                       注意：页面上引用它的条目会失去从库里继承来的字段 —— 删之前先 read_page 看一眼有没有人在用。",
         params: edit::remove_library_item_params,
         run: edit::remove_library_item,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -456,7 +414,6 @@ pub const TOOLS: &[Tool] = &[
                       任何一条失败整批回滚，返回第几条错、为什么；单点小改别用它，直接调那个工具更清楚。",
         params: edit::apply_patch_params,
         run: edit::apply_patch,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -468,7 +425,6 @@ pub const TOOLS: &[Tool] = &[
                       系统不判断哪张是证件照，挑不出就问用户，不要猜。",
         params: extract::extract_images_params,
         run: extract::extract_images,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -479,7 +435,6 @@ pub const TOOLS: &[Tool] = &[
                       他说「不要求页数了」就不传 pages（= 清除）。",
         params: target::set_target_pages_params,
         run: target::set_target_pages,
-        scopes: &[Scope::Session],
         writes: true,
     },
     /* ---------- 页面控制（只影响「看到什么」，不改内容） ---------- */
@@ -489,7 +444,6 @@ pub const TOOLS: &[Tool] = &[
                       不要凭记忆猜页码：不确定就先 list_pages。",
         params: page::open_page_params,
         run: page::open_page,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -499,7 +453,6 @@ pub const TOOLS: &[Tool] = &[
                       它不报任何简历内容，问「我的简历里写了什么」请用 read_person / read_page。",
         params: read::no_params,
         run: page::list_people,
-        scopes: &[Scope::Session],
         writes: false,
     },
     Tool {
@@ -509,7 +462,6 @@ pub const TOOLS: &[Tool] = &[
                       切过去之后你看到的材料才跟着变；在切换之前不要动别人的数据，你本来也只能改当前这位。",
         params: page::open_person_params,
         run: page::open_person,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -519,7 +471,6 @@ pub const TOOLS: &[Tool] = &[
                       不知道有哪些简历就先 read_person，别猜 resumeId。",
         params: page::open_resume_params,
         run: page::open_resume,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -528,7 +479,6 @@ pub const TOOLS: &[Tool] = &[
                       说「我要改」「回到表单」用 edit。只在用户明确要看/要改时切，别自作主张。",
         params: page::view_params,
         run: page::set_view,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -537,7 +487,6 @@ pub const TOOLS: &[Tool] = &[
                       用户说「把这三页放到标签上」「只留英文页的标签」时用它，pageIds 从 list_pages 取。",
         params: page::open_pages_params,
         run: page::set_open_pages,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -547,7 +496,6 @@ pub const TOOLS: &[Tool] = &[
                       能只问一句就别开表单（直接问更自然），要问三件以上才用表单。",
         params: ask::params,
         run: ask::ask,
-        scopes: &[Scope::Session],
         writes: false,
     },
     Tool {
@@ -557,15 +505,6 @@ pub const TOOLS: &[Tool] = &[
                       改完要把结果说清楚，让用户知道变了什么。",
         params: page::ui_params,
         run: page::set_ui,
-        scopes: &[Scope::Session],
-        writes: true,
-    },
-    Tool {
-        name: "request_layout",
-        description: "把「这一页要怎么排」的要求交给该页的排版 agent（它负责留白与疏密，                      不碰内容）。用户抱怨太挤 / 太散 / 装不下时用它，别自己调样式。",
-        params: layout::request_layout_params,
-        run: layout::request_layout,
-        scopes: &[Scope::Session],
         writes: true,
     },
     Tool {
@@ -574,7 +513,6 @@ pub const TOOLS: &[Tool] = &[
                       第一次给某一页排版前读一次；之后按需要再查。不读就写 HTML 很容易用到不存在的组件。",
         params: layout::guide_params,
         run: layout::read_layout_guide,
-        scopes: &[Scope::Layout],
         writes: false,
     },
     Tool {
@@ -584,7 +522,6 @@ pub const TOOLS: &[Tool] = &[
                       不要建议用户自己去找压缩工具。处理完会得到一个新资产 id，原图不会被改。",
         params: image::params,
         run: image::convert,
-        scopes: EVERYONE,
         writes: true,
     },
     Tool {
@@ -595,11 +532,6 @@ pub const TOOLS: &[Tool] = &[
                       附上的图片在下一轮消息里；PDF 渲染出的页也会进材料清单。只对能看图的模型有效。",
         params: view::params,
         run: view::render,
-        // 排版侧也要看图：原件样张是它唯一的版式依据。只给会话的话，
-        // describe_page 里那句「调 view_asset 看原件」就是一句空话 —— 它会拿着
-        // 一个 assetId 去要一个越权的工具。`convert_image` 本来就在 EVERYONE 里，
-        // 排版早就有一个会写池子的工具，这一条不多开一层权限。
-        scopes: EVERYONE,
         writes: true,
     },
     Tool {
@@ -607,20 +539,18 @@ pub const TOOLS: &[Tool] = &[
         description: "改这一页的成品版面。三档力度，按需选最轻的那档：\
                       preset 换整体疏密；parts 只重写某几个块（块 id 从 read_page 取）；\
                       html 整页接管，只在结构化确实做不出来时用。\
-                      这是排版 agent 的核心工具 —— 内容不在你手里，版面全部由你决定。",
+                      它只决定「怎么摆」，一个字都不改；要改字请用内容工具。",
         params: layout::set_layout_params,
         run: layout::set_page_layout,
-        scopes: &[Scope::Layout],
         writes: true,
     },
     Tool {
         name: "note_on_page",
         description: "在纸面上留一条给**用户**看的批注。拿不准这里该怎么排、或想提醒「这段按现在这样会挤出页」时用它。\
                       产物是一个贴在纸面上的批注点：给了 blockId 就贴那一块，没给就贴页边，用户能点开也能关掉。\
-                      它不是给自己记笔记，用户会直接看到；内容你一个字都动不了，觉得该改就在批注里说清。一轮最多 2 条，说完继续排版。",
+                      它不是给自己记笔记，用户会直接看到；批注不改任何内容，该改的字用内容工具。一轮最多 2 条，说完继续。",
         params: layout::note_params,
         run: layout::note_on_page,
-        scopes: &[Scope::Layout],
         writes: true,
     },
     Tool {
@@ -630,7 +560,6 @@ pub const TOOLS: &[Tool] = &[
                       不要用记忆里的印象补。返回的是命中的「块」，带摘要与 chunkId；需要原文再 read_knowledge。",
         params: knowledge_params,
         run: crate::knowledge::search_tool,
-        scopes: &[Scope::Session],
         writes: false,
     },
     Tool {
@@ -640,7 +569,6 @@ pub const TOOLS: &[Tool] = &[
                       不要凭猜测补。命中的是原话摘录，可直接引用。",
         params: history_params,
         run: crate::history::search_tool,
-        scopes: &[Scope::Session],
         writes: false,
     },
     Tool {
@@ -649,7 +577,6 @@ pub const TOOLS: &[Tool] = &[
                       只在 search_knowledge 的摘要不足以回答时用 —— 整篇很长，读多了会挤掉真正要改的内容。",
         params: knowledge_read_params,
         run: crate::knowledge::read_tool,
-        scopes: &[Scope::Session],
         writes: false,
     },
     Tool {
@@ -659,9 +586,6 @@ pub const TOOLS: &[Tool] = &[
                       自己按页码要一张，别凭描述猜。.docx / .txt 没有页图，要看内容用 read_source。",
         params: render::params,
         run: render::run,
-        // 排版侧也要能看原件：它的活儿就是把刊物级别的东西排到纸上，
-        // 「原件那一页到底长什么样」是它唯一可核对的参照。只给会话就等于让它瞎子排版。
-        scopes: EVERYONE,
         writes: false,
     },
     Tool {
@@ -671,7 +595,6 @@ pub const TOOLS: &[Tool] = &[
                       参数 stored 从材料段那行「（附件标识：…）」取，不是文件名；长文档用 offset/limit 分段读。",
         params: source::params,
         run: source::run,
-        scopes: EVERYONE,
         writes: false,
     },
 ];
@@ -724,11 +647,10 @@ fn knowledge_read_params() -> Value {
     })
 }
 
-/// 转成 OpenAI 的 tools 数组（按 agent 过滤）
-pub fn specs(scope: Scope) -> Value {
+/// 转成 OpenAI 的 tools 数组。
+pub fn specs() -> Value {
     let list: Vec<Value> = TOOLS
         .iter()
-        .filter(|tool| visible(tool, scope))
         .map(|tool| {
             json!({
                 "type": "function",
@@ -743,40 +665,14 @@ pub fn specs(scope: Scope) -> Value {
     Value::Array(list)
 }
 
-fn visible(tool: &Tool, scope: Scope) -> bool {
-    tool.scopes.contains(&scope)
+/// 全部工具名，按注册顺序。测试与审查用它做快照。
+pub fn names() -> Vec<&'static str> {
+    TOOLS.iter().map(|tool| tool.name).collect()
 }
-
-/// 某个角色能用的全部工具名，按注册顺序。测试与审查用它做快照。
-pub fn names_for(scope: Scope) -> Vec<&'static str> {
-    TOOLS
-        .iter()
-        .filter(|tool| visible(tool, scope))
-        .map(|tool| tool.name)
-        .collect()
-}
-
-/// 排版侧硬调 `ask_session` 时的拒绝文案。
-///
-/// 必须是「结论 + 替代方案」，不能只是「不能用」：模型拿到一句干巴巴的权限错误
-/// 会换个名字再试，或者干脆停下来等用户 —— 两样都比直接告诉它该怎么办糟。
-pub const LAYOUT_HAS_NO_ASK: &str =
-    "排版 agent 不能提问。要改内容请用 note_on_page 留批注，或者按现有内容保守排版。";
 
 /// 按名字分发。未知工具不 panic —— 模型偶尔会编一个名字，要把错误当结果喂回去，
 /// 让它下一轮自己纠正。
-///
-/// 越权调用（会话 agent 调 set_page_style）也走这里拒绝：报错文本会变成工具结果，
-/// 模型下一轮就知道该改调 request_layout。
-pub fn call(name: &str, args: &Value, ctx: &ToolCtx, scope: Scope) -> Result<String, String> {
-    // 排版 agent 曾经有一个「问会话 agent」的通道，产物是一条插进会话流的用户可见
-    // 消息 —— 用户那边看到的就是排版语气的问句挂在对话里，很乱。通道已经摘掉：
-    // 工具不在任何 specs 里，历史会话里模型仍可能硬调，所以这里单独兜一句人话，
-    // 不能靠下面的「当前角色不能用」糊过去（那读起来像权限配置错了，不像结论）。
-    if scope == Scope::Layout && name == "ask_session" {
-        return Err(LAYOUT_HAS_NO_ASK.into());
-    }
-
+pub fn call(name: &str, args: &Value, ctx: &ToolCtx) -> Result<String, String> {
     // 所有工具都从这里进出，所以「读工作副本」只在这一处做：
     // 工具内部照常读 `ctx.workspace`，拿到的已经是视图，谁也漏不了。
     // 必须在分发**之前**取（`view()` 会锁 `out.edits`，工具里 `with_state` 也会锁，
@@ -784,25 +680,16 @@ pub fn call(name: &str, args: &Value, ctx: &ToolCtx, scope: Scope) -> Result<Str
     let view = ctx.view();
     let ctx = &ctx.on(&view);
 
-    match TOOLS.iter().find(|tool| tool.name == name && visible(tool, scope)) {
+    match TOOLS.iter().find(|tool| tool.name == name) {
         Some(tool) => (tool.run)(args, ctx),
-        None => {
-            let denied = TOOLS
+        None => Err(format!(
+            "没有名为 {name} 的工具，可用的有：{}",
+            TOOLS
                 .iter()
-                .any(|tool| tool.name == name && !visible(tool, scope));
-            if denied {
-                return Err(format!("当前角色不能用 {name}，换成你这边允许的工具"));
-            }
-            Err(format!(
-                "没有名为 {name} 的工具，可用的有：{}",
-                TOOLS
-                    .iter()
-                    .filter(|tool| visible(tool, scope))
-                    .map(|t| t.name)
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            ))
-        }
+                .map(|tool| tool.name)
+                .collect::<Vec<_>>()
+                .join(" / ")
+        )),
     }
 }
 
@@ -812,7 +699,7 @@ mod tests {
 
     #[test]
     fn specs_are_openai_shaped() {
-        let specs = specs(Scope::Session);
+        let specs = specs();
         let first = &specs[0];
         assert_eq!(first["type"], "function");
         assert!(first["function"]["name"].is_string());
@@ -823,7 +710,7 @@ mod tests {
         let extract = list
             .iter()
             .find(|item| item["function"]["name"] == "extract_images")
-            .expect("extract_images 要在会话工具清单里");
+            .expect("extract_images 要在工具清单里");
         assert_eq!(extract["function"]["parameters"]["required"], json!(["stored"]));
         assert_eq!(
             extract["function"]["parameters"]["additionalProperties"],
@@ -831,175 +718,219 @@ mod tests {
         );
     }
 
-    /// 分配机制的自检：能力只写在每个工具的 `scopes` 里。
+    /// 全量清单的自检：这张表就是模型能用的**全部**工具，没有角色过滤。
     ///
-    /// 这条测试的作用不是「断言现在长这样」，而是把「谁能干什么」固定在
-    /// 一个能一眼看完的地方 —— 加角色、加工具时如果漏了配置，这里会红。
+    /// 这条测试的作用不是「断言现在长这样」，而是把「有哪些能力」固定在一个
+    /// 能一眼看完的地方 —— 加工具时如果忘了注册，或者有人偷偷加了第二层过滤，
+    /// 这里会红。数量是快照：改注册表就要来这里改数，逼人看一遍全表。
     #[test]
     fn capability_map_is_one_line_per_tool() {
-        let session = names_for(Scope::Session);
-        let layout = names_for(Scope::Layout);
+        let names = names();
 
-        // 工具数就是能力边界的快照：少一个说明注册时漏了，多一个说明有人偷偷
-        // 给某个角色开了口子，两者都该在这里被看见
-        assert_eq!(session.len(), 42, "会话 agent 的工具数变了：{session:?}");
-        assert_eq!(layout.len(), 11, "排版 agent 的工具数变了：{layout:?}");
+        // 44 = 内容读写 + 页面控制 + 版面三件套，一个不多一个不少
+        assert_eq!(names.len(), 44, "工具数变了：{names:?}");
+        // specs 与注册表必须同源：少一条说明 specs 里还在过滤
+        assert_eq!(
+            specs().as_array().map(|list| list.len()).unwrap_or(0),
+            TOOLS.len(),
+            "specs 与注册表对不上"
+        );
 
-        // 会话 agent：能读、能转交、能转图，但不能自己动版面
-        assert!(session.contains(&"request_layout"));
-        assert!(session.contains(&"convert_image"));
-        // 抽图只给会话：排版 agent 不改内容，拿到一组图片 id 也无从下手
-        assert!(session.contains(&"extract_images"));
-        assert!(!layout.contains(&"extract_images"));
-        // 目标页数只给会话：排版 agent 不改内容，也不该动「压到几页」这个约定
-        assert!(session.contains(&"set_target_pages"));
-        assert!(!layout.contains(&"set_target_pages"));
-        // 看图两边都要：会话要确认证件照 / 看 PDF 原件，排版要看「原件样张」——
-        // 样张是它判断档位、页头、照片位置的唯一依据。抽图仍然只给会话
-        assert!(session.contains(&"view_asset"));
-        assert!(layout.contains(&"view_asset"));
-        // 知识库是只读检索：会话能查、排版不能（排版不改内容，查事实没有落点）
-        assert!(session.contains(&"search_knowledge"));
-        assert!(session.contains(&"read_knowledge"));
-        // 历史检索是会话独有的：排版 agent 没有对话可翻
-        assert!(session.contains(&"search_history"));
-        assert!(!layout.contains(&"search_history"));
-        assert!(!layout.contains(&"search_knowledge"));
-        // 原件正文是事实，两边都能读：排版也要能核对「原件上到底怎么写的」
-        assert!(session.contains(&"read_source"));
-        assert!(layout.contains(&"read_source"));
-        // 页图是按需要的：材料管线不再默认塞图，想看哪一页就自己渲哪一页。
-        // 两边都要 —— 会话要核对「原件第 2 页那张照片多大」，排版要看原件版式
-        assert!(session.contains(&"render_doc_page"));
-        assert!(layout.contains(&"render_doc_page"));
-        assert!(!session.contains(&"set_page_layout"));
-        assert!(!session.contains(&"read_layout_guide"));
+        // 内容写入
+        for name in [
+            "set_field",
+            "add_field",
+            "remove_field",
+            "add_entry",
+            "update_entry",
+            "remove_entry",
+            "move_entry",
+            "add_section",
+            "set_section_title",
+            "remove_section",
+            "add_page",
+            "delete_page",
+            "rename_page",
+            "add_resume",
+            "rename_resume",
+            "delete_resume",
+            "save_library_item",
+            "remove_library_item",
+            "apply_patch",
+        ] {
+            assert!(names.contains(&name), "少了内容工具 {name}：{names:?}");
+        }
+        // 读 / 定位 / 界面
+        for name in [
+            "read_person",
+            "list_pages",
+            "read_page",
+            "read_library",
+            "list_people",
+            "open_page",
+            "open_person",
+            "open_resume",
+            "set_view",
+            "set_open_pages",
+            "set_ui",
+            "ask_user",
+        ] {
+            assert!(names.contains(&name), "少了 {name}：{names:?}");
+        }
+        // 材料与事实
+        for name in [
+            "extract_images",
+            "convert_image",
+            "view_asset",
+            "render_doc_page",
+            "read_source",
+            "set_target_pages",
+            "search_knowledge",
+            "read_knowledge",
+            "search_history",
+        ] {
+            assert!(names.contains(&name), "少了 {name}：{names:?}");
+        }
+        // 版面三件套：会话 agent 自己动手，不再转交
+        for name in ["read_layout_guide", "set_page_layout", "note_on_page"] {
+            assert!(names.contains(&name), "少了版面工具 {name}：{names:?}");
+        }
 
-        // 排版 agent：能读、能写版面、能转图，但不能切页/改界面/问用户
-        assert!(layout.contains(&"set_page_layout"));
-        assert!(layout.contains(&"read_layout_guide"));
-        assert!(layout.contains(&"convert_image"));
-        assert!(!layout.contains(&"open_page"));
-        assert!(!layout.contains(&"ask_user"));
-        // 提问通道已经摘掉：排版 agent 既问不到会话 agent，也问不到用户
-        assert!(!layout.contains(&"ask_session"));
-        assert!(!session.contains(&"ask_session"));
-
-        // 写操作必须标出来：审查时靠它快速看出哪些会改数据
+        // 写操作必须标出来：审查时靠它快速看出哪些会改数据。只有只读、无副作用的
+        // 那几个该在 readers 里 —— 多一个就说明有人把写工具标成了读
         let readers: Vec<&str> = TOOLS
             .iter()
             .filter(|tool| !tool.writes)
             .map(|tool| tool.name)
             .collect();
-        assert!(readers.contains(&"read_page"));
-        assert!(readers.contains(&"read_layout_guide"));
-        assert!(readers.contains(&"list_people"), "列候选人不动任何数据");
-        assert!(readers.contains(&"search_knowledge"), "查知识库不改任何状态");
-        assert!(readers.contains(&"search_history"), "翻历史不改任何状态");
-        assert!(readers.contains(&"read_source"), "读原件正文不改任何状态");
-        assert!(readers.contains(&"render_doc_page"), "渲染页图只往本轮消息里贴图，不落盘");
-        assert!(!readers.contains(&"set_page_layout"));
-        assert!(!readers.contains(&"convert_image"));
-        assert!(!readers.contains(&"extract_images"), "抽图会写池与材料");
-        // 内容工具全部有副作用（改的是本轮暂存区，轮末才落地，但仍然是写）
-        assert!(!readers.contains(&"set_field"));
-        assert!(!readers.contains(&"apply_patch"));
-        assert!(!readers.contains(&"note_on_page"));
-        // 问用户不改任何状态：它只发一张表单，等用户填
-        assert!(readers.contains(&"ask_user"));
+        let expected_readers = [
+            "read_person",
+            "list_pages",
+            "read_page",
+            "read_library",
+            "list_people",
+            "ask_user",
+            "read_layout_guide",
+            "search_knowledge",
+            "search_history",
+            "read_knowledge",
+            "render_doc_page",
+            "read_source",
+        ];
+        for name in expected_readers {
+            assert!(readers.contains(&name), "{name} 应当是只读工具：{readers:?}");
+        }
+        assert_eq!(readers.len(), expected_readers.len(), "只读清单变了：{readers:?}");
+        // 会改数据的一个都不能混进来
+        for name in ["set_page_layout", "note_on_page", "set_field", "apply_patch"] {
+            assert!(!readers.contains(&name), "{name} 是写操作");
+        }
     }
 
-    /// 会话 agent 现在有内容写权限，但仍然不能自己动版面。
+    /// `ask_session` 是**彻底不存在**，不是「某个角色不能用」。
     ///
-    /// 这两件事必须靠 `scopes` 分开：一旦给会话 agent 开了 `set_page_layout`，
-    /// 它就会绕过 `request_layout` 直接改样式，排版 agent 的存在就没有意义了。
+    /// 它当年是排版 agent 问会话 agent 的通道，产物是一条插进会话流的用户可见消息；
+    /// 两个 agent 合并之后这个角色没了，工具也不该以任何形式留下 —— 连拒绝分支都不留，
+    /// 因为「不能提问」这句话本身就是旧角色存在的证据。模型硬调时只能拿到
+    /// 「没有名为 ask_session 的工具」，和它编一个别的名字是同一种结果。
     #[test]
-    fn session_tools_include_content_writes() {
-        let specs = specs(Scope::Session);
-        let names: Vec<&str> = specs
+    fn ask_session_is_gone_instead_of_hidden() {
+        assert!(!names().contains(&"ask_session"), "全量清单里还有 ask_session");
+        let spec_names: Vec<String> = specs()
             .as_array()
             .map(|list| {
                 list.iter()
                     .filter_map(|item| item["function"]["name"].as_str())
+                    .map(str::to_string)
                     .collect()
             })
             .unwrap_or_default();
+        assert!(!spec_names.iter().any(|name| name == "ask_session"), "{spec_names:?}");
 
-        for name in ["set_field", "add_field", "delete_page", "apply_patch", "open_resume"] {
-            assert!(names.contains(&name), "会话 agent 少了 {name}：{names:?}");
-        }
-        // 换人的前提是知道有哪些人：没有目录，open_person 只能靠报错试 id
-        assert!(names.contains(&"list_people"), "{names:?}");
-        assert!(
-            !names.contains(&"set_page_layout"),
-            "排版不归会话 agent，它只能 request_layout"
-        );
-    }
-
-    /// 排版 agent 只能改版面：批注是它唯一的对外出口，内容工具一个都不给。
-    #[test]
-    fn layout_tools_do_not_write_content() {
-        let names = names_for(Scope::Layout);
-        for name in ["note_on_page", "set_page_layout"] {
-            assert!(names.contains(&name), "排版 agent 少了 {name}：{names:?}");
-        }
-        for name in ["set_field", "delete_page", "apply_patch", "open_person"] {
-            assert!(!names.contains(&name), "排版 agent 不该有 {name}");
-        }
-    }
-
-    /// 排版 agent 没有提问通道：specs 里不出现，硬调也只拿到一句「不能提问」。
-    ///
-    /// 这条通道当年的产物是一条插进会话流的用户可见消息 —— 用户在对话里看到
-    /// 一段排版语气的问句，还得由会话 agent 长篇回答，噪音全落在会话上。
-    #[test]
-    fn layout_agent_has_no_ask_channel() {
         let ws = sample_ws();
         let out = Outbox::default();
         let ctx = ctx_of(&ws, &out);
-
-        let specs = specs(Scope::Layout);
-        let spec_names: Vec<&str> = specs
-            .as_array()
-            .map(|list| {
-                list.iter()
-                    .filter_map(|item| item["function"]["name"].as_str())
-                    .collect()
-            })
-            .unwrap_or_default();
-        assert!(
-            !spec_names.contains(&"ask_session"),
-            "排版 agent 的 specs 里还有 ask_session：{spec_names:?}"
-        );
-        assert!(spec_names.contains(&"note_on_page"), "{spec_names:?}");
-
         let err = call(
             "ask_session",
             &json!({ "question": "这段实习要不要和上一段合并成一条" }),
             &ctx,
-            Scope::Layout,
         )
         .unwrap_err();
-        assert_eq!(err, LAYOUT_HAS_NO_ASK);
-        assert!(err.contains("不能提问"), "{err}");
-        assert!(err.contains("note_on_page"), "拒绝要给出替代方案：{err}");
+        assert!(err.contains("没有名为 ask_session 的工具"), "{err}");
+        assert!(!err.contains("不能用"), "不许再出现「角色不能用」这种说法：{err}");
         assert!(
             out.actions.lock().unwrap().is_empty(),
-            "被拒的提问不能留下指令 —— 否则前端依旧会往会话流里插一条"
+            "被拒的调用不能留下指令"
         );
+    }
 
-        // 替代方案本身必须仍然可用：批注只是贴在纸面上，不进会话流
-        let ok = call(
-            "note_on_page",
-            &json!({ "text": "这一栏压成一行后字号会掉到 8px" }),
-            &ctx,
-            Scope::Layout,
-        )
-        .unwrap();
-        assert!(ok.contains("批注已贴"), "{ok}");
-        let actions = out.actions.lock().unwrap().clone();
-        assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0]["type"], json!("pageNote"));
+    /// 提示词里「调 `XX`」点到的工具必须真的存在。
+    ///
+    /// 为什么要这条：`view` 那次和更早的 `set_field` 那次是同一个形状 —— 文案读起来
+    /// 毫无问题，单测只断言「这里有个词」，全绿；真机上模型第一步就撞「没有名为 XX
+    /// 的工具」。字符串断言永远抓不到这类错，因为它核的是「文案里有这句话」，
+    /// 不是「这句话在真机上行得通」。
+    ///
+    /// 合并之后只有一个工具清单，所以这里直接对**全量** `specs()` 核对：
+    /// 提示词写错、工具改名、注册漏了，都在这儿红。
+    #[test]
+    fn every_tool_the_system_prompt_tells_it_to_call_really_exists() {
+        const SYSTEM: &str = include_str!("../../../prompts/system.md");
+        let specs = specs();
+        let list = specs.as_array().expect("specs 是数组");
+
+        let seen = called_tools(SYSTEM);
+        // 抽不到东西说明护栏自己失效了（句式改了就没人盯着了），比漏检更该红
+        assert!(seen.len() >= 2, "一个「调 XX」都没抽到，护栏失效：{seen:?}");
+
+        for name in &seen {
+            assert!(
+                list.iter().any(|item| item["function"]["name"] == name.as_str()),
+                "提示词让模型调 {name}，但工具表里没有它"
+            );
+        }
+        // 合并进来之后，系统提示词必然会点名版面工具：抽不到就是提示词还没跟上
+        assert!(
+            seen.iter().any(|name| name == "set_target_pages"),
+            "漏抽了 set_target_pages：{seen:?}"
+        );
+    }
+
+    /// 从一段文案里抽出「调 `name`」「调 name」点到的工具名。
+    ///
+    /// 只认带下划线的标识符：中文句子里的「调」后面跟的多半是「调整」「调用」这类词，
+    /// 工具名一定有下划线，这个约束足够把噪声挡在外面。
+    fn called_tools(text: &str) -> Vec<String> {
+        let chars: Vec<char> = text.chars().collect();
+        let mut out: Vec<String> = Vec::new();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] != '调' {
+                i += 1;
+                continue;
+            }
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            let quoted = j < chars.len() && chars[j] == '`';
+            if quoted {
+                j += 1;
+            }
+            let start = j;
+            while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+                j += 1;
+            }
+            let closed = !quoted || (j < chars.len() && chars[j] == '`');
+            if j > start && closed {
+                let name: String = chars[start..j].iter().collect();
+                if name.contains('_') && !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+            i = j.max(i + 1);
+        }
+        out
     }
 
     #[test]
@@ -1015,8 +946,9 @@ mod tests {
             root: None,
             facts: None,
         };
-        let err = call("read_everything", &json!({}), &ctx, Scope::Session).unwrap_err();
+        let err = call("read_everything", &json!({}), &ctx).unwrap_err();
         assert!(err.contains("read_page"), "{err}");
+        assert!(err.contains("set_page_layout"), "清单要全量给出：{err}");
     }
 
     fn sample_ws() -> Value {
@@ -1061,12 +993,12 @@ mod tests {
         let out = Outbox::default();
         let ctx = ctx_of(&ws, &out);
 
-        let text = call("open_page", &json!({ "index": 2 }), &ctx, Scope::Session).unwrap();
+        let text = call("open_page", &json!({ "index": 2 }), &ctx).unwrap();
         assert!(text.contains("English"), "{text}");
 
-        call("set_view", &json!({ "view": "preview" }), &ctx, Scope::Session).unwrap();
-        call("set_open_pages", &json!({ "pageIds": ["pg2"] }), &ctx, Scope::Session).unwrap();
-        call("set_ui", &json!({ "mode": "dark", "sideW": 9999 }), &ctx, Scope::Session).unwrap();
+        call("set_view", &json!({ "view": "preview" }), &ctx).unwrap();
+        call("set_open_pages", &json!({ "pageIds": ["pg2"] }), &ctx).unwrap();
+        call("set_ui", &json!({ "mode": "dark", "sideW": 9999 }), &ctx).unwrap();
 
         let actions = out.actions.lock().unwrap().clone();
         assert_eq!(actions[0], json!({ "type": "openPage", "pageId": "pg2" }));
@@ -1084,38 +1016,15 @@ mod tests {
         let out = Outbox::default();
         let ctx = ctx_of(&ws, &out);
 
-        assert!(call("open_page", &json!({ "pageId": "pg-nope" }), &ctx, Scope::Session)
+        assert!(call("open_page", &json!({ "pageId": "pg-nope" }), &ctx)
             .unwrap_err()
             .contains("没有 id"));
-        assert!(call("open_page", &json!({}), &ctx, Scope::Session).unwrap_err().contains("哪一页"));
-        assert!(call("set_view", &json!({ "view": "fullscreen" }), &ctx, Scope::Session).is_err());
-        assert!(call("set_ui", &json!({ "accentHex": "blue" }), &ctx, Scope::Session).is_err());
-        assert!(call("set_ui", &json!({}), &ctx, Scope::Session).is_err());
+        assert!(call("open_page", &json!({}), &ctx).unwrap_err().contains("哪一页"));
+        assert!(call("set_view", &json!({ "view": "fullscreen" }), &ctx).is_err());
+        assert!(call("set_ui", &json!({ "accentHex": "blue" }), &ctx).is_err());
+        assert!(call("set_ui", &json!({}), &ctx).is_err());
         // 失败不该留下任何指令
         assert!(out.actions.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn scope_keeps_layout_tools_out_of_session_agent() {
-        let ws = sample_ws();
-        let out = Outbox::default();
-        let ctx = ctx_of(&ws, &out);
-
-        // 会话 agent 动不了版面：它只能转交，不能直接写
-        for name in ["set_page_layout", "read_layout_guide"] {
-            let err = call(name, &json!({}), &ctx, Scope::Session).unwrap_err();
-            assert!(err.contains("不能用"), "{name}: {err}");
-        }
-
-        // 排版 agent 调不了切页 / 改界面
-        for name in ["open_page", "set_ui", "set_view", "ask_user"] {
-            let err = call(name, &json!({}), &ctx, Scope::Layout).unwrap_err();
-            assert!(err.contains("不能用"), "{name}: {err}");
-        }
-
-        // 两边都能读
-        assert!(call("list_pages", &json!({}), &ctx, Scope::Layout).is_ok());
-        assert!(call("list_pages", &json!({}), &ctx, Scope::Session).is_ok());
     }
 
     /// 连着改两次版面：第二次必须看到第一次的结果。
@@ -1133,14 +1042,12 @@ mod tests {
             "set_page_layout",
             &json!({ "preset": "compact", "parts": { "b1": "<div class=\"row\"></div>" } }),
             &ctx,
-            Scope::Layout,
         )
         .unwrap();
         call(
             "set_page_layout",
             &json!({ "parts": { "b2": "<section class=\"sec tight\"><h2>工作</h2></section>" } }),
             &ctx,
-            Scope::Layout,
         )
         .unwrap();
 
@@ -1171,7 +1078,6 @@ mod tests {
             "set_page_layout",
             &json!({ "parts": { "nope": "<p>x</p>" } }),
             &ctx,
-            Scope::Layout,
         )
         .unwrap_err();
         assert!(err.contains("b1"), "报错要把正确的块 id 列出来：{err}");
@@ -1181,7 +1087,6 @@ mod tests {
             "set_page_layout",
             &json!({ "parts": { "b1": huge } }),
             &ctx,
-            Scope::Layout,
         )
         .unwrap_err();
         assert!(err.contains("上限"), "{err}");
@@ -1195,7 +1100,7 @@ mod tests {
         let out = Outbox::default();
         let ctx = ctx_of(&ws, &out);
 
-        call("set_page_layout", &json!({ "reset": true }), &ctx, Scope::Layout).unwrap();
+        call("set_page_layout", &json!({ "reset": true }), &ctx).unwrap();
         let actions = out.actions.lock().unwrap().clone();
         // 空对象是「没有任何覆盖」，不是「没给」—— 前端要据此清空
         assert_eq!(actions[0]["layout"], json!({}));
@@ -1224,15 +1129,15 @@ mod tests {
         let ctx = ctx_of(&ws, &out);
 
         // 换人的前提：先有目录。只报名字 + id + 简历数，别把内容也倒出来
-        let text = call("list_people", &json!({}), &ctx, Scope::Session).unwrap();
+        let text = call("list_people", &json!({}), &ctx).unwrap();
         assert!(text.contains("张三") && text.contains("李四"), "{text}");
         assert!(text.contains("← 当前"), "当前那位要标出来：{text}");
         assert!(text.contains("2 份简历"), "{text}");
         assert!(out.actions.lock().unwrap().is_empty(), "只读工具不该产出指令");
 
-        let text = call("open_person", &json!({ "personId": "p2" }), &ctx, Scope::Session).unwrap();
+        let text = call("open_person", &json!({ "personId": "p2" }), &ctx).unwrap();
         assert!(text.contains("李四"), "要用人名回话，用户才认得出：{text}");
-        let text = call("open_resume", &json!({ "resumeId": "r2" }), &ctx, Scope::Session).unwrap();
+        let text = call("open_resume", &json!({ "resumeId": "r2" }), &ctx).unwrap();
         assert!(text.contains("English"), "{text}");
 
         let actions = out.actions.lock().unwrap().clone();
@@ -1244,15 +1149,15 @@ mod tests {
         );
 
         // 错的 id 要把可用的一并列出，模型才有下一轮的自纠机会
-        let err = call("open_person", &json!({ "personId": "p9" }), &ctx, Scope::Session)
+        let err = call("open_person", &json!({ "personId": "p9" }), &ctx)
             .unwrap_err();
         assert!(err.contains("p1") && err.contains("p2"), "{err}");
-        let err = call("open_resume", &json!({ "resumeId": "r9" }), &ctx, Scope::Session)
+        let err = call("open_resume", &json!({ "resumeId": "r9" }), &ctx)
             .unwrap_err();
         assert!(err.contains("r1") && err.contains("r2"), "{err}");
 
         let before = out.actions.lock().unwrap().len();
-        call("open_person", &json!({ "personId": "p1" }), &ctx, Scope::Session).unwrap();
+        call("open_person", &json!({ "personId": "p1" }), &ctx).unwrap();
         assert_eq!(out.actions.lock().unwrap().len(), before, "原地切换不该再发指令");
     }
 
@@ -1267,10 +1172,9 @@ mod tests {
             "note_on_page",
             &json!({ "text": "技能这一栏压成一行后字号会掉到 8px", "blockId": "b2" }),
             &ctx,
-            Scope::Layout,
         )
         .unwrap();
-        call("note_on_page", &json!({ "text": "整页留白偏多" }), &ctx, Scope::Layout).unwrap();
+        call("note_on_page", &json!({ "text": "整页留白偏多" }), &ctx).unwrap();
 
         let actions = out.actions.lock().unwrap().clone();
         assert_eq!(actions[0]["type"], json!("pageNote"));
@@ -1295,9 +1199,9 @@ mod tests {
         let out = Outbox::default();
         let ctx = ctx_of(&ws, &out);
 
-        call("note_on_page", &json!({ "text": "第一条" }), &ctx, Scope::Layout).unwrap();
-        call("note_on_page", &json!({ "text": "第二条" }), &ctx, Scope::Layout).unwrap();
-        let err = call("note_on_page", &json!({ "text": "第三条" }), &ctx, Scope::Layout)
+        call("note_on_page", &json!({ "text": "第一条" }), &ctx).unwrap();
+        call("note_on_page", &json!({ "text": "第二条" }), &ctx).unwrap();
+        let err = call("note_on_page", &json!({ "text": "第三条" }), &ctx)
             .unwrap_err();
         assert!(err.contains("2 条"), "要说清上限是几条：{err}");
         assert_eq!(out.actions.lock().unwrap().len(), 2, "被拒的那条不能留下指令");
@@ -1305,7 +1209,7 @@ mod tests {
         // 名额记在出站口上：换一个 Outbox 就是新的一轮，不需要额外重置
         let fresh = Outbox::default();
         let next = ctx_of(&ws, &fresh);
-        call("note_on_page", &json!({ "text": "新一轮的批注" }), &next, Scope::Layout).unwrap();
+        call("note_on_page", &json!({ "text": "新一轮的批注" }), &next).unwrap();
         assert_eq!(fresh.actions.lock().unwrap().len(), 1);
     }
 
@@ -1319,25 +1223,16 @@ mod tests {
             "note_on_page",
             &json!({ "text": "贴错块", "blockId": "nope" }),
             &ctx,
-            Scope::Layout,
         )
         .unwrap_err();
         assert!(err.contains("b1"), "报错要列出这一页真实的块：{err}");
 
         let long = "字".repeat(201);
-        let err = call("note_on_page", &json!({ "text": long }), &ctx, Scope::Layout).unwrap_err();
+        let err = call("note_on_page", &json!({ "text": long }), &ctx).unwrap_err();
         assert!(err.contains("上限"), "{err}");
-        assert!(call("note_on_page", &json!({}), &ctx, Scope::Layout)
+        assert!(call("note_on_page", &json!({}), &ctx)
             .unwrap_err()
             .contains("不能为空"));
-
-        // 会话 agent 不能留批注，排版 agent 不能改内容：两个方向都要拦住
-        assert!(call("note_on_page", &json!({ "text": "x" }), &ctx, Scope::Session)
-            .unwrap_err()
-            .contains("不能用"));
-        assert!(call("set_field", &json!({ "fieldId": "f1" }), &ctx, Scope::Layout)
-            .unwrap_err()
-            .contains("不能用"));
 
         assert!(out.actions.lock().unwrap().is_empty(), "失败不该留下指令");
     }
@@ -1356,7 +1251,6 @@ mod tests {
                 { "label": "重点突出哪些", "kind": "multi", "options": ["规模", "量化", "工具"] }
             ]}),
             &ctx,
-            Scope::Session,
         )
         .unwrap();
         assert!(text.contains("3 道题"), "{text}");
@@ -1371,7 +1265,6 @@ mod tests {
             "ask_user",
             &json!({ "questions": [{ "label": "选一个", "kind": "select" }] }),
             &ctx,
-            Scope::Session,
         )
         .unwrap_err();
         assert!(err.contains("options"), "{err}");

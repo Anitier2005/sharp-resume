@@ -4,9 +4,8 @@
 //! 截图是 png 带透明通道、作品图要方形。用户在对话里说「这张太大」「裁成正方形」，
 //! 应该由 agent 直接办掉，而不是让他自己去某个面板里找压缩选项。
 //!
-//! 两个 agent 都能用（`Scope::Session` + `Scope::Layout`）：
-//!   会话 agent 负责「用户提需求 → 转好 → 告诉他/转给排版」
-//!   排版 agent 负责「作品集里那张图要通栏，先按 16:9 裁一版」
+//! 会话 agent 直接用它：两种典型场景是「用户提需求 → 转好 → 告诉他」
+//! 和「作品集里那张图要通栏，先按 16:9 裁一版」。
 //!
 //! 硬约束：只处理 `kind == "image"` 的材料；不做「PDF 转图片」——
 //! 那要外挂 pdfium 之类的二进制，成本与本轮目标不成比例。
@@ -58,7 +57,7 @@ pub fn params() -> Value {
 /// 从工作区里找一份材料：人的、库条目的、简历的原件样张、顶层池的都要找。
 ///
 /// 样张那条不能漏：它**故意**不在 `person.assets` 里（进了材料列表就会被当成
-/// 用户自己的一张图），可 `view` 仍要能按 assetId 打开它 —— 排版 agent 唯一的
+/// 用户自己的一张图），可 `view` 仍要能按 assetId 打开它 —— 排版时唯一的
 /// 对照依据就是它。
 pub(crate) fn find_asset<'a>(workspace: &'a Value, id: &str) -> Option<&'a Value> {
     let people = workspace.get("people")?.as_array()?;
@@ -320,7 +319,7 @@ mod tests {
     }
 
     /// 原件样张不在人的材料列表里（它不该当材料出现），但 `view` 必须找得到 ——
-    /// 排版 agent 唯一的对照依据就是它
+    /// 排版时唯一的对照依据就是它
     #[test]
     fn the_origin_sheet_is_findable_even_though_it_is_not_a_material() {
         let ws = json!({

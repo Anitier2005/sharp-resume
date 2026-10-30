@@ -345,7 +345,7 @@ fn mergeable(prev: &Line, line: &Line, page_w: f32) -> bool {
     }
     // 只有**新起一行**是条目记号时才另起一块；
     // 上一行是不是条目不影响合并 —— 条目的续行必须并回它自己，
-    // 否则一句要点会被劈成「· 前半句」+「后半句」两块，排版 agent 会当成两条。
+    // 否则一句要点会被劈成「· 前半句」+「后半句」两块，agent 会当成两条。
     !starts_item(&line.text)
 }
 
@@ -1732,7 +1732,7 @@ BT /F1 10 Tf 1 0 0 1 50 586 Tm (MySQL / Redis / Kafka) Tj ET\n";
         assert_eq!(align_of(line, W), Align::Left);
     }
 
-    /// 条目的续行必须并回它自己。否则一句要点被劈成两块，排版 agent 会当成两条。
+    /// 条目的续行必须并回它自己。否则一句要点被劈成两块，agent 会当成两条。
     #[test]
     fn a_bullets_continuation_merges_into_the_same_block() {
         // 注意 y 是自上而下的（interpret 里按页高翻转过了）：下一行的 y 更大

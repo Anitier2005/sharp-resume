@@ -38,7 +38,7 @@ const DIGEST_TRIGGER: usize = 1_200;
 
 #[derive(Default)]
 pub struct Sessions {
-    /// key = personId（会话按人隔离；`layout:` 前缀是页排版 agent 自己的会话）
+    /// key = personId（会话按人隔离，一个人一条，没有第二条循环来抢它）
     store: Mutex<HashMap<String, Vec<Value>>>,
     /// 正在跑的请求：key → 取消标记
     running: Mutex<HashMap<String, Arc<AtomicBool>>>,
@@ -151,17 +151,6 @@ impl Sessions {
         let _ = self.with_db(app, |conn| crate::db::chat_clear(conn, key));
     }
 
-    /// 页排版 agent 复用同一份存储，key 带 `layout:` 前缀隔离。
-    /// 不单开一张表：会话本来就该「随工作台一起走」，分两处反而容易漏备份。
-    pub(crate) fn history_of(&self, app: &tauri::AppHandle, key: &str) -> Vec<Value> {
-        self.ensure_loaded(app, key);
-        self.list(key)
-    }
-
-    pub(crate) fn append(&self, app: &tauri::AppHandle, key: &str, message: Value) {
-        self.ensure_loaded(app, key);
-        self.push(app, key, message);
-    }
 }
 
 /// 把 `sessions.json` 的内容搬进 chat 表。
@@ -219,7 +208,7 @@ pub(crate) fn trim_history(history: &[Value], budget: usize) -> Vec<Value> {
 
 /// 历史预算：窗口减去预留给压缩提示词与 system 的那部分，再按 `HISTORY_SHARE` 折算。
 ///
-/// 只给模型侧用（会话与页排版各一处）：界面显示全量历史，不再拿它裁渲染。
+/// 只给模型侧用：界面显示全量历史，不再拿它裁渲染。
 pub(crate) fn history_budget(window: usize, reserved: usize) -> usize {
     window.saturating_sub(reserved) * HISTORY_SHARE / 100
 }
@@ -423,8 +412,9 @@ pub struct SendResult {
     pub actions: Vec<Value>,
     /// 本轮工具新产出的材料，前端要并进 state
     pub assets: Vec<crate::model::Asset>,
-    /// 本轮原件的页数。前端存进内存，随下一次 `layout_submit` 传回来 ——
-    /// 排版侧要靠它决定「沿用原件页数」；刷新即失效，不落库
+    /// 本轮原件的页数。前端存进内存、随下一次 `chat_send` 原样带回来 ——
+    /// 缺了它就只能按工作区里的摘要猜「原件共几页」，所以它不是给人看的输出，
+    /// 是下一轮要用的输入；刷新即失效，不落库
     pub origin: Option<crate::agent::facts::Origin>,
     /// 本轮原件的**指针**（stored / name / pages）。前端并进 `resume.originDoc`：
     /// 不再预渲染页图 —— 要对照版式就看【原件结构】，要看某一页就调 `render_doc_page`。
@@ -541,7 +531,7 @@ pub async fn chat_send(
     };
     let attach_section = attached.section;
     let attach_images = attached.images;
-    // 原件页数：随 SendResult 回传前端，下次排版提交时再带回来（不落库）
+    // 原件页数：随 SendResult 回传前端，下一轮 chat_send 再带回来（不落库）
     let origin = attached.origin;
     // 原件指针：前端并进 resume.originDoc 落库，之后 read_source / render_doc_page 都靠它
     let origin_doc = attached.origin_doc;
@@ -661,7 +651,6 @@ pub async fn chat_send(
         |chunk| {
             let _ = on_event.send(chunk);
         },
-        crate::tools::Scope::Session,
     )
     .await;
 
@@ -820,7 +809,7 @@ mod tests {
         assert_eq!(measure.version, 12);
         assert_eq!(measure.content_px, Some(1180.0));
 
-        // 出参：原件页数回传前端，前端下次排版提交时再带回来
+        // 出参：原件页数回传前端，前端下一轮 chat_send 再带回来
         let result = SendResult {
             id: "m-1".into(),
             actions: Vec::new(),
@@ -886,7 +875,7 @@ mod tests {
         let path = temp_db("import");
         let raw = r#"{
             "p1": [{ "id": "m1", "role": "user", "content": "你好" }],
-            "layout:r1:pg1": [{ "id": "m2", "role": "user", "content": "排版这一页" }]
+            "layout:r1:pg1": [{ "id": "m2", "role": "user", "content": "老版本的页排版会话" }]
         }"#;
 
         {

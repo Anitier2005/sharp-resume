@@ -1,8 +1,7 @@
 //! 页面事实：页数 / 实测 / 达标与否的**唯一来源**。
 //!
-//! 会话侧（`context::locate` 注入的【页面事实】块）与排版侧（`describe_page` 的
-//! `## 这一页的实测` 段、`set_page_layout` 的结论行）都从这里取字符串 —— 两处各写一遍
-//! 就会出现「同一页两个页数」，那正是这套机制要防的错。
+//! 两个注入点（`context::locate` 的【页面事实】块、`set_page_layout` 的结论行）都从
+//! 这里取字符串 —— 各写一遍就会出现「同一页两个页数」，那正是这套机制要防的错。
 //!
 //! 阈值也只有这一处：`FIT_MAX` / `TOLERANCE_MAX`。前端不复刻，渲染层不复刻。
 
@@ -98,8 +97,8 @@ pub struct PageFacts {
 }
 
 impl PageFacts {
-    /// 按方案 §6 的表格组装一份。会话侧两个组装点（`chat_send`）与排版侧
-    /// （`run_turn`）都走这里 —— 两处各抄一遍页名/目标的取法，迟早有一处取错。
+    /// 按方案 §6 的表格组装一份。`chat_send` 与测试都走这里 —— 各抄一遍页名/目标的
+    /// 取法，迟早有一处取错。
     ///
     /// 每轮现组：不落库、不进程级缓存。上一次测量的数残留成本次，正是 F-014 要防的错。
     pub fn assemble(
@@ -259,7 +258,8 @@ pub fn block(f: &PageFacts) -> String {
     out
 }
 
-/// fit 段（带 `## 这一页的实测` 标题）。排版侧 describe_page 末尾追加用它。
+/// fit 段（带 `## 这一页的实测` 标题）：比 `measure_line` 多一层小标题，
+/// 留给需要「一整段实测」的调用方。
 pub fn measure_section(f: &PageFacts) -> String {
     let mut out = String::from("## 这一页的实测\n");
     let fit = fit_of(f.measure.as_ref());
@@ -975,7 +975,7 @@ mod tests {
             parts(target_of(&resume, None, Some(13))),
             (Some(1), TargetSource::UserBefore)
         );
-        // 排版侧没有 turn → 一律「之前要求过」
+        // 调用点没传 turn → 一律「之前要求过」
         assert_eq!(
             parts(target_of(&resume, None, None)),
             (Some(1), TargetSource::UserBefore)
@@ -1256,7 +1256,7 @@ mod tests {
 
         let file_page = PageFacts::assemble(&ws, "p1", "r1", "pg2", None, None, None);
         assert_eq!(file_page.page_kind, "file");
-        // 排版侧没有 turn：即使库里写着「这一轮」，也只能说「之前要求过」
+        // 调用点没传 turn：即使库里写着「这一轮」，也只能说「之前要求过」
         assert_eq!(parts(file_page.target), (Some(1), TargetSource::UserBefore));
     }
 

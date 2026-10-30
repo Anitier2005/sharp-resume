@@ -183,11 +183,11 @@ pub struct Block {
     pub extra: Map<String, Value>,
 }
 
-/// 排版 agent 留在纸面上的批注。
+/// 排版时留在纸面上的批注。
 ///
 /// 为什么不复用 `ResumePage.note`（那个是给人看的一句话备注）：
 /// 批注是**成组的、能贴到具体块上**的，还要按出现顺序编号给代理读。
-/// 它不进导出、不参与渲染，只用于两个 agent 之间传话 —— 所以单独存，
+/// 它不进导出、不参与渲染，只贴在纸面上给人看 —— 所以单独存，
 /// 免得到时候渲染器要专门记得跳过某几种 note。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -222,7 +222,7 @@ pub struct ResumePage {
     pub asset_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// 排版参数由「页排版 agent」写，这里不拆开校验，保持前向兼容
+    /// 排版参数由排版工具整体写，这里不拆开校验，保持前向兼容
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<Value>,
     /// 成品层：版式预设 + 手写覆盖。结构与语义见 `render::PageLayout`。
@@ -239,7 +239,7 @@ pub struct ResumePage {
     /// v4 遗留：分区。同上
     #[serde(default, skip_serializing_if = "is_empty_vec")]
     pub sections: Vec<Section>,
-    /// 排版 agent 留在纸面上的批注（不是内容，不参与导出）
+    /// 排版时留在纸面上的批注（不是内容，不参与导出）
     #[serde(default, skip_serializing_if = "is_empty_vec")]
     pub notes: Vec<PageNote>,
     #[serde(flatten, default, skip_serializing_if = "is_empty")]
@@ -437,7 +437,7 @@ pub struct Resume {
     /// 原件样张：用户上传的原件第 1 页的页图（材料池里的那张，`kind: "image"`）。
     ///
     /// 它是**排版参考物**，不是内容：不进 `blocks`、不进材料清单、不参与导出。
-    /// 挂在简历上而不是页上，是因为 `page.layout` 是排版 agent 每轮整体覆盖的字段
+    /// 挂在简历上而不是页上，是因为 `page.layout` 是排版工具整体覆盖的字段
     /// （它写回时不带这个键就会丢），而样张要在每一次排版里都在。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_sheet: Option<Asset>,

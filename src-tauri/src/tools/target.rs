@@ -69,7 +69,7 @@ pub fn set_target_pages(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::{edit, Outbox, Scope, ToolCtx};
+    use crate::tools::{edit, Outbox, ToolCtx};
 
     fn workspace() -> Value {
         json!({ "people": [{ "id": "p1", "resumes": [{ "id": "r1", "pages": [] }] }] })
@@ -140,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn the_tool_is_registered_for_the_session_scope_only() {
+    fn the_tool_is_registered() {
         let ws = workspace();
         let out = Outbox::default();
         let ctx = ToolCtx {
@@ -152,10 +152,7 @@ mod tests {
             root: None,
             facts: None,
         };
-        assert!(crate::tools::call("set_target_pages", &json!({ "pages": 2 }), &ctx, Scope::Session).is_ok());
-        assert!(
-            crate::tools::call("set_target_pages", &json!({ "pages": 2 }), &ctx, Scope::Layout).is_err(),
-            "排版 agent 不改内容，也不该改目标页数"
-        );
+        assert!(crate::tools::names().contains(&"set_target_pages"));
+        assert!(crate::tools::call("set_target_pages", &json!({ "pages": 2 }), &ctx).is_ok());
     }
 }

@@ -152,7 +152,7 @@ pub fn run(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::{Outbox, Scope, ToolCtx};
+    use crate::tools::{Outbox, ToolCtx};
 
     /// 临时数据目录 + inbox 里放一份文件（stored 就是那个文件名）
     fn inbox_with(bytes: &[u8], stored: &str) -> std::path::PathBuf {
@@ -260,21 +260,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// 排版 agent 也要能看原件：它被权限挡住的话，「原件页面什么样」就没人核对了
+    /// render_doc_page 必须真的能被调到工具自身的判断：版面在纸上，
+    /// 看不到原件版式就只能瞎猜。
     #[test]
-    fn the_layout_agent_can_reach_render_doc_page() {
+    fn render_doc_page_reaches_its_own_vision_guard() {
         let workspace = json!({ "people": [] });
-        let out = Outbox::default(); // 非视觉：走到工具自己的判断，而不是越权
+        let out = Outbox::default(); // 非视觉：走到工具自己的判断
         let ctx = ToolCtx::of(&workspace, "p", "r", "g", &out);
 
-        let error = crate::tools::call(
-            "render_doc_page",
-            &json!({ "stored": "x.pdf" }),
-            &ctx,
-            Scope::Layout,
-        )
-        .unwrap_err();
-        assert!(!error.contains("不能用"), "排版侧被权限挡在门外：{error}");
+        let error = crate::tools::call("render_doc_page", &json!({ "stored": "x.pdf" }), &ctx)
+            .unwrap_err();
+        assert!(!error.contains("没有名为"), "{error}");
         assert_eq!(error, NO_VISION);
     }
 }
