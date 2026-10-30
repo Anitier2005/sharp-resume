@@ -33,6 +33,18 @@
   /* 页边距归内容层管：agent 想改就直接覆盖 .doc 的 padding，
      不必再回到某个「参数」上去转一手 */
   padding: var(--pad);
+  /* 绝对定位的包含块必须是版心：`.abs` 的 left/top 一律解释为
+     「相对版心左上角」，这样 docx 的 w:framePr（w:x 已加上页边距）
+     与屏幕上是同一个坐标系。若这里不是 positioned，绝对定位会落到
+     纸边，导出 Word 会整体偏一个页边距。 */
+  position: relative;
+}
+
+/* 绝对定位块：坐标相对版心左上角（见上面 .doc 的 position: relative）。
+   生成器目前不产这类元素，规则先就位 —— 等 ALLOW_ABSOLUTE 打开时不用补样式。 */
+.doc .abs {
+  position: absolute;
+  margin: 0;
 }
 
 /* 预设只改四个量，不动结构：结构由生成器决定，agent 可以整块替换 */
