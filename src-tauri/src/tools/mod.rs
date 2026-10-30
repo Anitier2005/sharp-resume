@@ -15,6 +15,7 @@ pub mod image;
 pub mod layout;
 pub mod page;
 pub mod read;
+pub mod source;
 pub mod target;
 pub mod view;
 
@@ -627,6 +628,16 @@ pub const TOOLS: &[Tool] = &[
         scopes: &[Scope::Session],
         writes: false,
     },
+    Tool {
+        name: "read_source",
+        description: "读用户上传的原件正文（PDF / 文本）。材料段里写了「要全文调 read_source」时先读它再动手，\
+                      不要凭 120 字摘要写简历 —— 摘要只够认出这是谁，不够写经历。\
+                      参数 stored 从材料段那行「（附件标识：…）」取，不是文件名；长文档用 offset/limit 分段读。",
+        params: source::params,
+        run: source::run,
+        scopes: EVERYONE,
+        writes: false,
+    },
 ];
 
 fn knowledge_params() -> Value {
@@ -773,8 +784,8 @@ mod tests {
 
         // 工具数就是能力边界的快照：少一个说明注册时漏了，多一个说明有人偷偷
         // 给某个角色开了口子，两者都该在这里被看见
-        assert_eq!(session.len(), 40, "会话 agent 的工具数变了：{session:?}");
-        assert_eq!(layout.len(), 9, "排版 agent 的工具数变了：{layout:?}");
+        assert_eq!(session.len(), 41, "会话 agent 的工具数变了：{session:?}");
+        assert_eq!(layout.len(), 10, "排版 agent 的工具数变了：{layout:?}");
 
         // 会话 agent：能读、能转交、能转图，但不能自己动版面
         assert!(session.contains(&"request_layout"));
@@ -795,6 +806,9 @@ mod tests {
         assert!(session.contains(&"search_history"));
         assert!(!layout.contains(&"search_history"));
         assert!(!layout.contains(&"search_knowledge"));
+        // 原件正文是事实，两边都能读：排版也要能核对「原件上到底怎么写的」
+        assert!(session.contains(&"read_source"));
+        assert!(layout.contains(&"read_source"));
         assert!(!session.contains(&"set_page_layout"));
         assert!(!session.contains(&"read_layout_guide"));
 
@@ -816,6 +830,7 @@ mod tests {
         assert!(readers.contains(&"list_people"), "列候选人不动任何数据");
         assert!(readers.contains(&"search_knowledge"), "查知识库不改任何状态");
         assert!(readers.contains(&"search_history"), "翻历史不改任何状态");
+        assert!(readers.contains(&"read_source"), "读原件正文不改任何状态");
         assert!(!readers.contains(&"set_page_layout"));
         assert!(!readers.contains(&"convert_image"));
         assert!(!readers.contains(&"extract_images"), "抽图会写池与材料");

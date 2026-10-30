@@ -61,9 +61,20 @@ fn ensure_additive(conn: &Connection) -> Result<(), String> {
         "CREATE TABLE IF NOT EXISTS settings (
              key   TEXT PRIMARY KEY,
              value TEXT NOT NULL
+         );
+         -- 附件正文的 Fact 层（见 source.rs）：附件只在某一轮里出现，正文必须留一份。
+         -- stored 与 inbox 里的文件名同一个（内容寻址），所以重复上传天然只落一行。
+         CREATE TABLE IF NOT EXISTS source (
+             stored   TEXT PRIMARY KEY,
+             name     TEXT NOT NULL,
+             ext      TEXT NOT NULL,
+             pages    INTEGER,
+             chars    INTEGER NOT NULL,
+             text     TEXT NOT NULL,
+             added_at INTEGER NOT NULL
          );",
     )
-    .map_err(|error| format!("创建设置表失败：{error}"))
+    .map_err(|error| format!("创建设置/原件表失败：{error}"))
 }
 
 /// 常驻数据库连接。所有命令共用一份，避免每次读写都重新 open + migrate。
@@ -98,7 +109,9 @@ impl Shared {
     }
 }
 
-fn migrate(conn: &Connection) -> Result<(), String> {
+/// 建表 + 迁移。测试里要一个内存库时也走这条：口径必须和真实库一致，
+/// 各写一份 CREATE TABLE 的测试库迟早和生产库不同。
+pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
     // 纯新增的表放在版本门前面：版本门是为「改动既有结构」设的。
     // 把它当建表开关用，每加一张表就得升版本、让所有老库跑一遍完整迁移 —— 代价不对等；
     // 而 IF NOT EXISTS 对老库、新库、测试库都是同一句话。

@@ -515,8 +515,10 @@ pub async fn chat_send(
     let vision = capability.can_see();
 
     // 附件解析全在这里：取字、OCR、PDF 渲染都是 Rust 的活，
-    // 前端只传「哪几个附件」，拿不到字节也拿不到正文
+    // 前端只传「哪几个附件」，拿不到字节也拿不到正文。
+    // 正文一解析出来就进 Fact 层（source 表）—— 附件按轮一次性，错过就没第二次
     let root = crate::data_dir(&app).ok();
+    let db = tauri::Manager::state::<crate::db::Shared>(&app);
     let attached = match (&root, args.attachments.is_empty()) {
         (Some(dir), false) => {
             crate::attach::materials(
@@ -525,6 +527,7 @@ pub async fn chat_send(
                 vision,
                 args.ocr.as_ref(),
                 &args.model,
+                db.inner(),
             )
             .await
         }

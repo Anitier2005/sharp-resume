@@ -644,6 +644,64 @@ pub(crate) mod fixtures {
         build(Vec::new(), "", pages, None)
     }
 
+    /// 带**文字层**的最小 PDF：每行一句，Helvetica 12pt。
+    ///
+    /// 存在的理由：`pdf_with_pages` 造的页没有文字，验不了「正文投影」那条链路
+    /// （摘要、指针、Fact 层落库都需要真能抽出字来）。
+    pub fn pdf_with_text(lines: &[&str]) -> Vec<u8> {
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let font = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Helvetica",
+            "Encoding" => "WinAnsiEncoding",
+        });
+        let mut fonts = lopdf::Dictionary::new();
+        fonts.set("F1", Object::Reference(font));
+        let resources = doc.add_object(dictionary! {
+            "Font" => Object::Dictionary(fonts),
+        });
+        let mut content = String::from("BT /F1 12 Tf 40 800 Td 16 TL\n");
+        for line in lines {
+            // 括号与反斜杠在 PDF 字符串里是语法字符，测试文案里不出现就等于无事
+            content.push_str(&format!("({}) Tj T*\n", line.replace('\\', " ").replace(['(', ')'], " ")));
+        }
+        content.push_str("ET");
+        let contents = doc.add_object(Stream::new(
+            lopdf::Dictionary::new(),
+            content.into_bytes(),
+        ));
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => Object::Reference(pages_id),
+            "MediaBox" => vec![
+                Object::Integer(0),
+                Object::Integer(0),
+                Object::Real(595.28),
+                Object::Real(841.89),
+            ],
+            "Resources" => Object::Reference(resources),
+            "Contents" => Object::Reference(contents),
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => Object::Array(vec![Object::Reference(page)]),
+                "Count" => Object::Integer(1),
+            }),
+        );
+        let catalog = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => Object::Reference(pages_id),
+        });
+        doc.trailer.set("Root", Object::Reference(catalog));
+        let mut out = Vec::new();
+        doc.save_to(&mut out).expect("测试用 PDF 要能写出");
+        out
+    }
+
     /// 挂着 /Encrypt 但空口令解不开的文档（lopdf 没有加密 API，手工塞一个坏字典）
     pub fn encrypted_stub() -> Vec<u8> {
         let mut doc = Document::with_version("1.5");

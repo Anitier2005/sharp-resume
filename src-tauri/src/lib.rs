@@ -16,6 +16,7 @@ mod pool;
 mod render;
 mod session;
 mod snapshot;
+mod source;
 mod storage;
 mod tools;
 
