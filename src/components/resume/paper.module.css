@@ -54,6 +54,14 @@
   align-items: center;
   gap: 18px;
 }
+/* Paged.js 把每一张纸放进 `.pagedjs_pages` 这个中间层，`.paged` 的 gap 够不到它们：
+   实测两张纸 top 差正好等于纸高（98 → 603，纸高 505），**零间隙**，
+   看起来还是一整张超长的纸 —— 这就是「分页没生效」的直接观感。 */
+.paged :global(.pagedjs_pages) {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
 .paged :global(.pagedjs_page) {
   background: var(--paper);
   border-radius: 3px;
