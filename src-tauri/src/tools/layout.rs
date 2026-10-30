@@ -77,10 +77,51 @@ const HEAD_STYLES: [&str; 5] = render::HEAD_STYLES;
 /// 归一规则（两边用同一套，否则会误伤正当的排版）：
 ///   1. 去掉零宽字符、软连字符（复制粘贴带进来的，纸上根本看不见）
 ///   2. NFKC：全角字母、康熙部首、带圈数字这些「长得一样、码位不同」的字符归一
-///   3. 压空白：换行、多空格、制表符都变一个空格
+///   3. 标点邻接的空白一律抹掉（见 `squeeze_punctuation`）
+///   4. 压空白：换行、多空格、制表符都变一个空格
 fn normalize_text(raw: &str) -> String {
     let visible: String = raw.chars().filter(|ch| !is_invisible(*ch)).collect();
-    collapse(&visible.nfkc().collect::<String>())
+    collapse(&squeeze_punctuation(&visible.nfkc().collect::<String>()))
+}
+
+/// 会被「空格式排版噪声」贴上来的一类字符。
+///
+/// 中文排版里「标题：值」「（备注）」两侧的空格是随手敲出来的，Word 与网页
+/// 又各有各的习惯；文字锁不该因为这种差别拒掉一次正当的重排。
+const PUNCT: &str = "：:，,。.（()）【】[]、；;！!？?「」『』《》〈〉“”‘’…—";
+
+/// 抹掉紧贴在标点两侧的空白。
+///
+/// `A B:C` / `A B : C` / `A B：C` 归一后必须是同一个东西 —— 模型换个写法排版，
+/// 不该被判成改了字。但字母之间的空格一律保留：`Java Script` 与 `JavaScript`
+/// 是两个词，抹平就等于放过一次真正的改字。
+fn squeeze_punctuation(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if !ch.is_whitespace() {
+            out.push(ch);
+            continue;
+        }
+        // 一段空白：看它与左右两侧是否贴着标点
+        let before = out.chars().next_back();
+        let mut after = None;
+        while let Some(&next) = chars.peek() {
+            if next.is_whitespace() {
+                chars.next();
+            } else {
+                after = Some(next);
+                break;
+            }
+        }
+        let touches_punct = before.is_some_and(|ch| PUNCT.contains(ch))
+            || after.is_some_and(|ch| PUNCT.contains(ch));
+        if touches_punct {
+            continue;
+        }
+        out.push(' ');
+    }
+    out
 }
 
 fn is_invisible(ch: char) -> bool {
@@ -234,9 +275,22 @@ fn strings_of(value: Option<&Value>) -> Vec<String> {
 /// 生成器对同一份内容有几种排法（页头把首字段当大标题、字段组全部带标签、
 /// tags/kv/table 每条只取第一个字段），纯文本因此不止一种合法形态。
 /// 这里给出**一种**（页头/分区那种最常见的），比对时用 `text_variants` 取全集。
-#[allow(dead_code)]
 pub(crate) fn text_of_block(block: &Value) -> String {
     text_variants(block).remove(0)
+}
+
+/// 整页的纯文本：各块按顺序拼，图片块跳过（它没有文字）。
+///
+/// 这是「整页接管」那条路的判据。整页是一个整体，逐块比没意义 ——
+/// 模型本来就要把内容重新分栏、挪位置，只要一个字没多没少就该放行。
+fn page_text(blocks: &[&Value]) -> String {
+    let parts: Vec<String> = blocks
+        .iter()
+        .filter(|block| block.get("kind").and_then(Value::as_str) != Some("media"))
+        .map(|block| text_of_block(block))
+        .filter(|text| !text.is_empty())
+        .collect();
+    collapse(&parts.join(" "))
 }
 
 /// 这一块的纯文本可能长成的所有样子（归一后）。命中任意一种就算没改字。
@@ -441,6 +495,13 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         .find(|item| item.get("id").and_then(Value::as_str) == Some(page_id.as_str()))
         .ok_or_else(|| format!("没有 id 为 {page_id} 的页面"))?;
 
+    // 这一页的块：parts 要按 id 找块，整页接管要按顺序拼出原文
+    let blocks: Vec<&Value> = page
+        .get("blocks")
+        .and_then(Value::as_array)
+        .map(|list| list.iter().collect())
+        .unwrap_or_default();
+
     // 在现有成品上合并，不是整体替换：只改一块时不该把别的块和预设清掉。
     // 基线优先取同一轮里已经产出的那份，其次才是快照里的
     let mut layout = pending_layout(ctx, &page_id)
@@ -496,6 +557,17 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
                     "整页 HTML 有 {len} 字，超过 {MAX_HTML_CHARS} 字上限。删掉不必要的内容再试，不要截断 —— 半截版面比报错更难查"
                 ));
             }
+            // 整页接管也是「不许改字」：换个入口写整页，不等于能改内容。
+            // 只锁 parts 的话，模型绕一道就成了「排版模型替我改简历」。
+            let original = page_text(&blocks);
+            let written = normalize_text(&strip_html(html));
+            if written != original {
+                return Err(format!(
+                    "整页接管不能改字：这一页原文共 {} 字，你写的是 {} 字。要改内容请调 ask_session。",
+                    original.chars().count(),
+                    written.chars().count()
+                ));
+            }
             layout.insert("html".into(), json!(html));
             notes.push(format!("整页手写 {len} 字（parts 与 preset 不再生效）"));
         }
@@ -505,12 +577,6 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         if parts.is_empty() {
             return Err("parts 是空的：要么给至少一个块，要么用 reset 清空".into());
         }
-        let blocks: Vec<&Value> = page
-            .get("blocks")
-            .and_then(Value::as_array)
-            .map(|list| list.iter().collect())
-            .unwrap_or_default();
-
         let mut merged = layout
             .get("parts")
             .and_then(Value::as_object)
@@ -883,6 +949,47 @@ mod tests {
         assert!(err.contains("块 b9 不存在"), "{err}");
     }
 
+    /// 整页接管：文字一个字没变，只是重新分栏 —— 必须放行（这才是「完整排版权」）
+    #[test]
+    fn whole_page_html_with_the_same_text_passes() {
+        let text = run(
+            None,
+            json!({ "html": "<header class=\"head\"><div class=\"txt\"><h1 class=\"name\">谭轶天</h1><div class=\"meta\">联系：男 · 20 岁 · 159****1234</div></div></header><section class=\"sec\"><h2>实习与项目经历</h2><div class=\"entry\"><b>铁未来</b><div class=\"meta\">职位：实习生</div><ul><li>通过定性方法定位入门难点并改进赛制，同时调整模型参数增强经济模拟的真实性</li></ul></div></section>" }),
+        )
+        .unwrap();
+        assert!(text.contains("整页手写"), "{text}");
+    }
+
+    /// 整页接管也不能多写一句话 —— 换个入口不等于能改内容
+    #[test]
+    fn whole_page_html_cannot_add_a_sentence() {
+        let err = run(
+            None,
+            json!({ "html": "<header class=\"head\"><div class=\"txt\"><h1 class=\"name\">谭轶天</h1><div class=\"meta\">联系：男 · 20 岁 · 159****1234</div></div></header><section class=\"sec\"><h2>实习与项目经历</h2><div class=\"entry\"><b>铁未来</b><div class=\"meta\">职位：实习生</div><ul><li>通过定性方法定位入门难点并改进赛制，同时调整模型参数增强经济模拟的真实性</li></ul></div></section><p>另外我还写过一篇论文</p>" }),
+        )
+        .unwrap_err();
+        assert!(err.starts_with("整页接管不能改字：这一页原文共"), "{err}");
+        assert!(err.contains("你写的是"), "{err}");
+        assert!(err.ends_with("要改内容请调 ask_session。"), "{err}");
+        assert!(!err.contains("第 1 块"), "整页这条路不该报块号：{err}");
+    }
+
+    /// 只有「标点邻接」的空白算排版噪声；字母之间的空格是两个词，不能抹
+    #[test]
+    fn only_whitespace_next_to_punctuation_is_squeezed() {
+        // 三种写法（紧贴 / 两侧都带空格 / 全角冒号）互等
+        for html in [
+            "<p>A B:C</p>",
+            "<p>A B : C</p>",
+            "<p>A B：C</p>",
+        ] {
+            assert_eq!(text_of_html(html), "A B:C", "{html}");
+        }
+        // 字母之间的空格保留：抹掉就等于放过一次真正的改字
+        assert_ne!(text_of_html("<p>Java Script</p>"), text_of_html("<p>JavaScript</p>"));
+        assert_eq!(text_of_html("<p>Java Script</p>"), "Java Script");
+    }
+
     #[test]
     fn text_of_html_strips_tags() {
         assert_eq!(
@@ -901,6 +1008,34 @@ mod tests {
     fn text_of_html_normalizes_fullwidth_and_zero_width() {
         assert_eq!(text_of_html("<b>ＡＢＣ１２３</b>"), "ABC123");
         assert_eq!(text_of_html("工\u{200b}作"), "工作");
+    }
+
+    /// 归一必须**两侧对称**：同一套归一作用在「模型写的 HTML」和「块的结构化文本」上，
+    /// 各做一次。否则全角冒号、全角括号、不间断空格这些纸上完全看不出差别的东西，
+    /// 会把一次正当的排版判成改字 —— 然后模型被无意义地拒绝，还不知道为什么。
+    ///
+    /// 三组最常撞的：`：`/`:`、`（`/`(`、`\u{00A0}`/空格。
+    #[test]
+    fn normalization_is_symmetric_on_both_sides() {
+        let block = json!({
+            "id": "b1", "kind": "section", "title": "实习（项目）",
+            "items": [{ "id": "e1", "bullets": ["A\u{00a0}B：C"] }]
+        });
+        let block_text = text_of_block(&block);
+        // 标点旁的空白也被抹平：`B：C` / `B : C` / `B:C` 是同一个东西，
+        // `）` 后面那个空格同理 —— 两侧同一套规则，所以这条锁不会误伤
+        assert_eq!(block_text, "实习(项目)A B:C");
+
+        for html in [
+            // 原样照抄
+            "<h2>实习（项目）</h2><li>A\u{00a0}B：C</li>",
+            // 全角换半角 + 不间断空格换普通空格
+            "<h2>实习(项目)</h2><li>A B: C</li>",
+            // 写成实体
+            "<h2>实习（项目）</h2><li>A&nbsp;B&#xFF1A;C</li>",
+        ] {
+            assert_eq!(text_of_html(html), block_text, "{html}");
+        }
     }
 
     /// 块文本按「首字段取值、其余标签：值、要点照抄」拼。
