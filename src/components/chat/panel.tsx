@@ -63,7 +63,7 @@ export function ChatPanel() {
     person,
     resume,
     page,
-    measure,
+    measureOf,
     dispatch,
     setActivePageId,
     applyOps,
@@ -216,18 +216,6 @@ export function ChatPanel() {
     setRemote((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }, []);
 
-  /**
-   * 这一页的实测值；量的不是这一页就给 null。
-   * 不拿「1 页」去凑一个像样的对象 —— 假数比没有数更糟（F-007）。
-   *
-   * 会话自己排版，`chat_send` 带的这个 `measure` 是模型唯一能知道
-   * 「这一页压到几页了」的来源，不能省。
-   */
-  const measureFor = useCallback(
-    (pageId: string) => (measure && measure.pageId === pageId ? measure : null),
-    [measure],
-  );
-
   const send = useCallback(
     (text: string, attachments: Attachment[]) => {
       if (!person || !resume) return;
@@ -370,7 +358,7 @@ export function ChatPanel() {
               pageId: targetPage.id,
               // 实测值只对「量的那一页」成立：问的是别的页就传 null，
               // 不能让模型拿甲页的页数去说乙页
-              measure: measureFor(targetPage.id),
+              measure: measureOf(targetPage.id),
               view: state.ui.view ?? "edit",
               // 工具层的只读镜像。剥掉 messages：工具不读会话，没必要每次搬全部历史
               workspace: {
@@ -455,7 +443,9 @@ export function ChatPanel() {
       person,
       resume,
       page,
-      measureFor,
+      // 实测是每页单独量的对象，漏进依赖会让 chat_send 一直带着上一版的页数 ——
+      // 模型据此判断「压到几页」，带旧数比不带更糟
+      measureOf,
       dispatch,
       setActivePageId,
       applyOps,
