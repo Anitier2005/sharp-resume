@@ -578,15 +578,18 @@ async fn run_turn(
     };
 
     let cancel = std::sync::atomic::AtomicBool::new(false);
+    // 思考链不逐字推：一个 token 一个事件会把前端淹掉，攒够 60 字再报一次心跳
+    let mut thought = 0usize;
+    let mut announced_thought = 0usize;
     let turn = crate::agent::turn::run(
         &template,
         messages,
         &ctx,
         &cancel,
-        // 没有人在等打字机：正文增量丢掉，工具事件攒成进度推给界面，
+        // 没有人在等打字机：正文增量丢掉，其余的都翻译成界面看得懂的话，
         // 用户才知道「它真的在动」而不是卡死了
-        |chunk| {
-            if chunk.kind == "tool_start" || chunk.kind == "tool_end" {
+        |chunk| match chunk.kind {
+            "tool_start" | "tool_end" => {
                 let _ = app.emit(
                     "layout:progress",
                     json!({
@@ -597,6 +600,47 @@ async fn run_turn(
                     }),
                 );
             }
+            // 中途写入：暂存区每隔一批工具就结算一次，改一版落一版，
+            // 纸面边改边变。轮末那条 `layout:applied` 仍然会发，
+            // 但那时只剩这一批之后还没来得及结算的尾巴
+            "mutate" => {
+                let Some(raw) = chunk.detail.as_deref() else { return };
+                let Ok(envelope) = serde_json::from_str::<Value>(raw) else {
+                    // 坏信封直接丢：轮末还会再结算一次，这里不该让整轮报错
+                    return;
+                };
+                let _ = app.emit(
+                    "layout:applied",
+                    json!({
+                        "personId": args.person_id,
+                        "resumeId": args.resume_id,
+                        "pageId": args.page_id,
+                        "actions": [envelope],
+                        "assets": [],
+                    }),
+                );
+            }
+            // 思考链只当「还活着」的信号用。detail 是给状态栏的那一行 ——
+            // 前端只认 detail，光给 thoughtChars 界面上什么都看不见
+            "reasoning" => {
+                let Some(text) = chunk.reasoning.as_deref() else { return };
+                thought += text.chars().count();
+                if thought - announced_thought < 60 {
+                    return;
+                }
+                announced_thought = thought;
+                let _ = app.emit(
+                    "layout:progress",
+                    json!({
+                        "pageId": args.page_id,
+                        "kind": "thinking",
+                        "thoughtChars": thought,
+                        "detail": format!("思考中（{thought} 字）"),
+                    }),
+                );
+            }
+            // delta / done / error：正文与收尾对排版侧没有界面意义
+            _ => {}
         },
         Scope::Layout,
     )

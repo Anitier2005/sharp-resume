@@ -16,7 +16,13 @@ import { aiReady, loadAi, loadAux, saveAi, slotAi, type AiSettings } from "@/lib
 import { refreshSettings } from "@/lib/settings-store";
 import { DEFAULT_RESERVE, findModel, listProfiles } from "@/lib/model-config";
 import { buildContext, splitReply } from "@/lib/prompt";
-import { applyAgentActions, askSessionFromLayout, registerChatBridge, type AskQuestion } from "@/lib/agent-actions";
+import {
+  applyAgentActions,
+  askSessionFromLayout,
+  registerChatBridge,
+  type AgentActionHooks,
+  type AskQuestion,
+} from "@/lib/agent-actions";
 import { submitLayout } from "@/lib/layout";
 import { clearOrigin, putOrigin } from "@/lib/measure";
 import { AskForm } from "./ask-form";
@@ -375,6 +381,32 @@ export function ChatPanel() {
           await invoke("chat_push", { key: person.id, message: userMessage });
 
           /**
+           * 一轮的界面指令都走这一套 hooks：途中的 `mutate` 信封与轮末的
+           * `sent.actions` 必须是同一份，两处各写一份迟早会漂移。
+           *
+           * 内容写入一律进 provider 的确认门（`applyOps`），中途也不绕过：
+           * 删除类整批挂起是预期行为，等用户点确认。
+           */
+          const agentHooks: AgentActionHooks = {
+            openPage: (pageId) => setActivePageId(pageId),
+            openPerson,
+            openResume,
+            patchUi: (patch) => dispatch({ type: "patchUi", patch }),
+            ask: (questions) => setAsk(questions),
+            pageStyle: (pageId, style) =>
+              dispatch({ type: "pageStyle", personId: person.id, resumeId: resume.id, pageId, style }),
+            pageLayout: (pageId, layout) =>
+              dispatch({ type: "pageLayout", personId: person.id, resumeId: resume.id, pageId, layout }),
+            requestLayout: (pageId, brief) => runLayoutFor(pageId, brief),
+            // 内容写入走 provider 的确认门：会话 agent 和用户点击必须同一套规则
+            applyOps,
+            pageNote: (pageId, note) =>
+              dispatch({ type: "pageNote", personId: person.id, resumeId: resume.id, pageId, note }),
+            askSession: (pageId, question, blockId) =>
+              askFromLayout(pageId, question, blockId),
+          };
+
+          /**
            * 附件只报名字：正文、OCR、PDF 页面都由后端在组上下文时现取。
            * 前端不再读字节，也就不存在「刷新一次缓存就没了」这回事。
            */
@@ -408,6 +440,14 @@ export function ChatPanel() {
               if (!used.includes(chunk.tool)) used.push(chunk.tool);
               if (silent) return;
               patchLocal(replyId, { tool: `${chunk.tool} · ${chunk.detail ?? "执行中"}` });
+            } else if (chunk.kind === "mutate" && chunk.detail) {
+              // 中途写入：模型改一条就落一条。坏信封直接丢——轮末还会再结算一次，
+              // 这里抛出去只会让整轮报错
+              try {
+                applyAgentActions([JSON.parse(chunk.detail)], agentHooks);
+              } catch {
+                /* 忽略：信封坏了不该影响正在跑的这轮 */
+              }
             }
           };
 
@@ -504,24 +544,7 @@ export function ChatPanel() {
           if (sent.assets?.length) {
             dispatch({ type: "addAssets", personId: person.id, assets: sent.assets });
           }
-          const applied = applyAgentActions(sent.actions, {
-            openPage: (pageId) => setActivePageId(pageId),
-            openPerson,
-            openResume,
-            patchUi: (patch) => dispatch({ type: "patchUi", patch }),
-            ask: (questions) => setAsk(questions),
-            pageStyle: (pageId, style) =>
-              dispatch({ type: "pageStyle", personId: person.id, resumeId: resume.id, pageId, style }),
-            pageLayout: (pageId, layout) =>
-              dispatch({ type: "pageLayout", personId: person.id, resumeId: resume.id, pageId, layout }),
-            requestLayout: (pageId, brief) => runLayoutFor(pageId, brief),
-            // 内容写入走 provider 的确认门：会话 agent 和用户点击必须同一套规则
-            applyOps,
-            pageNote: (pageId, note) =>
-              dispatch({ type: "pageNote", personId: person.id, resumeId: resume.id, pageId, note }),
-            askSession: (pageId, question, blockId) =>
-              askFromLayout(pageId, question, blockId),
-          });
+          const applied = applyAgentActions(sent.actions, agentHooks);
           if (applied > 0) toast(`已按你的要求调整界面（${applied} 处）`);
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);

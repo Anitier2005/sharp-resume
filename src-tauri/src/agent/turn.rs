@@ -368,6 +368,12 @@ pub async fn run<E: FnMut(StreamChunk) + Send>(
             used.push(name);
             messages.push(ChatMessage::tool_result(call.id.clone(), result));
         }
+        // 这一批工具写进暂存区的东西立刻结算一次。攒到轮末才发一条信封，
+        // 意味着「它一直在干活、页面一动不动」——用户没法判断它是不是卡死了。
+        // flush 之后暂存区清空，后续写入继续攒，轮末 `drain_actions` 收尾剩余部分。
+        if let Some(envelope) = crate::tools::edit::flush_all(ctx.out) {
+            on_event(StreamChunk::envelope(envelope.to_string()));
+        }
         if tripped {
             break;
         }

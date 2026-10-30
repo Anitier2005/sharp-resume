@@ -162,6 +162,11 @@ impl StreamChunk {
     pub fn tool_event(kind: &'static str, tool: String, detail: String) -> Self {
         Self { kind, delta: None, reasoning: None, message: None, tool: Some(tool), detail: Some(detail) }
     }
+    /// 工具刚写进暂存区的一批内容：`mutate` 信封的 JSON 原文。
+    /// 走 detail 而不是新字段：前端只有一条通道，多一个字段就多一处要同步的序列化
+    pub fn envelope(json: String) -> Self {
+        Self { kind: "mutate", delta: None, reasoning: None, message: None, tool: None, detail: Some(json) }
+    }
 }
 
 /// 全局共享的 Client：连接池在这里，并发请求复用它。
@@ -571,6 +576,27 @@ mod tests {
         assert_eq!(parts[1]["image_url"]["url"], "data:image/jpeg;base64,AAAA");
         // 纯文本消息仍然是字符串：多数网关对数组的校验更严
         assert!(serde_json::to_value(ChatMessage::user("纯文本")).unwrap()["content"].is_string());
+    }
+
+    /// 中途写入的信封：kind 必须是 `mutate`，detail 必须能解析成对象。
+    ///
+    /// 这条断言盯的是「中途改了但前端没收到」那种静默失败：kind 拼错，
+    /// 前端只会走进 else 分支把它丢掉，页面上什么都不会发生。
+    #[test]
+    fn envelope_chunk_carries_parseable_mutate_json() {
+        let raw = serde_json::json!({ "type": "mutate", "ops": [{ "op": "setField" }] }).to_string();
+        let chunk = StreamChunk::envelope(raw);
+        assert_eq!(chunk.kind, "mutate");
+        assert!(chunk.tool.is_none());
+        assert!(chunk.delta.is_none());
+        let value: serde_json::Value =
+            serde_json::from_str(chunk.detail.as_deref().expect("detail 要带上信封")).unwrap();
+        assert!(value.is_object(), "{value}");
+        assert_eq!(value["type"], "mutate");
+        // 线上形状：kind / detail 都得序列化出去，detail 不能被 skip 掉
+        let wire = serde_json::to_value(&chunk).unwrap();
+        assert_eq!(wire["kind"], "mutate");
+        assert!(wire["detail"].is_string());
     }
 
     /// 完成原因是终止判定的唯一依据，读错字段等于没读：
