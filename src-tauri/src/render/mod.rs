@@ -361,8 +361,48 @@ fn render_blocks(
 ///
 /// id 来自库，形态是 `[A-Za-z0-9_-]`，本身安全；仍然过一遍 `escape` ——
 /// 同一个字段将来会被导入的外部数据填进来，那时就不一定干净了。
-fn block_attr(id: &str) -> String {
+fn data_block(id: &str) -> String {
     format!(r#" data-block="{}""#, escape(id))
+}
+
+/// 块级样式 → 内联声明。**生成器的输出不走 ammonia**，所以值必须在这里就收紧：
+/// 对齐只认三个字面量、字号夹到 8–24（都在 `BlockStyle` 的访问器里），
+/// 攒出来的字符串里不可能出现引号，从 `style` 里逃不出去。
+///
+/// 为什么是内联而不是往 `paper.css` 加类：一条用户自己的「这块要居中」，
+/// 值可以是任意 8–24 之间的字号，类名穷举不完；而且就近写在生成处，
+/// 一眼能看出这条声明是谁要的（与 `render_head` 的 aside 居中同一个理由）。
+fn block_style_decls(block: &Block) -> Vec<String> {
+    let Some(style) = block.style.as_ref().filter(|style| !style.is_empty()) else {
+        return Vec::new();
+    };
+    let mut decls = Vec::new();
+    if let Some(align) = style.align() {
+        decls.push(format!("text-align:{align}"));
+    }
+    if let Some(size) = style.size_pt() {
+        decls.push(format!("font-size:{size}pt"));
+    }
+    if style.bold == Some(true) {
+        decls.push("font-weight:700".to_string());
+    }
+    decls
+}
+
+fn style_attr(decls: &[String]) -> String {
+    match decls.is_empty() {
+        true => String::new(),
+        false => format!(r#" style="{}""#, decls.join(";")),
+    }
+}
+
+/// `data-block` + 块级样式，一次拼好；块的根元素都用它。
+fn block_attr(block: &Block) -> String {
+    format!(
+        "{}{}",
+        data_block(&block.id),
+        style_attr(&block_style_decls(block))
+    )
 }
 
 fn class_of(base: &str, extra: &str) -> String {
@@ -520,15 +560,19 @@ fn render_head(
     // 居中写成内联样式，不新建 `.head.aside` 规则：paper.css 是共用样式表，
     // 为一条只在 `HEAD_ASIDE_ABSOLUTE` 下才走的分支加类，不如把这条声明就近
     // 写在生成处 —— 一眼能看出是谁要的
-    let style = if aside {
-        r#" style="text-align:center""#
-    } else {
-        ""
-    };
+    //
+    // 块级样式排在版式自带的居中**后面**：同一条属性后者胜，
+    // 用户显式说的「这块左对齐」要能压过版式默认。
+    let mut decls: Vec<String> = Vec::new();
+    if aside {
+        decls.push("text-align:center".to_string());
+    }
+    decls.extend(block_style_decls(block));
 
     format!(
-        r#"<header class="{class}"{style}{}>{inner}<div class="rule"></div></header>"#,
-        block_attr(&block.id)
+        r#"<header class="{class}"{sty}{}>{inner}<div class="rule"></div></header>"#,
+        data_block(&block.id),
+        sty = style_attr(&decls)
     )
 }
 
@@ -617,7 +661,7 @@ fn render_group(block: &Block, person: &Person, warnings: &mut Vec<String>) -> S
     format!(
         r#"<div class="{}"{}>{inner}</div>"#,
         class_of("group", group_extra_class(block, warnings)),
-        block_attr(&block.id)
+        block_attr(block)
     )
 }
 
@@ -689,7 +733,7 @@ fn render_section(block: &Block, person: &Person, warnings: &mut Vec<String>) ->
     format!(
         r#"<section class="{}"{}>{inner}</section>"#,
         class_of("sec", role.class()),
-        block_attr(&block.id)
+        block_attr(block)
     )
 }
 
@@ -975,13 +1019,13 @@ fn render_media(block: &Block, person: &Person, warnings: &mut Vec<String>) -> S
         // 缺失时也要留锚点：批注要贴在「这一块」上，而不是飘在页边
         return format!(
             r#"<figure class="fig missing"{}>图片缺失</figure>"#,
-            block_attr(&block.id)
+            block_attr(block)
         );
     }
 
     let mut out = format!(
         r#"<figure class="fig"{}><img src="asset:{}" alt="">"#,
-        block_attr(&block.id),
+        block_attr(block),
         escape(asset_id)
     );
     if let Some(caption) = block.caption.as_deref().filter(|text| !text.trim().is_empty()) {

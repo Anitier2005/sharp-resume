@@ -153,6 +153,30 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 const text = (value: unknown): string =>
   typeof value === "string" ? value.trim() : "";
 
+const BLOCK_ALIGNS = new Set(["left", "center", "right"]);
+
+/**
+ * 块级样式的形状：三个键都可以缺，但给了就必须对。
+ *
+ * 越界的 size（99）在这里就丢掉：Rust 渲染层会夹住，可夹住意味着
+ * 「用户以为设成 99，实际是 24」—— 这种静默改值比丢一条 op 更难查。
+ * 空对象是合法值：它表示「清掉这一块的样式」。
+ */
+function isBlockStyle(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  // 只认这三个键：多出来的键写进存档只会让「样式」变成一个谁都能塞东西的口袋
+  for (const key of Object.keys(value)) {
+    if (key !== "align" && key !== "size" && key !== "bold") return false;
+  }
+  if (value.align !== undefined && !BLOCK_ALIGNS.has(value.align as string)) return false;
+  if (value.size !== undefined) {
+    const size = value.size;
+    if (typeof size !== "number" || !Number.isInteger(size) || size < 8 || size > 24) return false;
+  }
+  if (value.bold !== undefined && typeof value.bold !== "boolean") return false;
+  return true;
+}
+
 /**
  * 允许透传的 op（契约 1.2）。
  *
@@ -193,6 +217,8 @@ const OP_SPEC: Record<string, OpSpec> = {
   pageStyle: { ids: ["personId", "resumeId", "pageId"], objects: ["style"] },
   pageLayout: { ids: ["personId", "resumeId", "pageId"], objects: ["layout"] },
   blockRole: { ids: ["personId", "resumeId", "pageId", "blockId"] },
+  // `style` 必须是对象：空对象是合法值（= 清掉），所以不能进 ids/optionalIds
+  blockStyle: { ids: ["personId", "resumeId", "pageId", "blockId"], objects: ["style"] },
   addSection: {
     ids: ["personId", "resumeId", "pageId"],
     optionalIds: ["id", "afterBlockId"],
@@ -273,6 +299,8 @@ function cleanOp(raw: unknown): Action | null {
   if (type === "blockRole" && raw.role !== undefined && !BLOCK_ROLES.has(raw.role as BlockRole)) {
     return null;
   }
+  // 块级样式：三个键各管一件事，形状不对就整条丢掉（存档里只该有三种形态的值）
+  if (type === "blockStyle" && !isBlockStyle(raw.style)) return null;
   // 状态标记只认白名单 key、value 必须是布尔：这个 op 给模型写「任意键」的口子，
   // 等于让它可以往 Resume 上塞任何东西（包括 targetPages 这类有语义的键）
   if (type === "resumeNotice") {

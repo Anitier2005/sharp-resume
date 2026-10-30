@@ -72,6 +72,22 @@
 **页头请用 head 选项，不要手写 <h1>。** 手写的页头会绕开 .head .top/.txt/.name/.meta
 这套结构：名字居不居得中、照片在不在右上、导出的 Word 对不对得上，全靠它。
 
+【网格、对齐、字号：用工具，不要写内联样式】
+
+网格（grid-2 / grid-3）在屏幕上和导出的 Word 里都是**表格**：屏幕是 CSS 网格，
+Word 是无边框表格（两列就是两格宽）。条目按行优先填格，所以条目数最好是列数的整数倍，
+少一格会留白、多一格会另起一行 —— 看到最后一行只剩一条时，考虑少放一条或改用两栏。
+
+要居中、改字号、加粗，用 `set_block_style { blockId, align, size, bold }`：
+align 只认 left/center/right，size 是 8–24 的整数（单位 pt），bold 是布尔。
+它和 set_block_role 是两个维度，可以叠加：role 决定容器（网格 / 表格），
+style 决定这一块里的字怎么排。只传你要改的那几项，其余保持原样；clear:true 恢复默认。
+
+**不要用内联 style="text-align:..." 之类绕过去。** 手写的内联样式在 Word 导出里会丢，
+结果是屏幕上好看、发给 HR 的那份又变回原样 —— 这种「只在一处生效」比不支持更糟。
+
+这一整套只改排版，正文一个字都不会变；所以拿不准时宁可先设上再看，不必担心改坏内容。
+
 【能写的标签】
 section header footer div p span h1 h2 h3 h4 h5 h6 strong b em i u small mark br hr
 ul ol li dl dt dd figure figcaption img a blockquote table thead tbody tr th td

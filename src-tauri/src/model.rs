@@ -148,6 +148,50 @@ pub struct Section {
     pub extra: Map<String, Value>,
 }
 
+/// 块级排版覆盖：只改样式，不碰一个字。
+///
+/// 为什么是三件套（对齐 / 字号 / 加粗）而不是「一套命名样式」：
+/// 用户说的就是这三件事（「这栏居中、字大点、加粗」），命名样式还得先定义再引用，
+/// 模型和用户都多记一层。
+///
+/// 刻意**不在数据层做白名单校验**：这是渲染层的活（`render::block_style` 夹值、
+/// `docx` 同样按值判定），存进来一个 `size: 99` 也只是「不生效」，不该让整次保存失败。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockStyle {
+    /// left / center / right；其它值渲染层忽略
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<String>,
+    /// pt，8–24；超范围夹到边界，非数字忽略
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+}
+
+/// 三个访问器是**唯一**的取值口径：屏幕（`render`）与 Word（`docx`）都从
+/// 这里拿值，任何一边想「自己再判一次」都会让两边悄悄错开。
+impl BlockStyle {
+    /// 对齐只认三个字面量；`middle` / `justify` 之类一律当没写
+    pub fn align(&self) -> Option<&'static str> {
+        match self.align.as_deref().map(str::trim) {
+            Some("left") => Some("left"),
+            Some("center") => Some("center"),
+            Some("right") => Some("right"),
+            _ => None,
+        }
+    }
+
+    /// pt 夹到 8–24：纸面上一行塞得下的字号区间，越界不报错只夹住
+    pub fn size_pt(&self) -> Option<u32> {
+        self.size.map(|size| size.clamp(8, 24))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.align().is_none() && self.size_pt().is_none() && self.bold.is_none()
+    }
+}
+
 /// 页里的一个块。
 ///
 /// 为什么不用 enum：`#[serde(tag)]` 的内部标记 enum 不支持 `flatten`，
@@ -179,6 +223,12 @@ pub struct Block {
     /// 那边本来就要加一条 warnings。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// 块级样式覆盖（对齐 / 字号 / 加粗）。屏幕与 Word 同源，只影响这一块。
+    ///
+    /// 注意 `Block` 上还有 `#[serde(flatten)] extra`：具名字段先匹配，
+    /// flatten 只收没命中的键，所以加这一项不会跟老数据里的未知键打架。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<BlockStyle>,
     #[serde(flatten, default, skip_serializing_if = "is_empty")]
     pub extra: Map<String, Value>,
 }
@@ -278,6 +328,7 @@ impl ResumePage {
                 caption: None,
                 fit: None,
                 role: None,
+                style: None,
                 extra: Map::new(),
             });
         }
@@ -292,6 +343,7 @@ impl ResumePage {
                 caption: None,
                 fit: None,
                 role: None,
+                style: None,
                 extra: section.extra,
             });
         }

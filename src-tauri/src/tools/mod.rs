@@ -338,6 +338,18 @@ pub const TOOLS: &[Tool] = &[
         writes: true,
     },
     Tool {
+        name: "set_block_style",
+        description: "设一块的排版：对齐（left/center/right）、字号（8–24 pt）、加粗。\
+                      这是**排版，不是内容** —— 文字一个字都不会变，只影响它长什么样。\
+                      用户说「这一块居中」「字大一点」「加粗标题」时用它；\
+                      它和 set_block_role 是两件事，可以叠加：role 决定容器（网格 / 表格），\
+                      set_block_style 决定这一块里每个字的对齐与大小。\
+                      只写出来的那几项会生效，没传的项保持原样；clear:true 恢复版式默认。",
+        params: edit::set_block_style_params,
+        run: edit::set_block_style,
+        writes: true,
+    },
+    Tool {
         name: "add_page",
         description: "给当前简历新增一页（零内容）。用户说「再加一页放作品集」时用它。\
                       产物是新页出现在页列表末尾，需要再往里加分区与条目。\
@@ -738,8 +750,9 @@ mod tests {
     fn capability_map_is_one_line_per_tool() {
         let names = names();
 
-        // 45 = 内容读写 + 页面控制 + 版面三件套 + 原件四件套，一个不多一个不少
-        assert_eq!(names.len(), 45, "工具数变了：{names:?}");
+        // 46 = 内容读写 + 页面控制 + 版面四件套（role / style / layout / note）+ 原件四件套，
+        // 一个不多一个不少
+        assert_eq!(names.len(), 46, "工具数变了：{names:?}");
         // specs 与注册表必须同源：少一条说明 specs 里还在过滤
         assert_eq!(
             specs().as_array().map(|list| list.len()).unwrap_or(0),
@@ -759,6 +772,8 @@ mod tests {
             "add_section",
             "set_section_title",
             "remove_section",
+            "set_block_role",
+            "set_block_style",
             "add_page",
             "delete_page",
             "rename_page",

@@ -172,3 +172,77 @@ describe("cleanOps 认得新 op", () => {
     expect(cleanOps([{ type: "removeEmptyPage", personId: "p1", resumeId: "r1" }])).toHaveLength(0);
   });
 });
+
+describe("blockStyle", () => {
+  it("合并：先设对齐、再改字号，两项都在", () => {
+    const before = workspace([page("pg1", [block("b1")])]);
+    const centered = reducer(before, {
+      type: "blockStyle",
+      personId: "p1",
+      resumeId: "r1",
+      pageId: "pg1",
+      blockId: "b1",
+      style: { align: "center" },
+    });
+    const sized = reducer(centered, {
+      type: "blockStyle",
+      personId: "p1",
+      resumeId: "r1",
+      pageId: "pg1",
+      blockId: "b1",
+      style: { size: 12 },
+    });
+    expect(sized.people[0].resumes[0].pages[0].blocks[0].style).toEqual({
+      align: "center",
+      size: 12,
+    });
+  });
+
+  it("空对象 = 清掉，且存档里不留 style 键", () => {
+    const before = workspace([page("pg1", [block("b1")])]);
+    const dubbed = reducer(before, {
+      type: "blockStyle",
+      personId: "p1",
+      resumeId: "r1",
+      pageId: "pg1",
+      blockId: "b1",
+      style: { bold: true },
+    });
+    const cleared = reducer(dubbed, {
+      type: "blockStyle",
+      personId: "p1",
+      resumeId: "r1",
+      pageId: "pg1",
+      blockId: "b1",
+      style: {},
+    });
+    expect("style" in cleared.people[0].resumes[0].pages[0].blocks[0]).toBe(false);
+  });
+
+  it("只动目标块", () => {
+    const before = workspace([page("pg1", [block("b1"), block("b2")])]);
+    const after = reducer(before, {
+      type: "blockStyle",
+      personId: "p1",
+      resumeId: "r1",
+      pageId: "pg1",
+      blockId: "b2",
+      style: { align: "right" },
+    });
+    const blocks = after.people[0].resumes[0].pages[0].blocks;
+    expect(blocks[0].style).toBeUndefined();
+    expect(blocks[1].style).toEqual({ align: "right" });
+  });
+});
+
+describe("cleanOps 认得 blockStyle", () => {
+  it("空对象合法，越界字号与错对齐整条丢掉", () => {
+    const shape = { type: "blockStyle", personId: "p1", resumeId: "r1", pageId: "pg1", blockId: "b1" };
+    expect(cleanOps([{ ...shape, style: {} }])).toHaveLength(1);
+    expect(cleanOps([{ ...shape, style: { align: "center", size: 12, bold: true } }])).toHaveLength(1);
+    expect(cleanOps([{ ...shape, style: { size: 99 } }])).toHaveLength(0);
+    expect(cleanOps([{ ...shape, style: { align: "middle" } }])).toHaveLength(0);
+    expect(cleanOps([{ ...shape, style: "center" }])).toHaveLength(0);
+    expect(cleanOps([{ ...shape }])).toHaveLength(0);
+  });
+});

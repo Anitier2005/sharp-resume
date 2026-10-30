@@ -178,6 +178,21 @@ export type BlockRole =
   | "row";
 
 /**
+ * 块级排版覆盖：只改样式，不碰一个字。
+ *
+ * 形状以 Rust 的 `model::BlockStyle` 为准（那边是唯一真相）。两处约定要紧：
+ * - `size` 是 pt，8–24；越界由**渲染层**夹住而不是这里报错 ——
+ *   一个坏值不该让整份简历打不开。写入时的严格校验在工具层（`set_block_style`）。
+ * - `bold: false` 表示「不要额外加粗」，标题自带的粗体属于结构，不会被取消。
+ */
+export interface BlockStyle {
+  align?: "left" | "center" | "right";
+  /** pt，8–24 */
+  size?: number;
+  bold?: boolean;
+}
+
+/**
  * 页里的块。
  *
  * 形状以 Rust 的 `model::Block` 为准：扁平结构，用 `kind` 区分，
@@ -199,6 +214,8 @@ export interface Block {
   fit?: string;
   /** 结构化生成的容器提示；没有 = plain（老数据、手写块都是这种情况） */
   role?: BlockRole;
+  /** 块级样式覆盖（对齐 / 字号 / 加粗）；没有 = 用版式默认 */
+  style?: BlockStyle;
 }
 
 /**

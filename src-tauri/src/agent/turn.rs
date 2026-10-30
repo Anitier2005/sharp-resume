@@ -213,6 +213,29 @@ fn describe(name: &str, args: &Value) -> String {
             },
         },
         "note_on_page" => "在纸面留批注".to_string(),
+        // 一句话说清「改了什么样子」，而不是把参数念一遍
+        "set_block_style" => {
+            if args["clear"].as_bool() == Some(true) {
+                return "清掉这一块的样式".to_string();
+            }
+            let mut parts: Vec<String> = Vec::new();
+            match args["align"].as_str() {
+                Some("center") => parts.push("居中".to_string()),
+                Some("right") => parts.push("右对齐".to_string()),
+                Some("left") => parts.push("左对齐".to_string()),
+                _ => {}
+            }
+            if let Some(size) = args["size"].as_u64() {
+                parts.push(format!("{size}pt"));
+            }
+            if args["bold"].as_bool() == Some(true) {
+                parts.push("加粗".to_string());
+            }
+            match parts.is_empty() {
+                true => "调整这一块的排版".to_string(),
+                false => format!("把这一块设成{}", parts.join(" ")),
+            }
+        }
         other => format!("调用 {other}"),
     }
 }

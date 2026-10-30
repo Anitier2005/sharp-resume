@@ -75,6 +75,7 @@ const PATCHABLE: &[&str] = &[
     "set_section_title",
     "remove_section",
     "set_block_role",
+    "set_block_style",
     "add_page",
     "delete_page",
     "rename_page",
@@ -736,6 +737,42 @@ fn apply_to_live(live: &mut Option<Value>, op: &Value) {
                     }
                 }
             }
+        }
+        // 块级样式：只认 align / size / bold 三个键。
+        //
+        // 合并而不是整组替换：同一个块连着调两次（先对齐、再改字号）不该互相覆盖。
+        // `style: {}` = 清掉 —— 与「省略 role」是同一种约定，前端也这么读。
+        // 没带 style 键的 op 一律不动：一条形状不对的 op 不该顺手把用户设好的样式抹了。
+        "blockStyle" => {
+            let Some(block) =
+                block_in(workspace, get("personId"), get("resumeId"), get("pageId"), get("blockId"))
+            else {
+                return;
+            };
+            let Some(incoming) = op.get("style").and_then(Value::as_object) else {
+                return;
+            };
+            if incoming.is_empty() {
+                if let Some(object) = block.as_object_mut() {
+                    object.remove("style");
+                }
+                return;
+            }
+            let mut next = serde_json::Map::new();
+            // 现有值先铺底，再让这一条 op 覆盖它认识的键
+            if let Some(existing) = block.get("style").and_then(Value::as_object) {
+                for key in ["align", "size", "bold"] {
+                    if let Some(value) = existing.get(key) {
+                        next.insert(key.to_string(), value.clone());
+                    }
+                }
+            }
+            for key in ["align", "size", "bold"] {
+                if let Some(value) = incoming.get(key) {
+                    next.insert(key.to_string(), value.clone());
+                }
+            }
+            block["style"] = Value::Object(next);
         }
         "addPage" => {
             if let Some(person) = person_in(workspace, get("personId")) {
@@ -1517,6 +1554,36 @@ pub fn set_block_role_params() -> Value {
     })
 }
 
+pub fn set_block_style_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "blockId": { "type": "string", "description": "要改样式的块 id（字段块、分区块、图片块都行）" },
+            "align": {
+                "type": "string",
+                "enum": ["left", "center", "right"],
+                "description": "这块文字的整体对齐。只影响排版，一个字都不改"
+            },
+            "size": {
+                "type": "integer",
+                "minimum": 8,
+                "maximum": 24,
+                "description": "字号，单位 pt，8–24。只影响这一块，不牵动页面上别的块"
+            },
+            "bold": {
+                "type": "boolean",
+                "description": "true = 这一块整体加粗；false = 不再额外加粗（标题自带的粗体不会被取消）"
+            },
+            "clear": {
+                "type": "boolean",
+                "description": "true = 清掉这一块的所有样式覆盖，回到版式默认。与另外三个参数互斥"
+            }
+        },
+        "required": ["blockId"],
+        "additionalProperties": false
+    })
+}
+
 pub fn add_page_params() -> Value {
     json!({
         "type": "object",
@@ -2222,6 +2289,129 @@ fn core_set_block_role(st: &mut EditState, args: &Value, ctx: &ToolCtx) -> Resul
     })
 }
 
+/// 块级排版：对齐 / 字号 / 加粗。
+///
+/// 与渲染层刻意相反：渲染层认不出就忽略（一个坏值不该让整份简历打不开），
+/// 这里必须**当面报错** —— 模型写错时最怕的不是失败，是它以为设好了。
+fn core_set_block_style(st: &mut EditState, args: &Value, ctx: &ToolCtx) -> Result<String, String> {
+    let block_id = need_str(args, "blockId")?;
+    let given = |key: &str| args.get(key).filter(|value| !value.is_null());
+
+    let align = match given("align") {
+        Some(value) => match value.as_str().map(str::trim) {
+            Some("left") => Some("left".to_string()),
+            Some("center") => Some("center".to_string()),
+            Some("right") => Some("right".to_string()),
+            _ => {
+                return Err(format!(
+                    "align 只认 left / center / right（收到 {value}）。这是排版参数，不是自由文本；\
+                     想恢复默认就传 clear:true"
+                ))
+            }
+        },
+        None => None,
+    };
+
+    let size = match given("size") {
+        Some(value) => match value.as_u64() {
+            Some(number) if (8..=24).contains(&number) => Some(number as u32),
+            _ => {
+                return Err(format!(
+                    "size 要 8–24 的整数（单位 pt，收到 {value}）。这是字号，不是随便一个数"
+                ))
+            }
+        },
+        None => None,
+    };
+
+    let bold = match given("bold") {
+        Some(value) => Some(
+            value
+                .as_bool()
+                .ok_or_else(|| format!("bold 要 true 或 false（收到 {value}）"))?,
+        ),
+        None => None,
+    };
+
+    let clear = match given("clear") {
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| format!("clear 要 true 或 false（收到 {value}）"))?,
+        None => false,
+    };
+
+    if align.is_none() && size.is_none() && bold.is_none() && !clear {
+        return Err(
+            "没说改什么。可以传 align（left/center/right）、size（8–24 pt）、bold（true/false），\
+             或者 clear:true 清掉这一块的样式"
+                .into(),
+        );
+    }
+
+    let (spot, block) = find_block(ctx, &block_id)?;
+    // 报错与回话都要能让人认出「哪一块」：分区用标题，其余用 id
+    let label = match text(&block, "kind").as_str() {
+        "section" if !text(&block, "title").is_empty() => format!("「{}」", text(&block, "title")),
+        _ => block_id.clone(),
+    };
+
+    // 只写传进来的键：前端 reducer 做的是**合并**，所以「先设对齐、再改字号」
+    // 两次调用能叠在一起，而不是后一次把前一次抹掉
+    let mut style = serde_json::Map::new();
+    if !clear {
+        if let Some(align) = &align {
+            style.insert("align".into(), json!(align));
+        }
+        if let Some(size) = size {
+            style.insert("size".into(), json!(size));
+        }
+        if let Some(bold) = bold {
+            style.insert("bold".into(), json!(bold));
+        }
+    }
+
+    let mut op = json!({
+        "type": "blockStyle",
+        "personId": spot.person,
+        "resumeId": spot.resume,
+        "pageId": spot.page,
+        "blockId": block_id,
+    });
+    // clear 时是空对象：前端把 `{}` 当「清掉」，与省略 role 是同一种约定
+    op["style"] = Value::Object(style);
+    st.mark_op(op);
+
+    if clear {
+        return Ok(format!(
+            "已清掉块 {block_id}（{label}）的样式，回到版式默认 —— 一个字都没动"
+        ));
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(align) = &align {
+        parts.push(
+            match align.as_str() {
+                "center" => "居中",
+                "right" => "右对齐",
+                _ => "左对齐",
+            }
+            .to_string(),
+        );
+    }
+    if let Some(size) = size {
+        parts.push(format!("{size}pt"));
+    }
+    match bold {
+        Some(true) => parts.push("加粗".into()),
+        // false 只是「不要那层额外加粗」，标题自带的粗体属于结构，不会被取消
+        Some(false) => parts.push("不再额外加粗".into()),
+        None => {}
+    }
+    Ok(format!(
+        "已把块 {block_id}（{label}）设成{} —— 只改了排版，一个字都没动",
+        parts.join(" ")
+    ))
+}
+
 fn current_resume<'a>(ctx: &ToolCtx<'a>) -> Result<&'a Value, String> {
     person_of(ctx)?
         .get("resumes")
@@ -2579,6 +2769,7 @@ fn run_one(
         "set_section_title" => core_set_section_title(st, args, ctx),
         "remove_section" => core_remove_section(st, args, ctx),
         "set_block_role" => core_set_block_role(st, args, ctx),
+        "set_block_style" => core_set_block_style(st, args, ctx),
         "add_page" => core_add_page(st, args, ctx),
         "delete_page" => core_delete_page(st, args, ctx),
         "rename_page" => core_rename_page(st, args, ctx),
@@ -2612,6 +2803,7 @@ tool!(add_section, core_add_section);
 tool!(set_section_title, core_set_section_title);
 tool!(remove_section, core_remove_section);
 tool!(set_block_role, core_set_block_role);
+tool!(set_block_style, core_set_block_style);
 tool!(add_page, core_add_page);
 tool!(delete_page, core_delete_page);
 tool!(rename_page, core_rename_page);
@@ -3116,6 +3308,99 @@ mod tests {
 
         let err = h.run("set_section_title", json!({ "sectionId": "nope", "title": "x" })).unwrap_err();
         assert!(err.contains("找不到分区"), "{err}");
+    }
+
+    /// 块级样式：只写传进来的键，clear 落成空对象（= 清掉）。
+    ///
+    /// 这条 op 只改样式，一个字都不碰 —— 所以这里同时钉住「没顺手动 fields/items」。
+    #[test]
+    fn block_style_sets_each_piece_and_clears_with_an_empty_object() {
+        let h = Harness::new();
+        h.run("set_block_style", json!({ "blockId": "s1", "align": "center" })).unwrap();
+        h.run("set_block_style", json!({ "blockId": "s1", "size": 12, "bold": true })).unwrap();
+        h.run("set_block_style", json!({ "blockId": "s1", "clear": true })).unwrap();
+
+        let ops = h.ops();
+        assert_eq!(ops.len(), 3, "{ops:?}");
+        assert_eq!(ops[0]["type"], json!("blockStyle"));
+        assert_eq!(ops[0]["blockId"], json!("s1"));
+        // 只带 align：size / bold 不跟着写进去，否则「先对齐再改字号」会把字号抹掉
+        assert_eq!(ops[0]["style"], json!({ "align": "center" }), "{}", ops[0]);
+        assert_eq!(ops[1]["style"], json!({ "size": 12, "bold": true }), "{}", ops[1]);
+        assert_eq!(ops[2]["style"], json!({}), "clear 要落成空对象：{}", ops[2]);
+        // 纯排版：内容一个字段都没动
+        assert!(ops[0].get("fields").is_none() && ops[0].get("items").is_none(), "{}", ops[0]);
+    }
+
+    /// 两次调用叠在一起，而不是后一次把前一次抹掉；空对象把整层样式摘掉。
+    #[test]
+    fn block_style_ops_merge_instead_of_replacing() {
+        let mut live = Some(workspace());
+        let op = |style: Value| {
+            json!({
+                "type": "blockStyle",
+                "personId": "p1",
+                "resumeId": "r1",
+                "pageId": "pg1",
+                "blockId": "s1",
+                "style": style,
+            })
+        };
+        apply_to_live(&mut live, &op(json!({ "align": "center" })));
+        apply_to_live(&mut live, &op(json!({ "size": 12 })));
+
+        let live = live.expect("工作副本");
+        let block = live["people"][0]["resumes"][0]["pages"][0]["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|block| block["id"] == json!("s1"))
+            .unwrap()
+            .clone();
+        assert_eq!(block["style"], json!({ "align": "center", "size": 12 }), "{block}");
+
+        // 空对象 = 把整层 style 摘掉（存档里不留 `"style": {}` 的噪声）
+        let mut live = Some(live);
+        apply_to_live(&mut live, &op(json!({})));
+        let cleared = live.unwrap();
+        let block = cleared["people"][0]["resumes"][0]["pages"][0]["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|block| block["id"] == json!("s1"))
+            .unwrap()
+            .clone();
+        assert!(block.get("style").is_none(), "空对象要整层摘掉：{block}");
+    }
+
+    /// 不合法就报错，**不许静默丢掉**：模型以为设好了、用户却什么都没看到，
+    /// 是这类排版工具最坏的失败方式。
+    #[test]
+    fn a_bad_block_style_is_rejected_not_silently_dropped() {
+        let h = Harness::new();
+
+        let err = h.run("set_block_style", json!({ "blockId": "s1", "size": 99 })).unwrap_err();
+        assert!(err.contains("8–24"), "{err}");
+        assert!(err.contains("99"), "报错要说清收到什么：{err}");
+
+        let err = h.run("set_block_style", json!({ "blockId": "s1", "size": 7 })).unwrap_err();
+        assert!(err.contains("8–24"), "{err}");
+
+        let err = h.run("set_block_style", json!({ "blockId": "s1", "align": "middle" })).unwrap_err();
+        assert!(err.contains("left"), "{err}");
+        assert!(err.contains("middle"), "报错要说清收到什么：{err}");
+
+        let err = h.run("set_block_style", json!({ "blockId": "s1", "bold": "yes" })).unwrap_err();
+        assert!(err.contains("true"), "{err}");
+
+        let err = h.run("set_block_style", json!({ "blockId": "s1" })).unwrap_err();
+        assert!(err.contains("align"), "什么都没说时要告诉它能传什么：{err}");
+
+        let err = h.run("set_block_style", json!({ "blockId": "nope", "size": 12 })).unwrap_err();
+        assert!(err.contains("找不到块"), "{err}");
+
+        // 一次都没落地：坏值不该在暂存区里留下半条 op
+        assert!(h.flush().is_none(), "非法参数不该产出 op");
     }
 
     #[test]

@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::model::{Asset, Block, Field, Paper, ResumePage};
+use crate::model::{Asset, Block, BlockStyle, Field, Paper, ResumePage};
 
 const ACCENT_HEX_WHITE: &str = "242422";
 
@@ -259,42 +259,142 @@ fn run(text: &str, bold: bool, size: u32, color: &str) -> String {
     )
 }
 
-fn para(text: &str, bold: bool, size: u32, color: &str, opts: &DocxOptions, center: bool) -> String {
-    let jc = if center { "<w:jc w:val=\"center\"/>" } else { "" };
-    format!(
-        "<w:p><w:pPr><w:spacing w:after=\"40\" w:line=\"{line}\" w:lineRule=\"auto\"/>{jc}</w:pPr>{}</w:p>",
-        run(text, bold, opts.sz(size), color),
-        line = opts.line()
-    )
+/// 一块在 Word 里的排版上下文。
+///
+/// 为什么攒成一个值而不是一路传三个参数：块级样式（对齐 / 字号 / 加粗）与
+/// 「这一行有多宽」对同一块里的每个段落都是同一份。散着传必然会漏掉某一条路径
+/// —— 页头吃了样式、要点没吃，比干脆不支持更糟。
+#[derive(Clone, Copy)]
+struct Flow<'a> {
+    opts: &'a DocxOptions,
+    /// 块级样式覆盖；`None` = 完全按版式默认
+    style: Option<&'a BlockStyle>,
+    /// 可用宽度（twips）：正文里是版心宽，表格单元格里是列宽。
+    /// 条目头的时间靠右制表位打在这一点上 —— 单元格里还打版心右缘会把那一行撑破。
+    width: i64,
 }
 
-/// 条目头：名称（加粗）+ 中间字段 + 时间，**同一个段落**，与屏幕上的 `.erow` 同构。
-///
-/// 时间用右制表位推到版心右边缘：位置取自版心宽度，不随字号漂移，
-/// 也不去估「这段字有多宽」—— 估出来的宽度换个字号就错位，比不齐更难看。
-fn entry_head_para(head: &crate::render::EntryHead, opts: &DocxOptions) -> String {
-    let mut inner = run(&head.lead, true, 21, "141412");
-    for role in &head.roles {
-        inner.push_str(&run(&format!("  {role}"), false, 18, "55554F"));
-    }
-    let tabs = match &head.time {
-        Some(time) => {
-            let size = opts.sz(18);
-            inner.push_str(&format!(
-                "<w:r><w:rPr><w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/></w:rPr><w:tab/></w:r>"
-            ));
-            inner.push_str(&run(time, false, 18, "55554F"));
-            format!(
-                "<w:tabs><w:tab w:val=\"right\" w:pos=\"{}\"/></w:tabs>",
-                opts.content_width_twips()
-            )
+impl<'a> Flow<'a> {
+    fn body(opts: &'a DocxOptions, style: Option<&'a BlockStyle>) -> Self {
+        Self {
+            opts,
+            style,
+            width: opts.content_width_twips(),
         }
-        None => String::new(),
-    };
-    format!(
-        "<w:p><w:pPr>{tabs}<w:spacing w:after=\"40\" w:line=\"{line}\" w:lineRule=\"auto\"/></w:pPr>{inner}</w:p>",
-        line = opts.line()
-    )
+    }
+
+    fn cell(opts: &'a DocxOptions, style: Option<&'a BlockStyle>, width: i64) -> Self {
+        Self {
+            opts,
+            style,
+            width,
+        }
+    }
+
+    /// 字号：样式给了 pt 就用它（`w:sz` 是半点，pt×2），否则按版式基线缩放
+    fn size(&self, base: u32) -> u32 {
+        match self.style.and_then(BlockStyle::size_pt) {
+            Some(pt) => pt * 2,
+            None => self.opts.sz(base),
+        }
+    }
+
+    /// 加粗：样式喊加粗就加。
+    ///
+    /// `bold: false` 不做事 —— 条目名、分区标题的加粗是**结构**的一部分，
+    /// 取消它只会让这一块「看起来不一样」却说不清哪不一样。
+    /// 所以这里只加不减，模型能做的就是「更醒目」。
+    fn bold(&self, base: bool) -> bool {
+        base || self
+            .style
+            .map(|style| style.bold == Some(true))
+            .unwrap_or(false)
+    }
+
+    /// 对齐：块级样式优先，其次页头那条版式默认（`center`）。
+    ///
+    /// `left` 不写 `<w:jc>` —— 那是 Word 的默认值，写出来只是一行噪声，
+    /// 而且会让「有没有设样式」在 XML 上分不出来。
+    fn jc(&self, center: bool) -> String {
+        let align = self
+            .style
+            .and_then(BlockStyle::align)
+            .unwrap_or(if center { "center" } else { "left" });
+        match align {
+            "left" => String::new(),
+            other => format!("<w:jc w:val=\"{other}\"/>"),
+        }
+    }
+
+    fn para(&self, text: &str, bold: bool, size: u32, color: &str, center: bool) -> String {
+        let jc = self.jc(center);
+        format!(
+            "<w:p><w:pPr><w:spacing w:after=\"40\" w:line=\"{line}\" w:lineRule=\"auto\"/>{jc}</w:pPr>{}</w:p>",
+            run(text, self.bold(bold), self.size(size), color),
+            line = self.opts.line()
+        )
+    }
+
+    /// 条目头：名称（加粗）+ 中间字段 + 时间，**同一个段落**，与屏幕上的 `.erow` 同构。
+    ///
+    /// 时间用右制表位推到可用宽度的右缘：位置取自宽度，不随字号漂移，
+    /// 也不去估「这段字有多宽」—— 估出来的宽度换个字号就错位，比不齐更难看。
+    fn entry_head(&self, head: &crate::render::EntryHead) -> String {
+        let mut inner = run(&head.lead, self.bold(true), self.size(21), "141412");
+        for role in &head.roles {
+            inner.push_str(&run(
+                &format!("  {role}"),
+                self.bold(false),
+                self.size(18),
+                "55554F",
+            ));
+        }
+        let tabs = match &head.time {
+            Some(time) => {
+                let size = self.size(18);
+                inner.push_str(&format!(
+                    "<w:r><w:rPr><w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/></w:rPr><w:tab/></w:r>"
+                ));
+                inner.push_str(&run(time, self.bold(false), size, "55554F"));
+                format!(
+                    "<w:tabs><w:tab w:val=\"right\" w:pos=\"{width}\"/></w:tabs>",
+                    width = self.width
+                )
+            }
+            None => String::new(),
+        };
+        format!(
+            "<w:p><w:pPr>{tabs}<w:spacing w:after=\"40\" w:line=\"{line}\" w:lineRule=\"auto\"/>{jc}</w:pPr>{inner}</w:p>",
+            jc = self.jc(false),
+            line = self.opts.line()
+        )
+    }
+
+    /// 一条条目 → 若干段落：条目头 + 要点。屏幕上 `.erow` + `.bullets` 的同一件事。
+    ///
+    /// 正文分区与表格单元格都走这一条路径：条目怎么排只写一次。
+    /// 复制一份到表格里，屏幕上两栏与 Word 里两栏迟早会长得不一样。
+    fn entry_paras(
+        &self,
+        entry: &crate::model::SectionEntry,
+        library: &[crate::model::LibraryItem],
+        out: &mut Vec<String>,
+    ) {
+        let has_bullets = entry.bullets.iter().any(|line| !line.trim().is_empty());
+        if let Some(head) = crate::render::entry_head(entry_fields(entry, library), has_bullets) {
+            out.push(self.entry_head(&head));
+        }
+        for bullet in &entry.bullets {
+            if !bullet.trim().is_empty() {
+                out.push(self.para(&format!("· {bullet}"), false, 18, "55554F", false));
+            }
+        }
+    }
+}
+
+/// 本块的样式覆盖；空对象（`{}`，前端「清掉」的产物）等同于没有
+fn block_style_of(block: &Block) -> Option<&BlockStyle> {
+    block.style.as_ref().filter(|style| !style.is_empty())
 }
 
 /// 绝对定位段落：`w:framePr` 把这一段从正文流里摘出来，按页边坐标摆放。
@@ -424,6 +524,165 @@ fn entry_fields<'a>(entry: &'a crate::model::SectionEntry, library: &'a [crate::
         .unwrap_or(&[])
 }
 
+/// 表格的列宽：均分可用宽度，最后一列吃掉除不尽的零头。
+///
+/// 各列之和必须**正好**等于可用宽度：差几个 twips，`fixed` 布局就会在右边
+/// 留一条说不出来源的空白，或者把最后一列挤出去一格。
+fn column_widths(total: i64, cols: usize) -> Vec<i64> {
+    let cols = cols.max(1);
+    let base = total / cols as i64;
+    (0..cols)
+        .map(|index| {
+            if index + 1 == cols {
+                total - base * (cols as i64 - 1)
+            } else {
+                base
+            }
+        })
+        .collect()
+}
+
+/// 表格横线的颜色。
+///
+/// 屏幕上的 `.doc td` 只有 `border-bottom: 1px solid var(--line)`（`paper.css:600`），
+/// `--line` 的取值是 `#e2e2dc`（`paper.css:23`）。这里必须跟屏幕同源：
+/// 换成正文那种近黑，Word 里的表格会比屏幕上重一档；换成一整圈框，
+/// 屏幕上根本不是那个样子。改 CSS 时这里要跟着改（同 `preset_metrics` 的约定）。
+const TABLE_RULE_HEX: &str = "E2E2DC";
+
+/// 表格边框。
+///
+/// 无边框网格（`grid-2` / `grid-3`）：六个方向全 `none` —— 屏幕上
+/// `.doc .sec.grid-2` 本来就没有框，分栏靠留白，Word 里加框等于凭空多一张表。
+///
+/// `table` 角色只画横线：屏幕的表格只有每格下边框，没有竖线也没有外框。
+fn tbl_borders(ruled: bool) -> String {
+    fn none(side: &str) -> String {
+        format!("<w:{side} w:val=\"none\" w:sz=\"0\" w:space=\"0\" w:color=\"auto\"/>")
+    }
+    let inside_h = if ruled {
+        format!("<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{TABLE_RULE_HEX}\"/>")
+    } else {
+        none("insideH")
+    };
+    format!(
+        "<w:tblBorders>{}{}{}{}{}{}</w:tblBorders>",
+        none("top"),
+        none("left"),
+        none("bottom"),
+        none("right"),
+        inside_h,
+        none("insideV"),
+    )
+}
+
+/// 一张表：`rows` 里每个元素已经是「一个单元格的段落 XML」。
+///
+/// 单元格里**不再套空段落**：那一层会让每格多出半行高度，两栏就比屏幕上松。
+/// 内容为空的格子补 `<w:p/>` —— `<w:tc>` 里没有 `<w:p>` 时 Word 会报文档损坏，
+/// 这是唯一必须补段落的地方。
+fn table_xml(rows: &[Vec<String>], cols: usize, opts: &DocxOptions, ruled: bool) -> String {
+    let cols = cols.max(1);
+    let width = opts.content_width_twips();
+    let widths = column_widths(width, cols);
+    let grid: String = widths
+        .iter()
+        .map(|value| format!("<w:gridCol w:w=\"{value}\"/>"))
+        .collect();
+    let mut body = String::new();
+    for row in rows {
+        body.push_str("<w:tr>");
+        for (index, cell_width) in widths.iter().enumerate() {
+            let cell = row.get(index).map(String::as_str).unwrap_or("");
+            let cell = if cell.is_empty() { "<w:p/>" } else { cell };
+            body.push_str(&format!(
+                "<w:tc><w:tcPr><w:tcW w:w=\"{cell_width}\" w:type=\"dxa\"/></w:tcPr>{cell}</w:tc>"
+            ));
+        }
+        body.push_str("</w:tr>");
+    }
+    format!(
+        "<w:tbl><w:tblPr><w:tblW w:w=\"{width}\" w:type=\"dxa\"/><w:tblLayout w:type=\"fixed\"/>\
+         {borders}<w:tblCellMar><w:left w:w=\"0\" w:type=\"dxa\"/><w:right w:w=\"0\" w:type=\"dxa\"/>\
+         </w:tblCellMar></w:tblPr><w:tblGrid>{grid}</w:tblGrid>{body}</w:tbl>",
+        borders = tbl_borders(ruled)
+    )
+}
+
+/// `grid-2` / `grid-3`：条目按行优先填格，一格一条。
+///
+/// 屏幕上 `.doc .sec.grid-2` 是 `display:grid; grid-template-columns: 1fr 1fr`，
+/// 条目按 DOM 顺序落格 —— 行优先，与这里一致。最后一行不满就补空格子，
+/// 否则 Word 在 fixed 布局下会把那一行拉成整宽，上一行的列线就对不上了。
+fn grid_table(
+    block: &Block,
+    library: &[crate::model::LibraryItem],
+    opts: &DocxOptions,
+    cols: usize,
+) -> String {
+    let cols = cols.max(1);
+    let widths = column_widths(opts.content_width_twips(), cols);
+    let style = block_style_of(block);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for chunk in block.items.chunks(cols) {
+        let mut row = Vec::with_capacity(cols);
+        for (index, entry) in chunk.iter().enumerate() {
+            let flow = Flow::cell(opts, style, widths[index]);
+            let mut paras: Vec<String> = Vec::new();
+            flow.entry_paras(entry, library, &mut paras);
+            row.push(paras.join(""));
+        }
+        rows.push(row);
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    table_xml(&rows, cols, opts, false)
+}
+
+/// `table` 角色：一条一行、一个字段一格，**只排字段值**（标签去掉、第一格加粗）。
+///
+/// 与屏幕上的 `render::render_table` 是同一条规则 —— 那边也只取值、
+/// 要点同样不进表（丢内容由 `warn_if_lossy` 替它吭声）。两边都一样的缺口
+/// 不算偏差，一边进一边不进才是。
+fn field_table(
+    block: &Block,
+    library: &[crate::model::LibraryItem],
+    opts: &DocxOptions,
+) -> String {
+    let style = block_style_of(block);
+    let mut values: Vec<Vec<String>> = Vec::new();
+    for entry in &block.items {
+        let row: Vec<String> = entry_fields(entry, library)
+            .iter()
+            .map(|field| field.value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        if !row.is_empty() {
+            values.push(row);
+        }
+    }
+    if values.is_empty() {
+        return String::new();
+    }
+    let cols = values.iter().map(Vec::len).max().unwrap_or(1);
+    let widths = column_widths(opts.content_width_twips(), cols);
+    let rows: Vec<Vec<String>> = values
+        .iter()
+        .map(|row| {
+            row.iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    // 第一格是这一条的「名字」，与屏幕上 `<td><b>` 同一个位置
+                    let color = if index == 0 { "141412" } else { "55554F" };
+                    Flow::cell(opts, style, widths[index]).para(value, index == 0, 18, color, false)
+                })
+                .collect()
+        })
+        .collect();
+    table_xml(&rows, cols, opts, true)
+}
+
 fn block_xml(
     block: &Block,
     library: &[crate::model::LibraryItem],
@@ -433,34 +692,42 @@ fn block_xml(
     center: bool,
     out: &mut Vec<String>,
 ) {
+    let flow = Flow::body(opts, block_style_of(block));
     match block.kind.as_str() {
         "fields" => {
             // 图片字段单独走 framePr（照片位），不能混在「标签：值」里变成半句话
             let mut iter = block.fields.iter().filter(|field| field.image_id().is_none());
             if let Some(lead) = iter.next() {
                 let text = if lead.value.trim().is_empty() { &lead.label } else { &lead.value };
-                out.push(para(text, true, 34, hex, opts, center));
+                out.push(flow.para(text, true, 34, hex, center));
             }
             for field in iter {
-                out.push(para(&field_text(field), false, 17, "77776F", opts, center));
+                out.push(flow.para(&field_text(field), false, 17, "77776F", center));
             }
         }
         "section" => {
+            // 标题先出，占满整行：屏幕上 `.sec.grid-2 > .t` 是 `grid-column: 1/-1`
+            // 的第一行，视觉就是「标题在上、表格在下」。
+            // 不做成表里的合并单元格 —— 那样标题会被绑进表格这一整块，
+            // Word 分页时会把标题跟着表一起推到下一页。
             if !block.title.trim().is_empty() {
-                out.push(para(&block.title, true, 21, hex, opts, false));
+                out.push(flow.para(&block.title, true, 21, hex, false));
             }
-            for entry in &block.items {
-                // 与屏幕同构：名称 + 中间字段 + 时间落在同一个段落里，
-                // 拆成一段一个字段会多占两三倍的行数（屏幕上早就不这么排了）
-                let has_bullets = entry.bullets.iter().any(|line| !line.trim().is_empty());
-                if let Some(head) =
-                    crate::render::entry_head(entry_fields(entry, library), has_bullets)
-                {
-                    out.push(entry_head_para(&head, opts));
-                }
-                for bullet in &entry.bullets {
-                    if !bullet.trim().is_empty() {
-                        out.push(para(&format!("· {bullet}"), false, 18, "55554F", opts, false));
+            let table = match block.role.as_deref().map(str::trim) {
+                Some("grid-2") => Some(grid_table(block, library, opts, 2)),
+                Some("grid-3") => Some(grid_table(block, library, opts, 3)),
+                Some("table") => Some(field_table(block, library, opts)),
+                _ => None,
+            };
+            match table {
+                // 没有条目时 `table_xml` 会返回空串：别往正文里塞一个空元素
+                Some(xml) if !xml.is_empty() => out.push(xml),
+                Some(_) => {}
+                None => {
+                    for entry in &block.items {
+                        // 与屏幕同构：名称 + 中间字段 + 时间落在同一个段落里，
+                        // 拆成一段一个字段会多占两三倍的行数（屏幕上早就不这么排了）
+                        flow.entry_paras(entry, library, out);
                     }
                 }
             }
@@ -478,7 +745,7 @@ fn block_xml(
             } else {
                 format!("［图：{caption}（{name}）］")
             };
-            out.push(para(&line, false, 17, "77776F", opts, false));
+            out.push(flow.para(&line, false, 17, "77776F", false));
         }
         _ => {}
     }
@@ -509,7 +776,7 @@ fn document_xml(
         block_xml(block, library, assets, hex, opts, center, &mut body);
     }
     if body.is_empty() {
-        body.push(para("（空白页）", false, 18, "999990", opts, false));
+        body.push(Flow::body(opts, None).para("（空白页）", false, 18, "999990", false));
     }
 
     let margin = opts.margin_twips();
@@ -1072,5 +1339,98 @@ mod tests {
         let size = std::fs::metadata(&path).unwrap().len();
         assert!(size > 1024, "样例 docx 太小（{size} 字节）：{}", path.display());
         assert_eq!(bytes.len() as u64, size);
+    }
+
+    /// 网格角色必须落成真正的表格。
+    ///
+    /// 没有 `w:tbl` 的话，屏幕上并排的两栏在 Word 里会变成一栏竖排 ——
+    /// 用户看到的「网格排版」在导出里整个消失，这是这次要堵的窟窿。
+    #[test]
+    fn grid_role_becomes_a_borderless_table() {
+        let page = page_with(json!([
+            { "id": "b2", "kind": "section", "title": "技能", "role": "grid-2", "items": [
+                { "id": "e1", "fields": [{ "id": "f1", "label": "语言", "value": "英语 CET-6" }] },
+                { "id": "e2", "fields": [{ "id": "f2", "label": "工具", "value": "Excel 透视" }] }
+            ]}
+        ]));
+        let opts = opts_for("classic");
+        let xml = document_of(&page, &opts);
+
+        assert!(xml.contains("<w:tbl>"), "没有表格：{xml}");
+        assert!(xml.contains(r#"<w:tblLayout w:type="fixed"/>"#), "{xml}");
+        // 无边框：六个方向全是 none，一个 single 都不许出现
+        assert!(xml.contains("<w:tblBorders>"), "{xml}");
+        assert_eq!(xml.matches(r#"w:val="single""#).count(), 0, "网格不该有框：{xml}");
+        assert_eq!(xml.matches(r#"w:val="none""#).count(), 6, "{xml}");
+        // 两列均分版心
+        let half = opts.content_width_twips() / 2;
+        let col = format!(r#"<w:gridCol w:w="{half}"/>"#);
+        assert_eq!(xml.matches(&col).count(), 2, "列宽不是版心的一半：{xml}");
+        // 一格一条：两条条目落在同一行
+        assert_eq!(xml.matches("<w:tr>").count(), 1, "{xml}");
+        assert!(xml.contains("英语 CET-6") && xml.contains("Excel 透视"), "{xml}");
+    }
+
+    /// `table` 角色跟屏幕一样**只画横线**：`paper.css` 里 `.doc td` 只有
+    /// `border-bottom`，没有竖线也没有外框。加一圈框，Word 里就不是那张表了。
+    #[test]
+    fn table_role_keeps_the_lines() {
+        let page = page_with(json!([
+            { "id": "b2", "kind": "section", "title": "证书", "role": "table", "items": [
+                { "id": "e1", "fields": [
+                    { "id": "f1", "label": "证书", "value": "报关员资格证" },
+                    { "id": "f2", "label": "时间", "value": "2019" }
+                ]},
+                { "id": "e2", "fields": [
+                    { "id": "f3", "label": "证书", "value": "CET-6" },
+                    { "id": "f4", "label": "时间", "value": "2018" }
+                ]}
+            ]}
+        ]));
+        let xml = document_of(&page, &opts_for("classic"));
+
+        assert!(xml.contains("<w:tbl>"), "{xml}");
+        let line = format!(
+            r#"<w:insideH w:val="single" w:sz="4" w:space="0" w:color="{TABLE_RULE_HEX}"/>"#
+        );
+        assert!(xml.contains(&line), "缺少横线：{xml}");
+        assert!(!xml.contains(r#"<w:insideH w:val="none""#), "{xml}");
+        assert!(!xml.contains(r#"<w:insideV w:val="single""#), "屏幕的表格没有竖线：{xml}");
+        // 两条条目 = 两行
+        assert_eq!(xml.matches("<w:tr>").count(), 2, "{xml}");
+        // 只排字段值，不印「标签：」—— 与屏幕上 `render_table` 同一条规则
+        assert!(!xml.contains("时间："), "{xml}");
+    }
+
+    /// 同一份 `BlockStyle` 必须在两个渲染器里都生效。
+    ///
+    /// 只在一处生效比干脆不支持更糟：用户以为自己设好了，
+    /// 屏幕上看着对、导出 Word 又是另一副样子。
+    #[test]
+    fn block_style_reaches_both_renderers() {
+        let page = page_with(json!([
+            { "id": "b2", "kind": "section", "title": "技能", "items": [
+                { "id": "e1", "fields": [{ "id": "f1", "label": "工具", "value": "Excel" }], "bullets": [] }
+            ], "style": { "align": "center", "size": 12, "bold": true } }
+        ]));
+        let person: crate::model::Person = serde_json::from_value(json!({
+            "id": "p1",
+            "fields": [],
+            "assets": [],
+            "items": [],
+            "messages": [],
+            "resumes": []
+        }))
+        .unwrap();
+
+        let html = crate::render::compile(&page, &person).html;
+        assert!(html.contains("text-align:center"), "屏幕没吃对齐：{html}");
+        assert!(html.contains("font-size:12pt"), "屏幕没吃字号：{html}");
+        assert!(html.contains("font-weight:700"), "屏幕没吃加粗：{html}");
+
+        let xml = document_of(&page, &opts_for("classic"));
+        assert!(xml.contains(r#"<w:jc w:val="center"/>"#), "Word 没吃对齐：{xml}");
+        assert!(xml.contains(r#"<w:sz w:val="24"/>"#), "12pt 要写成 24 半点：{xml}");
+        assert!(xml.contains("<w:b/>"), "Word 没吃加粗：{xml}");
     }
 }

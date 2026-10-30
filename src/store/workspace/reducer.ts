@@ -1,4 +1,4 @@
-import type { Block, BlockRole, Person, Resume, Workspace } from "@/types";
+import type { Block, BlockRole, BlockStyle, Person, Resume, Workspace } from "@/types";
 import { mapSections, newSectionBlock, withEntry, withHeader, withoutBlock } from "@/lib/blocks";
 import { uid } from "@/lib/uid";
 import type { Action } from "./types";
@@ -30,6 +30,27 @@ function withRole(block: Block, role?: BlockRole): Block {
   const next: Block = { ...block };
   if (role) next.role = role;
   else delete next.role;
+  return next;
+}
+
+/**
+ * 给块写样式覆盖：**合并**，只覆盖显式给出的三个键。
+ *
+ * 为什么是合并而不是整组替换：工具一次只报「这一项改了」——
+ * 先设对齐、再改字号，两次调用不该互相抹掉。
+ * 合并后一个键都没有时整层 `delete`（同 `withRole`）：存档里不留 `"style": {}`。
+ */
+function withStyle(block: Block, style: BlockStyle): Block {
+  const next: Block = { ...block };
+  // `{}` 是「清掉」的约定（工具侧 clear:true 就发这个）—— 合并是「没给就不动」，
+  // 两者不能混：空对象如果也走合并，用户就永远清不掉样式
+  const asked =
+    style.align !== undefined || style.size !== undefined || style.bold !== undefined;
+  if (!asked) {
+    delete next.style;
+    return next;
+  }
+  next.style = { ...(block.style ?? {}), ...style };
   return next;
 }
 
@@ -266,6 +287,14 @@ export function reducer(state: Workspace, action: Action): Workspace {
         ...page,
         blocks: (page.blocks ?? []).map((block) =>
           block.id === action.blockId ? withRole(block, action.role) : block,
+        ),
+      }));
+
+    case "blockStyle":
+      return mapPage(state, action.personId, action.resumeId, action.pageId, (page) => ({
+        ...page,
+        blocks: (page.blocks ?? []).map((block) =>
+          block.id === action.blockId ? withStyle(block, action.style) : block,
         ),
       }));
 

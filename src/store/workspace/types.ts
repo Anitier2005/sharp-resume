@@ -3,6 +3,7 @@ import type {
   Asset,
   Block,
   BlockRole,
+  BlockStyle,
   ChatMessage,
   Field,
   LibraryItem,
@@ -134,6 +135,19 @@ export type Action =
       pageId: string;
       blockId: string;
       role?: BlockRole;
+    }
+  /**
+   * 块级样式：对齐 / 字号 / 加粗。与 `blockRole` 是两个维度 ——
+   * role 决定容器（网格、表格），style 决定这一块里的字怎么排，可以叠加。
+   * 解析时是**合并**（只覆盖给出的键）；`style: {}` = 清掉，回落版式默认。
+   */
+  | {
+      type: "blockStyle";
+      personId: string;
+      resumeId: string;
+      pageId: string;
+      blockId: string;
+      style: BlockStyle;
     }
   /**
    * 纸面批注：按 note.id 去重追加 —— 同一批动作可能重放（界面重连、事件重投），
