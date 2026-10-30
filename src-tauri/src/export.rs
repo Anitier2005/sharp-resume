@@ -73,6 +73,17 @@ fn ext_of(name: &str) -> String {
     name.rsplit('.').next().unwrap_or("").to_ascii_lowercase()
 }
 
+/// 页头照片的原始字节：第一个 fields 块里那一项图片字段。
+///
+/// 只看页头自己有没有显式指定 —— 「退回人身上第一张」的取舍在渲染层做过了，
+/// 导出的版式必须和纸面一致，不能自己再猜一次。
+fn header_photo(page: &ResumePage, assets: &HashMap<String, Asset>, root: &Path) -> Option<Vec<u8>> {
+    let head = page.blocks.first().filter(|block| block.kind == "fields")?;
+    let id = head.fields.iter().find_map(|field| field.image_id())?;
+    let asset = assets.get(id)?;
+    crate::pool::read_at(root, &asset.stored).ok()
+}
+
 /// 同名但内容不是我们上次写的那份：说明用户改过。
 /// 不覆盖，另起一个名字，最后在结果里报出来让用户自己决定。
 fn free_name(dir: &Path, wanted: &str, reserved: &HashSet<String>) -> String {
@@ -216,13 +227,17 @@ pub fn run(
             // 逐字节拷贝：不转码、不重压缩
             crate::storage::atomic_write(&target, &bytes)?;
         } else {
+            let mut opts = crate::docx::DocxOptions::for_page(&resume.paper, page);
+            // 页头照片内嵌进 docx（限尺寸、压成 JPEG）。原图照旧旁挂成附件，
+            // 所以读不到也不能报错 —— 读不到就只是少了那一张脸，段落回落成占位框
+            opts.photo_src = header_photo(page, &assets, root);
             let bytes = crate::docx::page_docx(
                 &person_name,
                 page,
                 &person.items,
                 &assets,
                 &accent,
-                &crate::docx::DocxOptions::for_page(&resume.paper, page),
+                &opts,
             );
             crate::storage::atomic_write(&target, &bytes)?;
         }
