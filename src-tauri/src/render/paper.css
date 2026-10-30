@@ -128,6 +128,13 @@
   font-size: 0.9em;
   margin-top: 3px;
 }
+/* 页头联系方式按「行内、满了才换行」排：原件是「性别 年龄 籍贯」一行、
+   「电话 邮箱」一行，而我们之前每个字段独占一行 —— 五个字段白占三行。
+   inline-block + 间距让它自己折行，任何字段数量都不会溢出。 */
+.doc .head.aside .meta {
+  display: inline-block;
+  margin: 3px 12px 0 0;
+}
 .doc .head .photo {
   flex: none;
   width: 62px;
