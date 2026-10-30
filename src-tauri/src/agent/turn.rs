@@ -204,6 +204,7 @@ fn describe(name: &str, args: &Value) -> String {
         },
         "extract_images" => "在原件里找内嵌图片".to_string(),
         "read_source" => "读原件正文".to_string(),
+        "render_doc_page" => "渲染原件页图".to_string(),
         "set_target_pages" => match args["pages"].as_u64() {
             Some(pages) => format!("把目标定成 {pages} 页"),
             _ => "清掉目标页数".to_string(),

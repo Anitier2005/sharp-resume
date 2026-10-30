@@ -15,6 +15,7 @@ pub mod image;
 pub mod layout;
 pub mod page;
 pub mod read;
+pub mod render;
 pub mod source;
 pub mod target;
 pub mod view;
@@ -621,6 +622,18 @@ pub const TOOLS: &[Tool] = &[
         writes: false,
     },
     Tool {
+        name: "render_doc_page",
+        description: "把原件（PDF）的某一页渲成图片，只渲你要的那一页 —— 一次一页，清晰度可调。\
+                      材料段只给摘要和【原件结构】，没给页图：想确认版式、照片位置、表格怎么摆时，\
+                      自己按页码要一张，别凭描述猜。.docx / .txt 没有页图，要看内容用 read_source。",
+        params: render::params,
+        run: render::run,
+        // 排版侧也要能看原件：它的活儿就是把刊物级别的东西排到纸上，
+        // 「原件那一页到底长什么样」是它唯一可核对的参照。只给会话就等于让它瞎子排版。
+        scopes: EVERYONE,
+        writes: false,
+    },
+    Tool {
         name: "read_source",
         description: "读用户上传的原件正文（PDF / 文本）。材料段里写了「要全文调 read_source」时先读它再动手，\
                       不要凭 120 字摘要写简历 —— 摘要只够认出这是谁，不够写经历。\
@@ -791,8 +804,8 @@ mod tests {
 
         // 工具数就是能力边界的快照：少一个说明注册时漏了，多一个说明有人偷偷
         // 给某个角色开了口子，两者都该在这里被看见
-        assert_eq!(session.len(), 41, "会话 agent 的工具数变了：{session:?}");
-        assert_eq!(layout.len(), 10, "排版 agent 的工具数变了：{layout:?}");
+        assert_eq!(session.len(), 42, "会话 agent 的工具数变了：{session:?}");
+        assert_eq!(layout.len(), 11, "排版 agent 的工具数变了：{layout:?}");
 
         // 会话 agent：能读、能转交、能转图，但不能自己动版面
         assert!(session.contains(&"request_layout"));
@@ -817,6 +830,10 @@ mod tests {
         // 原件正文是事实，两边都能读：排版也要能核对「原件上到底怎么写的」
         assert!(session.contains(&"read_source"));
         assert!(layout.contains(&"read_source"));
+        // 页图是按需要的：材料管线不再默认塞图，想看哪一页就自己渲哪一页。
+        // 两边都要 —— 会话要核对「原件第 2 页那张照片多大」，排版要看原件版式
+        assert!(session.contains(&"render_doc_page"));
+        assert!(layout.contains(&"render_doc_page"));
         assert!(!session.contains(&"set_page_layout"));
         assert!(!session.contains(&"read_layout_guide"));
 
@@ -842,6 +859,7 @@ mod tests {
         assert!(readers.contains(&"search_knowledge"), "查知识库不改任何状态");
         assert!(readers.contains(&"search_history"), "翻历史不改任何状态");
         assert!(readers.contains(&"read_source"), "读原件正文不改任何状态");
+        assert!(readers.contains(&"render_doc_page"), "渲染页图只往本轮消息里贴图，不落盘");
         assert!(!readers.contains(&"set_page_layout"));
         assert!(!readers.contains(&"convert_image"));
         assert!(!readers.contains(&"extract_images"), "抽图会写池与材料");
