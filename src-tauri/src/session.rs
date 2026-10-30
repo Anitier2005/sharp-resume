@@ -595,28 +595,10 @@ pub async fn chat_send(
     }
 
     // 这一轮实际发出去的 system 落一份：终止判定出错时，第一件要查的就是
-    // 「模型当时到底看见了什么」。放 logs/ 而不是 pool/ —— 后者是用户材料，
-    // 混进去会被当成资产扫出来。写不进去就算了，观测不能影响主流程。
-    // 路径留着：这一轮跑完还要在上面补一行「思考了多少字」——
-    // 那条只能在请求结束后才知道，而这个文件必须在请求前就落地
-    let mut context_log: Option<std::path::PathBuf> = None;
-    if let Some(dir) = root.as_ref() {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        // personId 进文件名前先收窄字符集：它是外部传进来的，不该能拼出 `..`
-        let person: String = args
-            .key
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-            .collect();
-        let dir = dir.join("logs").join("context");
-        let path = dir.join(format!("{stamp}-{person}.md"));
-        if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&path, &system).is_ok() {
-            context_log = Some(path);
-        }
-    }
+    // 「模型当时到底看见了什么」。路径留着，这一轮跑完还要在上面补一行思考字数。
+    let context_log = root
+        .as_ref()
+        .and_then(|dir| write_context_log(dir, &args.key, &system));
 
     let mut messages = vec![ChatMessage::system(system)];
     for message in &history {
@@ -731,6 +713,31 @@ pub async fn chat_send(
     }
 }
 
+/// 把这一轮实际发给模型的 system 落到 `<数据目录>/logs/context/{unix秒}-{personId}.md`。
+///
+/// 放 `logs/` 而不是 `pool/`：后者是用户材料，混进去会被当成资产扫出来。
+/// 任何一步失败都返回 `None` —— 观测不能反过来把这一轮搞失败。
+fn write_context_log(
+    root: &std::path::Path,
+    person_id: &str,
+    system: &str,
+) -> Option<std::path::PathBuf> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // personId 是外部传进来的，进文件名前先收窄字符集：它不该能拼出 `..` 或子目录
+    let person: String = person_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let dir = root.join("logs").join("context");
+    let path = dir.join(format!("{stamp}-{person}.md"));
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::write(&path, system).ok()?;
+    Some(path)
+}
+
 /// 极简 id：时间戳 + 计数，够用且不引 uuid 依赖
 pub(crate) fn uuid_like() -> String {
     use std::sync::atomic::AtomicU64;
@@ -750,6 +757,35 @@ pub(crate) fn chrono_like() -> u128 {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// 请求日志的落点必须真的存在：这个文件是白卷现场唯一的证据，
+    /// 「以为写了其实没写」比不写更糟。用临时目录跑一遍真写盘。
+    #[test]
+    fn the_system_prompt_really_lands_in_logs_context() {
+        let root = std::env::temp_dir().join(format!("sharp-ctx-{}", uuid_like()));
+        // 外部传进来的 id 带路径分隔和 `..`，必须被拍平成一个文件名
+        let path = write_context_log(&root, "p1/../x", "【定位】第 1 页\n正文到这里").expect("要真的写出来");
+
+        let dir = root.join("logs").join("context");
+        assert_eq!(path.parent(), Some(dir.as_path()), "{}", path.display());
+        // 文件名是「unix 秒-personId.md」，`/` 与 `..` 都被拍成 `_`
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap();
+        assert!(name.ends_with("-p1____x.md"), "{name}");
+        assert!(
+            name.trim_end_matches("-p1____x.md").chars().all(|c| c.is_ascii_digit()),
+            "前缀必须是 unix 秒：{name}"
+        );
+
+        let text = std::fs::read_to_string(&path).expect("内容要读得回来");
+        assert!(text.starts_with("【定位】第 1 页"), "{text}");
+        assert!(text.contains("正文到这里"), "{text}");
+        println!("context log = {}", path.display());
+
+        // SHARP_KEEP_CTX_LOG=1 时留着现场，方便人肉看一眼真文件长什么样
+        if std::env::var("SHARP_KEEP_CTX_LOG").is_err() {
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
 
     #[test]
     fn send_args_carries_measure_and_the_result_hands_origin_back() {
