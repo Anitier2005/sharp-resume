@@ -245,6 +245,7 @@ pub fn list_pages(_args: &Value, ctx: &ToolCtx) -> Result<String, String> {
             text_of(page, "id")
         ));
     }
+    out.push_str(&pending_note(ctx));
     Ok(out.trim_end().to_string())
 }
 
@@ -392,6 +393,7 @@ pub fn read_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
         "\n（块 id 是改内容与版面的凭据：加条目用 add_entry 传所在分区块的 id，\
          改版面用 set_page_layout 的 parts）",
     );
+    out.push_str(&pending_note(ctx));
     Ok(out.trim_end().to_string())
 }
 
@@ -409,6 +411,27 @@ fn header_hint(page: &Value) -> String {
 }
 
 /// 纸面上的批注：排版 agent 留的话就靠这一段传给会话 agent。
+
+/// 本轮暂存还没落库的改动。
+///
+/// `read_page` / `read_person` 读的是**轮次开始时的快照** —— 同一轮里多次改同一个容器
+/// 必须在暂存区合并，否则后一次会冲掉前一次。代价是「写完立刻回头读」读到的是旧状态：
+/// 不写这一句，模型会以为写入失败，然后重复写一遍（真机上就这么发生过）。
+fn pending_note(ctx: &ToolCtx) -> String {
+    let count = ctx
+        .out
+        .edits
+        .lock()
+        .map(|state| state.pending_count())
+        .unwrap_or(0);
+    if count == 0 {
+        return String::new();
+    }
+    format!(
+        "\n\n（本轮还有 {count} 项改动暂存在内存里、**尚未落库**。上面读到的是这一轮刚开始时的状态，不含它们；它们在回合结束时一次性生效。不要因为读不到就重复写。）"
+    )
+}
+
 /// 编号从 1 起 —— 模型引用「第 2 条批注」时两边指数要一致。
 fn notes_state(page: &Value) -> String {
     let notes = items_of(&page["notes"]);

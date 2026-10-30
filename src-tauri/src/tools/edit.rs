@@ -315,6 +315,15 @@ pub struct EditState {
 
 impl EditState {
     /// 轮末把改动结算成一条 `mutate` 信封；没有改动返回 None。
+    /// 本轮已暂存、尚未落库的改动条数。
+    ///
+    /// 存在的理由：`read_page` / `read_person` 读的是**轮次开始时的快照**（同一轮里
+    /// 多次改同一容器必须在暂存区合并，否则后一次会冲掉前一次）。模型写完立刻回头读，
+    /// 读到的是旧状态 —— 不说清楚，它会以为写入失败了，然后重复写一遍。
+    pub fn pending_count(&self) -> usize {
+        self.order.len()
+    }
+
     pub fn flush(&mut self) -> Option<Value> {
         if self.order.is_empty() {
             return None;
@@ -1388,10 +1397,13 @@ fn core_add_field(st: &mut EditState, args: &Value, ctx: &ToolCtx) -> Result<Str
         .map(str::to_string);
 
     let owner = find_owner_by_id(ctx, &owner_id)?;
+    // id 必须先算出来再进字段：模型紧接着就要用它（比如把照片写进这个图片字段），
+    // 而 read_page 这一轮读不到暂存区 —— 只回一句「已加字段」等于让它瞎猜
+    let field_id = uid("f");
     let len = {
         let fields = fields_mut(st, ctx, &owner)?;
         let mut field = Map::new();
-        field.insert("id".into(), json!(uid("f")));
+        field.insert("id".into(), json!(field_id.clone()));
         field.insert("label".into(), json!(label));
         field.insert("value".into(), json!(value));
         if !asset.is_empty() {
@@ -1418,7 +1430,7 @@ fn core_add_field(st: &mut EditState, args: &Value, ctx: &ToolCtx) -> Result<Str
     };
     mark_owner(st, ctx, &owner);
     let mut out = format!(
-        "已加字段「{label}」（位置：{}，该处现有 {len} 项）",
+        "已加字段「{label}」（id: {field_id}；位置：{}，该处现有 {len} 项）",
         owner.label()
     );
     if !library_note(&owner).is_empty() {

@@ -125,6 +125,11 @@ export async function paginate(
     // 不挡一下，慢的那一轮会把新页的纸盖成旧页的。
     if (cancelled?.()) return;
 
+    // 末尾的空纸要清掉：Paged.js 在「内容刚好填满内容区」时会因为最后一块的
+    // 1px margin 多切一张 —— 那只是分页器的边界产物，不是第二页。
+    // 判据用**文字量**而不是高度：真正的下一页一定有字。
+    pruneTrailingBlanks(stage.querySelector(".pagedjs_pages"));
+
     const pages = stage.querySelector(".pagedjs_pages");
     target.replaceChildren();
     // 搬一整个 `.pagedjs_pages`：纸的尺寸全是 mm / px 绝对值，
@@ -134,4 +139,24 @@ export async function paginate(
     stage.remove();
     for (const el of stale) el.remove();
   }
+}
+
+/**
+ * 丢掉末尾连着的空白纸（保留至少一张）。
+ *
+ * 为什么必须有这一步：实测第 1 张纸的内容高度 1002px，而内容区正好 265mm = 1001.6px，
+ * 最后一块的下边距把分页器推过边界，于是"切出"一张 0 字的纸。用户看到的是
+ * 「共 2 张纸」但第二张全白 —— 比不显示分页更糟，因为它在报告一个不存在的事实。
+ */
+function pruneTrailingBlanks(box: Element | null): number {
+  if (!box) return 0;
+  let removed = 0;
+  const pages = [...box.querySelectorAll(".pagedjs_page")];
+  for (let i = pages.length - 1; i >= 1; i -= 1) {
+    const text = (pages[i].textContent || "").replace(/\s+/g, "");
+    if (text.length > 0) break;
+    pages[i].remove();
+    removed += 1;
+  }
+  return removed;
 }

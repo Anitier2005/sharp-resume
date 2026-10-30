@@ -438,9 +438,6 @@ pub struct SendArgs {
     pub key: String,
     /// 材料部分（由前端按当前页组装），模板由 Rust 拼
     pub context: String,
-    /// 技能库附加段（`prompts/skills/*.md`，构建时由前端 glob 进来）
-    #[serde(default)]
-    pub extra: String,
     pub base_url: String,
     pub api_key: String,
     pub model: String,
@@ -583,10 +580,6 @@ pub async fn chat_send(
         &facts,
         &capability,
     ));
-    if !args.extra.trim().is_empty() {
-        system.push_str("\n\n");
-        system.push_str(args.extra.trim());
-    }
     let window = args.context_window.unwrap_or(64_000);
     // 窗口 = 配置里的上下文；先扣 system 与「压缩提示词预留」，剩下的才是历史的
     let reserved = estimate_tokens(&system) + args.reserve.unwrap_or(DEFAULT_RESERVE);

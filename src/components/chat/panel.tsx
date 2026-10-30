@@ -10,7 +10,6 @@ import { attachRefs, stripPreview, toAttachment } from "@/lib/attach";
 import { attachAtEnd } from "@/lib/inline-tokens";
 import { diff, flatten, renderDelta, type Flat } from "@/lib/changes";
 import { entriesOf } from "@/lib/blocks";
-import { skillsPrompt } from "@/lib/skills";
 import { AiSettingsSheet } from "./ai-settings";
 import { AssistantTurn, EmptyTurn, SystemTurn, TypingTurn, UserTurn } from "./message";
 import { aiReady, loadAi, loadAux, saveAi, slotAi, type AiSettings } from "@/lib/ai";
@@ -426,7 +425,6 @@ export function ChatPanel() {
               attachments: attachRefs(attachments),
               // 设置里配的 OCR 接口；没配就只有内置 OCR（lite 构建等于没有）
               ocr: ocrConf(ai),
-              extra: skillsPrompt(),
               baseUrl: ai.baseUrl,
               apiKey: ai.apiKey,
               model: ai.model,
