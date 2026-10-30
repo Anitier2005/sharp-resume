@@ -30,14 +30,24 @@
     height: auto;
   }
 
+  /* 这里的每一条都必须 !important。
+     组件样式全是 CSS Modules，与本节的选择器**同优先级**（0,1,0），此时「谁写在后面谁赢」——
+     而 print.css 由 styles/index.css 先引入，组件样式后到，于是 `.canvas { padding: 20px }`
+     会留在纸上：一张 297mm 的纸只剩 1122.5px 的内容区，20+1123+20 = 1163px，
+     一页内容被顶成两页，第二页几乎空白（PDF 里 MediaBox 还是 A4，看不出问题在哪儿）。
+     id / 类 / 属性三种选择器混着用也不可靠，打印覆盖只有 !important 是稳的。 */
   [data-print="flow"] {
-    display: block;
-    padding: 0;
-    border: 0;
-    background: none;
-    overflow: visible;
+    display: block !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: none !important;
+    overflow: visible !important;
   }
 
+  /* 下面两条不加 !important，是有意的：
+     它们只在「没有 Paged.js」的回退档里起作用，而回退档的纸面宽度必须留在 210mm
+     （`--paper-w`），否则内容会按 178mm 重排，分页跟着变。真要改回退档，
+     先在没有 Paged.js 的环境里量一遍再动。 */
   [data-print="page"] {
     width: auto;
     max-width: none;

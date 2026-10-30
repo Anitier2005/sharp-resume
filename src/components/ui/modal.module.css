@@ -43,7 +43,9 @@
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 24px 12px 6px 22px;
+  /* 下沿留 14px：确认框里标题与「待删列表」之间只有这一档留白 + body 的 10px，
+     早先 6px 让标题几乎贴着正文，读起来像一行被折断的长句 */
+  padding: 24px 12px 14px 22px;
   /* 不画分隔线：标题、正文、按钮区是同一张纸上的三层，一条线就把纸切成了条块。
      需要区分层级时靠字号与留白，不靠框线 */
   border-bottom: 0;
@@ -64,7 +66,7 @@
 .body {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 8px 22px 24px;
+  padding: 10px 22px 24px;
   overflow: auto;
   font-size: 0.71875rem;
   line-height: 1.75;
@@ -79,6 +81,12 @@
    统一模板，调用方不必再选。 */
 .foot {
   flex: none;
+  /* 按钮必须落在卡片右下角，而不是紧跟着上一个元素。
+     卡片有 min-height（176px），但「标题 + 两个按钮」撑不到那么高 ——
+     中间没有可伸缩的 body 时（确认框大多不给 items），flex 列会把 foot 顶在
+     标题下面，下面空一大截，看着像按钮掉在半空中。
+     auto 上边距吃掉全部剩余空间，无论有没有 body 都把它压到底。 */
+  margin-top: auto;
   display: flex;
   align-items: center;
   justify-content: flex-end;

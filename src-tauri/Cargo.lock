@@ -3368,6 +3368,7 @@ dependencies = [
  "tauri-plugin-fs",
  "tokio",
  "unicode-normalization",
+ "webview2-com",
  "windows",
  "winreg 0.55.0",
 ]

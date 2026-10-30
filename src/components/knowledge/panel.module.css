@@ -311,9 +311,43 @@
   white-space: nowrap;
 }
 
-/* 隐藏的文件选择框：只作为 importRef 的目标存在 */
-.hidden {
-  display: none;
+/* ---------- 拖放导入 ---------- */
+
+/* 面板本体就是落点。position: relative 只为了给覆盖层一个坐标系；
+   flex 一列是为了让 Columns 照旧 flex:1 铺满（它原来是 body 的直接子元素） */
+.dropHost {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 「可以松手了」。整块铺满而不是只在列表上画一圈：拖动时用户的眼睛在光标处，
+   光标压在哪一列都应该看到同一个信号。虚线 + 浅色蒙版，不遮住底下的内容 */
+.dropVeil {
+  position: absolute;
+  inset: 6px;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  border: 1px dashed var(--acc);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elev) 84%, transparent);
+  font-size: 0.71875rem;
+  color: var(--acc-text);
+  text-align: center;
+  /* 不接事件：覆盖层一旦吃掉 dragover，drop 就不再落到下面的列上 */
+  pointer-events: none;
+}
+
+/* 导入进度只用文字，不再占一个按钮位 */
+.importBadge {
+  flex: none;
+  font-size: 0.5625rem;
+  color: var(--fg-4);
+  white-space: nowrap;
 }
 
 /* ---------- 图片块 ---------- */

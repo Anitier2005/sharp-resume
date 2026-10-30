@@ -21,13 +21,14 @@ import {
   printPage,
   resumeToMarkdown,
   saveBytes,
+  savePdf,
   saveText,
 } from "@/lib/export";
 import { pageToDocx } from "@/lib/docx";
 import { saveAsset } from "@/lib/assets";
 import { nextPageLabel } from "@/lib/pages";
 import { TOLERANCE_MAX } from "@/lib/measure";
-import { A4_H, A4_W, A4_W_PX } from "@/lib/paper-size";
+import { A4_H, A4_W, A4_W_PX, PAGE_MARGIN_MM } from "@/lib/paper-size";
 import { paginate, resetPagination } from "@/lib/paginate";
 import { displayName, type ResumePage } from "@/types";
 import { Paper } from "./paper";
@@ -658,15 +659,21 @@ export function ResumePanel() {
     );
   }
 
-  /** 打印前先切预览：保证打出来的就是屏幕上这份 DOM */
-  const handlePrint = () => {
+  /**
+   * 「打出来的那一份」必须与屏幕上那一份是同一个 DOM。
+   * 编辑态下纸面是表单，导出前先切预览、等两帧（样式与分页都落定）再动手。
+   */
+  const whenPreview = (run: () => void) => {
     if (preview) {
-      printPage();
+      run();
       return;
     }
     setMode("preview");
-    requestAnimationFrame(() => requestAnimationFrame(printPage));
+    requestAnimationFrame(() => requestAnimationFrame(run));
   };
+
+  /** 打印前先切预览：保证打出来的就是屏幕上这份 DOM */
+  const handlePrint = () => whenPreview(printPage);
 
   const base = { personId: person.id, resumeId: resume.id, pageId: page.id };
 
@@ -679,6 +686,21 @@ export function ResumePanel() {
       "Word 文档",
       ["docx"],
     ).then((path) => path && toast("已导出 Word"));
+  };
+  /**
+   * 导出 PDF。边距按「纸面归谁管」分两档：
+   * 分页后的真 A4 已经把页边距画在纸里，再给一次就是双重边距（内容整体缩小一圈）；
+   * 单张预览没有印在纸上的边距，那一份必须由打印参数补上。
+   */
+  const exportPdf = (target: ResumePage) => {
+    whenPreview(() => {
+      void savePdf(
+        `${displayName(person.fields)}-${target.label || "未命名页"}.pdf`,
+        paged ? 0 : PAGE_MARGIN_MM,
+      )
+        .then((path) => path && toast("已导出 PDF"))
+        .catch((error) => toast(`导出 PDF 失败：${String(error)}`));
+    });
   };
   const exportMd = (target: ResumePage) => {
     void saveText(`${displayName(person.fields)}-${target.label || "未命名页"}.md`, pageToMarkdown(person, target)).then(
@@ -986,7 +1008,12 @@ export function ResumePanel() {
             </button>
           }
         >
-          <MenuItem label="打印 / 存为 PDF" hint="当前页" onSelect={() => gatePage(handlePrint)} />
+          <MenuItem
+            label="PDF · 当前页"
+            hint=".pdf"
+            onSelect={() => gatePage(() => exportPdf(page))}
+          />
+          <MenuItem label="打印…" hint="系统对话框" onSelect={() => gatePage(handlePrint)} />
           <MenuSep />
           <MenuItem
             label="Word · 当前页"

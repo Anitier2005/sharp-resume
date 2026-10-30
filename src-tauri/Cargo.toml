@@ -103,6 +103,11 @@ unicode-normalization = "0.1"
 # 读取 Windows「辅助功能 → 文本大小」的实际缩放值，供 UI 字号跟随。
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# 导出 PDF：WebView2 自己的 PrintToPdf 才是「屏幕上是这份，打出来就是这份」的唯一路径。
+# 版本必须与 wry 依赖的那一份一致（见 Cargo.lock：0.39.1），否则
+# ICoreWebView2Controller 会变成两个不同的类型，from PlatformWebview 直接编译不过；
+# 一致时也不新增编译单元 —— 它本来就在树里。windows 0.62 同理（与下面的 windows 同版本）。
+webview2-com = "0.39"
 # Windows.Data.Pdf：把 PDF 页面渲染成图片（视觉模型看图用）。
 # 为什么用系统自带而不是 pdfium / mupdf：那两个要额外带 10MB+ 二进制或 cmake 整包编译，
 # 而 Win10+ 本来就有 PDF 渲染器 —— 这是我们唯一不增体积的选择。

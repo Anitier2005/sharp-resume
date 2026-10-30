@@ -34,3 +34,8 @@ src-tauri/gen/schemas
 # testdata/ 其余内容（ai.json、mock/）正常提交，只有 secrets 被排除
 testdata/secrets/*
 !testdata/secrets/README.md
+
+# 临时脚本与探针产物（CDP 客户端、导出的样张 PDF）
+.tmp/
+# 本地工作记录（不属于产品代码）
+.workbuddy/

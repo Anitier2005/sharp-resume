@@ -20,6 +20,7 @@ mod snapshot;
 mod source;
 mod storage;
 mod tools;
+mod topdf;
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -688,6 +689,7 @@ pub fn run() {
             assets::asset_drop,
             snapshot::plan_export,
             export::export_resume,
+            topdf::export_pdf,
             pool::pool_put,
             pool::pool_get,
             pool::pool_list,

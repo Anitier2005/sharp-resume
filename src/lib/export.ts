@@ -68,6 +68,30 @@ export function printPage(): void {
   window.print();
 }
 
+/**
+ * 把当前预览导出成 PDF 文件。
+ *
+ * 与 `printPage` 的区别不是「多一步」而是「谁是权威」：
+ *   - `printPage` 把选择权交给系统打印对话框 —— 用户可能是去打纸，也可能是去存 PDF，
+ *     应用这边两条都不知道结果；
+ *   - 这里是「点一下 → 得到一个文件」，走 WebView2 的打印管线（`PrintToPdf`），
+ *     排版引擎与屏幕上那页完全同一个，所以成品就是所见的那一份。
+ *
+ * `marginMm` 由调用方给，因为纸面有两种：分页后的真 A4 自带 16mm 边距（这时传 0），
+ * 单张预览靠 `@page { margin: 16mm }`（这时传 16）。
+ * 传 0 表示「不要第二层边距」，不表示「不知道」。
+ */
+export async function savePdf(defaultName: string, marginMm: number): Promise<string | null> {
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const path = await save({
+    defaultPath: defaultName,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!path) return null;
+  await invoke("export_pdf", { input: { path, marginMm } });
+  return path;
+}
+
 export const personTitle = (person: Person) => displayName(person.fields);
 
 /* ---------- 整份导出成一个文件夹 ---------- */

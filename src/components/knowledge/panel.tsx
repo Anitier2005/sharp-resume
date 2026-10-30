@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { BookOpen, Pencil, Search, Sparkles, Trash, Upload } from "@/components/ui/icons";
+import { BookOpen, Pencil, Search, Sparkles, Trash } from "@/components/ui/icons";
 import { Confirm } from "@/components/ui/confirm";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast-context";
@@ -127,6 +127,16 @@ function deriveTitle(text: string): string {
   return first.length > 40 ? `${first.slice(0, 40)}…` : first;
 }
 
+/**
+ * 这次拖的是文件吗。
+ *
+ * 必须判：拖选中的文字进面板时也会触发 dragenter/dragover，若一律当成导入，
+ * 松手就会对着一个空 FileList 报「没有导入成功」。
+ */
+function carriesFiles(event: ReactDragEvent): boolean {
+  return Array.from(event.dataTransfer.types).includes("Files");
+}
+
 /** 列表里那一行叫什么：有标题用标题，没有就取正文开头 */
 function chunkTitle(chunk: KnowledgeChunkItem): string {
   if (chunk.kind === "image") return chunk.assetName || "图片";
@@ -175,10 +185,19 @@ export function KnowledgePanel({
   const [busy, setBusy] = useState(false);
   /** 正在生成摘要的条目 id（空 = 没在跑） */
   const [enriching, setEnriching] = useState("");
-  /** 导入进度文案：非空时按钮显示它 */
+  /** 导入进度文案：非空时提示条显示它 */
   const [importing, setImporting] = useState("");
-  /** 拖着文件悬在「新增文本」上：只做视觉提示，真正的导入在 onDrop */
-  const [dragOver, setDragOver] = useState(false);
+  /**
+   * 正有文件悬在面板上。
+   *
+   * 拖放是这里唯一的导入入口（面板头不再放按钮），所以「能不能放」必须在拖动
+   * 过程中就看得见 —— 松手才发现没反应，等于没有这个功能。
+   */
+  const [dropping, setDropping] = useState(false);
+  /** dragenter / dragleave 成对出现，但子元素会互相触发；用计数抵消抖动 */
+  const dragDepth = useRef(0);
+  /** 「新增文本」窗里那个拖放区的高亮（它不在面板的 dropHost 里，另算） */
+  const [textDrag, setTextDrag] = useState(false);
   const [vectorizing, setVectorizing] = useState(false);
   /** 图片块缩略图地址（按材料池存储名缓存；null = 读不出来） */
   const [thumbs, setThumbs] = useState<Record<string, string | null>>({});
@@ -188,8 +207,6 @@ export function KnowledgePanel({
   const [redrawing, setRedrawing] = useState("");
   const [widths, setWidths] = useState<[number, number]>(readWidths);
 
-  /** 隐藏的文件选择框：导入按钮只负责触发它 */
-  const importRef = useRef<HTMLInputElement | null>(null);
   /**
    * 从检索结果跳转时要跨库打开一块：切库的那个 effect 会清空选中，
    * 所以先用这个 ref 打一声招呼「下一条别清」。
@@ -597,20 +614,33 @@ export function KnowledgePanel({
   /* 窗内（embedded）只是一个铺满的容器；弹窗模式走统一的 Modal，
      不再自己画遮罩、标题栏和关闭键 —— 那套东西每改一次都要改两处 */
   const content = (
-    <>
-      {/* 隐藏的文件选择框：accept 与后端 ingest_file 支持的格式一一对应 */}
-      <input
-        ref={importRef}
-        type="file"
-        multiple
-        accept=".pdf,.docx,.pptx,.xlsx,.md,.markdown,.txt,.csv,image/*"
-        className={styles.hidden}
-        onChange={(event) => {
-          void importFiles(event.target.files);
-          event.target.value = "";
-        }}
-      />
-
+    /* 拖放挂在整块面板上，不是挂在某一列：用户的动作是「把文件拖进知识库」，
+       不会先判断该落在列表上还是详情上。覆盖层只在拖动过程中出现。 */
+    <div
+      className={styles.dropHost}
+      onDragEnter={(event) => {
+        if (!carriesFiles(event)) return;
+        event.preventDefault();
+        dragDepth.current += 1;
+        setDropping(true);
+      }}
+      onDragOver={(event) => {
+        if (!carriesFiles(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={() => {
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDropping(false);
+      }}
+      onDrop={(event) => {
+        if (!carriesFiles(event)) return;
+        event.preventDefault();
+        dragDepth.current = 0;
+        setDropping(false);
+        void importFiles(event.dataTransfer.files);
+      }}
+    >
       <Columns>
         {/* ---------- 第一列：库 ---------- */}
         <Pane width={widths[0]} bordered>
@@ -703,17 +733,9 @@ export function KnowledgePanel({
                 onChange={(event) => void runSearch(event.target.value)}
               />
             </span>
-            <Tooltip label="导入文件（PDF / Word / PPT / Excel / 文本 / 图片）">
-              <button
-                type="button"
-                className={styles.iconBtn}
-                aria-label="导入文件"
-                disabled={readonly || importing !== ""}
-                onClick={() => importRef.current?.click()}
-              >
-                <Upload size={11} />
-              </button>
-            </Tooltip>
+            {/* 面板头不再放导入按钮：整块面板就是落点。导入进度只在这一行
+                以文字出现（「导入中 2/5」），不需要一个按钮在旁边守着 */}
+            {importing && <span className={styles.importBadge}>导入中 {importing}</span>}
           </PaneHead>
 
           <PaneScroll pad={4}>
@@ -775,7 +797,11 @@ export function KnowledgePanel({
                     />
                   ))}
                   {chunks.length === 0 && (
-                    <ListEmpty>{libId ? "这个库还没有内容" : "先建一个库"}</ListEmpty>
+                    <ListEmpty>
+                      {libId
+                        ? "这个库还没有内容 —— 把 PDF / Word / PPT / Excel / 文本 / 图片 拖进来"
+                        : "先建一个库，再把文件拖进来"}
+                    </ListEmpty>
                   )}
                 </>
               )}
@@ -936,7 +962,17 @@ export function KnowledgePanel({
           )}
         </Pane>
       </Columns>
-    </>
+
+      {/* 覆盖层不接事件（pointer-events: none）：它只是「可以松手了」的信号，
+          接住事件反而会把 drop 从下面的列上抢走 */}
+      {dropping && (
+        <div className={styles.dropVeil}>
+          <span>
+            {readonly ? "预置库只读 —— 先建一个自己的库" : "松手即导入"} · PDF / Word / PPT / Excel / 文本 / 图片
+          </span>
+        </div>
+      )}
+    </div>
   );
 
   const surface = embedded ? (
@@ -968,15 +1004,15 @@ export function KnowledgePanel({
           }
         >
           <div
-            className={cx(styles.dropArea, dragOver && styles.dropActive)}
+            className={cx(styles.dropArea, textDrag && styles.dropActive)}
             onDragOver={(event) => {
               event.preventDefault();
-              setDragOver(true);
+              setTextDrag(true);
             }}
-            onDragLeave={() => setDragOver(false)}
+            onDragLeave={() => setTextDrag(false)}
             onDrop={(event) => {
               event.preventDefault();
-              setDragOver(false);
+              setTextDrag(false);
               const files = event.dataTransfer.files;
               // 拖进来的文件直接走导入流程，不用先点「保存并切块」
               setTextDraft(null);
