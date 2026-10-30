@@ -14,10 +14,9 @@
 //!
 //! 会话 key：`layout:<resumeId>:<pageId>`，与人的会话共用 app.db。
 //!
-//! **它不改内容**。要改字就 `ask_session` 交给会话 agent；拿不准就
-//! `note_on_page` 在纸面上留一句给用户看。这两样都只是普通 action，
-//! 随 `layout:applied` 的 `turn.actions` 一起回传，`drain` 里不用另做处理 ——
-//! 多一条专用通道就多一处会漏掉的分支。
+//! **它不改内容**，也**不能提问**：拿不准就 `note_on_page` 在纸面上留一句给用户看，
+//! 或者按现有内容保守排版。批注只是普通 action，随 `layout:applied` 的
+//! `turn.actions` 一起回传，`drain` 里不用另做处理 —— 多一条专用通道就多一处会漏掉的分支。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -32,7 +31,7 @@ use crate::tools::{Scope, ToolCtx};
 
 /// 与会话 agent 共用一套「每轮注入定位」的做法：页面的形状每轮都可能变。
 ///
-/// 职责边界（只能改版面、不能改内容、一轮最多一条批注一个问题）写在
+/// 职责边界（只能改版面、不能改内容、不能提问、一轮最多两条批注）写在
 /// `prompts/layout.md` 里 —— 提示词归提示词，这里只负责把 `{{page}}` 换成
 /// 这一页的形状。
 const SYSTEM: &str = include_str!("../../../prompts/layout.md");
@@ -476,6 +475,25 @@ fn describe_page(args: &LayoutArgs, facts: &crate::agent::facts::PageFacts) -> S
     if !images.is_empty() {
         out.push_str(&format!("可用图片：{}", images.join("、")));
     }
+
+    // 原件样张：这一页是从原件改编来的，版式唯一的依据是那张页图。
+    //
+    // 只给「有样张」的页加这一段 —— 没有原件时让模型自己判断，不要凭空诱导它
+    // 去找一张不存在的图。样张挂在简历上（不是材料列表里），所以也不会出现在
+    // 上面那行「可用图片」里：它不该被当图片块引用。
+    if let Some(id) = resume
+        .get("originSheet")
+        .and_then(|sheet| sheet.get("id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+    {
+        out.push_str(&format!(
+            "\n## 原件样张\n\
+             这一页的内容来自一份原件，原件长什么样可以自己看：调 view，参数 assetId = {id}。\n\
+             原件是「长什么样」的唯一依据；不要凭审美另起一套。看不清版式就照结构化生成，不要自己发明版式。\n\
+             这张图只是参考：不要把它当页面上的图片块引用。\n"
+        ));
+    }
     out
 }
 
@@ -836,8 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_page_is_reported_not_panicked() {
-        let mut args = sample();
+    fn missing_page_is_reported_not_panicked() {        let mut args = sample();
         args.page_id = "pg-nope".into();
         assert!(describe_page(&args, &no_facts()).contains("找不到这一页"));
     }

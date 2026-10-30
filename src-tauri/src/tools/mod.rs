@@ -51,8 +51,6 @@ pub struct Outbox {
     /// 计数放在出站口而不是 `EditState`：批注不是内容写入，走的是 `actions`；
     /// 而且「每轮清零」这件事 `Outbox` 天生就有（每轮新建一个），不需要重置逻辑。
     pub notes: AtomicUsize,
-    /// 本轮已经向会话 agent 提了几个问题。上限 1：两个 agent 互相追着问会打成乒乓。
-    pub asks: AtomicUsize,
     /// 工具渲染出来、要喂给视觉模型看的图片（data URL）。
     /// 由 `agent::turn` 在工具结果之后作为一条用户消息附上 —— 工具结果本身
     /// 只能是字符串，图片没法塞在里面。
@@ -582,20 +580,9 @@ pub const TOOLS: &[Tool] = &[
         name: "note_on_page",
         description: "在纸面上留一条给**用户**看的批注。拿不准这里该怎么排、或想提醒「这段按现在这样会挤出页」时用它。\
                       产物是一个贴在纸面上的批注点：给了 blockId 就贴那一块，没给就贴页边，用户能点开也能关掉。\
-                      它不是给自己记笔记，用户会直接看到 —— 想改内容请用 ask_session。一轮最多 2 条，说完继续排版。",
+                      它不是给自己记笔记，用户会直接看到；内容你一个字都动不了，觉得该改就在批注里说清。一轮最多 2 条，说完继续排版。",
         params: layout::note_params,
         run: layout::note_on_page,
-        scopes: &[Scope::Layout],
-        writes: true,
-    },
-    Tool {
-        name: "ask_session",
-        description: "向会话 agent 提一个具体问题：这段内容要不要拆成两条、这个措辞能不能改。\
-                      产物是一条发给会话 agent 的消息（带上你指的那一块），它可能自己查库回答，也可能转去问用户。\
-                      要问就问能一句话回答的（「这两段合并成一条行不行」），不要写「请确认」这种没法接的话；\
-                      一轮只能问一次，同一个问题别重复问 —— 你说完继续排版，不要停下来等。",
-        params: layout::ask_session_params,
-        run: layout::ask_session,
         scopes: &[Scope::Layout],
         writes: true,
     },
@@ -720,12 +707,27 @@ pub fn names_for(scope: Scope) -> Vec<&'static str> {
         .collect()
 }
 
+/// 排版侧硬调 `ask_session` 时的拒绝文案。
+///
+/// 必须是「结论 + 替代方案」，不能只是「不能用」：模型拿到一句干巴巴的权限错误
+/// 会换个名字再试，或者干脆停下来等用户 —— 两样都比直接告诉它该怎么办糟。
+pub const LAYOUT_HAS_NO_ASK: &str =
+    "排版 agent 不能提问。要改内容请用 note_on_page 留批注，或者按现有内容保守排版。";
+
 /// 按名字分发。未知工具不 panic —— 模型偶尔会编一个名字，要把错误当结果喂回去，
 /// 让它下一轮自己纠正。
 ///
 /// 越权调用（会话 agent 调 set_page_style）也走这里拒绝：报错文本会变成工具结果，
 /// 模型下一轮就知道该改调 request_layout。
 pub fn call(name: &str, args: &Value, ctx: &ToolCtx, scope: Scope) -> Result<String, String> {
+    // 排版 agent 曾经有一个「问会话 agent」的通道，产物是一条插进会话流的用户可见
+    // 消息 —— 用户那边看到的就是排版语气的问句挂在对话里，很乱。通道已经摘掉：
+    // 工具不在任何 specs 里，历史会话里模型仍可能硬调，所以这里单独兜一句人话，
+    // 不能靠下面的「当前角色不能用」糊过去（那读起来像权限配置错了，不像结论）。
+    if scope == Scope::Layout && name == "ask_session" {
+        return Err(LAYOUT_HAS_NO_ASK.into());
+    }
+
     match TOOLS.iter().find(|tool| tool.name == name && visible(tool, scope)) {
         Some(tool) => (tool.run)(args, ctx),
         None => {
@@ -785,7 +787,7 @@ mod tests {
         // 工具数就是能力边界的快照：少一个说明注册时漏了，多一个说明有人偷偷
         // 给某个角色开了口子，两者都该在这里被看见
         assert_eq!(session.len(), 41, "会话 agent 的工具数变了：{session:?}");
-        assert_eq!(layout.len(), 10, "排版 agent 的工具数变了：{layout:?}");
+        assert_eq!(layout.len(), 9, "排版 agent 的工具数变了：{layout:?}");
 
         // 会话 agent：能读、能转交、能转图，但不能自己动版面
         assert!(session.contains(&"request_layout"));
@@ -818,6 +820,9 @@ mod tests {
         assert!(layout.contains(&"convert_image"));
         assert!(!layout.contains(&"open_page"));
         assert!(!layout.contains(&"ask_user"));
+        // 提问通道已经摘掉：排版 agent 既问不到会话 agent，也问不到用户
+        assert!(!layout.contains(&"ask_session"));
+        assert!(!session.contains(&"ask_session"));
 
         // 写操作必须标出来：审查时靠它快速看出哪些会改数据
         let readers: Vec<&str> = TOOLS
@@ -869,16 +874,70 @@ mod tests {
         );
     }
 
-    /// 排版 agent 只能改版面：批注与提问是它的出口，内容工具一个都不给。
+    /// 排版 agent 只能改版面：批注是它唯一的对外出口，内容工具一个都不给。
     #[test]
     fn layout_tools_do_not_write_content() {
         let names = names_for(Scope::Layout);
-        for name in ["note_on_page", "ask_session", "set_page_layout"] {
+        for name in ["note_on_page", "set_page_layout"] {
             assert!(names.contains(&name), "排版 agent 少了 {name}：{names:?}");
         }
         for name in ["set_field", "delete_page", "apply_patch", "open_person"] {
             assert!(!names.contains(&name), "排版 agent 不该有 {name}");
         }
+    }
+
+    /// 排版 agent 没有提问通道：specs 里不出现，硬调也只拿到一句「不能提问」。
+    ///
+    /// 这条通道当年的产物是一条插进会话流的用户可见消息 —— 用户在对话里看到
+    /// 一段排版语气的问句，还得由会话 agent 长篇回答，噪音全落在会话上。
+    #[test]
+    fn layout_agent_has_no_ask_channel() {
+        let ws = sample_ws();
+        let out = Outbox::default();
+        let ctx = ctx_of(&ws, &out);
+
+        let specs = specs(Scope::Layout);
+        let spec_names: Vec<&str> = specs
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|item| item["function"]["name"].as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            !spec_names.contains(&"ask_session"),
+            "排版 agent 的 specs 里还有 ask_session：{spec_names:?}"
+        );
+        assert!(spec_names.contains(&"note_on_page"), "{spec_names:?}");
+
+        let err = call(
+            "ask_session",
+            &json!({ "question": "这段实习要不要和上一段合并成一条" }),
+            &ctx,
+            Scope::Layout,
+        )
+        .unwrap_err();
+        assert_eq!(err, LAYOUT_HAS_NO_ASK);
+        assert!(err.contains("不能提问"), "{err}");
+        assert!(err.contains("note_on_page"), "拒绝要给出替代方案：{err}");
+        assert!(
+            out.actions.lock().unwrap().is_empty(),
+            "被拒的提问不能留下指令 —— 否则前端依旧会往会话流里插一条"
+        );
+
+        // 替代方案本身必须仍然可用：批注只是贴在纸面上，不进会话流
+        let ok = call(
+            "note_on_page",
+            &json!({ "text": "这一栏压成一行后字号会掉到 8px" }),
+            &ctx,
+            Scope::Layout,
+        )
+        .unwrap();
+        assert!(ok.contains("批注已贴"), "{ok}");
+        let actions = out.actions.lock().unwrap().clone();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0]["type"], json!("pageNote"));
     }
 
     #[test]
@@ -1135,9 +1194,9 @@ mod tests {
         assert_eq!(out.actions.lock().unwrap().len(), before, "原地切换不该再发指令");
     }
 
-    /// 批注与提问的产物形状：id 与时间戳必须在 Rust 生成，前端要做去重。
+    /// 批注的产物形状：id 与时间戳必须在 Rust 生成，前端要做去重。
     #[test]
-    fn note_and_question_carry_their_own_ids() {
+    fn note_carries_its_own_id() {
         let ws = sample_ws();
         let out = Outbox::default();
         let ctx = ctx_of(&ws, &out);
@@ -1150,13 +1209,6 @@ mod tests {
         )
         .unwrap();
         call("note_on_page", &json!({ "text": "整页留白偏多" }), &ctx, Scope::Layout).unwrap();
-        call(
-            "ask_session",
-            &json!({ "question": "这段实习要不要和上一段合并成一条", "blockId": "b2" }),
-            &ctx,
-            Scope::Layout,
-        )
-        .unwrap();
 
         let actions = out.actions.lock().unwrap().clone();
         assert_eq!(actions[0]["type"], json!("pageNote"));
@@ -1169,20 +1221,14 @@ mod tests {
 
         // 整页批注不该带 blockId 这个键
         assert!(actions[1]["note"].get("blockId").is_none(), "{:?}", actions[1]);
-
-        assert_eq!(actions[2]["type"], json!("askSession"));
-        assert_eq!(actions[2]["pageId"], json!("pg1"));
-        assert_eq!(actions[2]["question"], json!("这段实习要不要和上一段合并成一条"));
-        // 会话 agent 靠 blockId 定位问的是哪一段，没有它就得把整页再读一遍
-        assert_eq!(actions[2]["blockId"], json!("b2"));
     }
 
-    /// 批注 2 条、提问 1 次是硬限，第 3 条必须报错。
+    /// 批注 2 条是硬限，第 3 条必须报错。
     ///
     /// 静默丢会让模型以为话已经说出去了，总结里还会说「我已经在纸面上标注了」——
     /// 用户那边什么都没有，而且不会再被提醒。
     #[test]
-    fn notes_and_questions_are_hard_limited_per_turn() {
+    fn notes_are_hard_limited_per_turn() {
         let ws = sample_ws();
         let out = Outbox::default();
         let ctx = ctx_of(&ws, &out);
@@ -1194,21 +1240,15 @@ mod tests {
         assert!(err.contains("2 条"), "要说清上限是几条：{err}");
         assert_eq!(out.actions.lock().unwrap().len(), 2, "被拒的那条不能留下指令");
 
-        call("ask_session", &json!({ "question": "第一问" }), &ctx, Scope::Layout).unwrap();
-        let err = call("ask_session", &json!({ "question": "第二问" }), &ctx, Scope::Layout)
-            .unwrap_err();
-        assert!(err.contains("1 条"), "{err}");
-        assert_eq!(out.actions.lock().unwrap().len(), 3);
-
         // 名额记在出站口上：换一个 Outbox 就是新的一轮，不需要额外重置
         let fresh = Outbox::default();
         let next = ctx_of(&ws, &fresh);
         call("note_on_page", &json!({ "text": "新一轮的批注" }), &next, Scope::Layout).unwrap();
-        call("ask_session", &json!({ "question": "新一轮的问题" }), &next, Scope::Layout).unwrap();
+        assert_eq!(fresh.actions.lock().unwrap().len(), 1);
     }
 
     #[test]
-    fn note_and_question_reject_bad_input_without_side_effects() {
+    fn note_rejects_bad_input_without_side_effects() {
         let ws = sample_ws();
         let out = Outbox::default();
         let ctx = ctx_of(&ws, &out);
@@ -1228,10 +1268,6 @@ mod tests {
         assert!(call("note_on_page", &json!({}), &ctx, Scope::Layout)
             .unwrap_err()
             .contains("不能为空"));
-
-        let err = call("ask_session", &json!({ "question": "x".repeat(301) }), &ctx, Scope::Layout)
-            .unwrap_err();
-        assert!(err.contains("上限"), "{err}");
 
         // 会话 agent 不能留批注，排版 agent 不能改内容：两个方向都要拦住
         assert!(call("note_on_page", &json!({ "text": "x" }), &ctx, Scope::Session)

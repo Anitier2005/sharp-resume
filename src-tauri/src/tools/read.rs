@@ -706,7 +706,7 @@ mod tests {
         assert!(text.contains("· role kv"), "{text}");
     }
 
-    /// 排版 agent 的批注要能被会话 agent 读到，否则 ask_session 之外没有通道
+    /// 排版 agent 的批注要能被会话 agent 读到 —— 它不能提问，批注是它唯一的出口
     #[test]
     fn read_page_appends_layout_notes() {
         let ws = json!({

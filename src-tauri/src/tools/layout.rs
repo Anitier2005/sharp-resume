@@ -4,10 +4,11 @@
 //!   `request_layout` —— **会话 agent** 用。它不排版，只把意图转给该页的排版 agent。
 //!   `set_page_layout` —— **排版 agent** 用。它拥有这一页版面的全部决定权。
 //!
-//! 另有两条「说不了就传出去」的通道，都只在排版侧：
-//!   `note_on_page` —— 把一句话贴在纸面上给用户看（不进导出）。
-//!   `ask_session`  —— 内容层面的疑问转给会话 agent，它来决定改不改。
-//! 排版 agent 不能写内容，这两条就是它唯一的出口。
+//! 另有唯一一条「说不了就传出去」的通道，只在排版侧：
+//!   `note_on_page` —— 把一句话贴在纸面上给用户看（不进导出、不进会话流）。
+//! 排版 agent 不能写内容，也不能提问 —— 批注就是它唯一的出口。曾经的
+//! `ask_session` 会把问题变成一条插进会话流的用户可见消息，用户看到的是排版语气
+//! 的问句挂在对话里，噪音全落在会话上，已整条摘掉。
 //!
 //! 为什么拿掉旧的 `set_page_style`：那是「参数层」——只能从疏密三档、边距倍数、
 //! 对齐两项里挑，本质是替 agent 做了排版决策。现在给它的是成品层：
@@ -563,7 +564,7 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
             let written = normalize_text(&strip_html(html));
             if written != original {
                 return Err(format!(
-                    "整页接管不能改字：这一页原文共 {} 字，你写的是 {} 字。要改内容请调 ask_session。",
+                    "整页接管不能改字：这一页原文共 {} 字，你写的是 {} 字。要改内容请用 note_on_page 留批注。",
                     original.chars().count(),
                     written.chars().count()
                 ));
@@ -624,7 +625,7 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
                 let written = normalize_text(&written_raw);
                 if !text_variants(block).iter().any(|text| text == &written) {
                     return Err(format!(
-                        "第 {} 块「{}」的文字被改动了，排版不许改内容。原文：{}；你写的是：{}。要改内容请调 ask_session。",
+                        "第 {} 块「{}」的文字被改动了，排版不许改内容。原文：{}；你写的是：{}。要改内容请用 note_on_page 留批注。",
                         index + 1,
                         block_label(block),
                         preview(&raw_variants(block).remove(0)),
@@ -667,18 +668,14 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
     Ok(reply)
 }
 
-/* ---------- 排版 agent：留批注 / 向会话 agent 提问 ---------- */
+/* ---------- 排版 agent：留批注 ---------- */
 
 /// 批注的长度上限。200 字大约是两行批注气泡；再长用户点开看到的是一段正文，
 /// 那不如直接改版面。
 const MAX_NOTE_CHARS: usize = 200;
-/// 提问上限。比批注更宽松一点，因为问题里往往要带上原文片段。
-const MAX_QUESTION_CHARS: usize = 300;
 
 /// 单轮批注条数上限。纸面就那么大：三条以上就从「提示」变成「涂鸦」了。
 const MAX_NOTES_PER_TURN: usize = 2;
-/// 单轮提问次数上限。1 是刻意的：两个 agent 互相追着问会打成乒乓，这一页就永远排不完。
-const MAX_ASKS_PER_TURN: usize = 1;
 
 /// 占一个本轮名额，超了报错。
 ///
@@ -812,68 +809,12 @@ pub fn note_on_page(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
 
     Ok(format!(
         "批注已贴在{}，用户会直接在纸面上看到。\n\
-         它是给用户看的，不是给你自己记笔记 —— 想改内容请用 ask_session；这一轮还能再留 {} 条，说完继续排版，不用停下来等。",
+         它是给用户看的，不是给你自己记笔记 —— 你自己动不了内容，觉得该改就在批注里说清；这一轮还能再留 {} 条，说完继续排版，不用停下来等。",
         if block_id.is_some() { "这一块旁边" } else { "页边" },
         MAX_NOTES_PER_TURN.saturating_sub(
             ctx.out.notes.load(std::sync::atomic::Ordering::SeqCst)
         )
     ))
-}
-
-pub fn ask_session_params() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "question": {
-                "type": "string",
-                "description": "一句具体的、能回答的问题，1–300 字。例如「这段经历要不要拆成两条」。不要写「请确认」这类没法接的话"
-            },
-            "blockId": {
-                "type": "string",
-                "description": "问题针对哪个块（块 id 从 read_page 取）。会话 agent 会顺着这个块去看内容"
-            }
-        },
-        "required": ["question"],
-        "additionalProperties": false
-    })
-}
-
-/// 把内容层面的疑问转给会话 agent。
-///
-/// 为什么不让排版 agent 自己调内容工具：它一旦能改字，就会顺手把「看起来太长」
-/// 的句子删掉 —— 那是内容决策，用户没同意过。提问走人，改动留在会话层。
-pub fn ask_session(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
-    let question = args
-        .get("question")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("");
-    if question.is_empty() {
-        return Err("question 不能为空：要问就说清问什么".into());
-    }
-    let len = question.chars().count();
-    if len > MAX_QUESTION_CHARS {
-        return Err(format!(
-            "问题有 {len} 字，超过 {MAX_QUESTION_CHARS} 字上限。一句话问一件事，别把背景全抄进去"
-        ));
-    }
-
-    let (page_id, blocks) = page_blocks(ctx)?;
-    // blockId 要一起下发：会话 agent 拿着它才知道问的是哪一段，
-    // 否则它只能把整页再 read_page 一遍，还可能答到别的段落上
-    let block_id = block_arg(args, &blocks)?;
-
-    take_slot(&ctx.out.asks, MAX_ASKS_PER_TURN, "提问")?;
-
-    let mut action = json!({ "type": "askSession", "pageId": page_id, "question": question });
-    if let Some(block_id) = &block_id {
-        action["blockId"] = json!(block_id);
-    }
-    push_action(ctx, action)?;
-
-    Ok("问题已转给会话 agent：它可能自己查经历库回答，也可能去问用户。\n\
-        不要重复问同一个问题 —— 说完继续把能排的排好，不用等答复。"
-        .into())
 }
 
 #[cfg(test)]
@@ -916,7 +857,7 @@ mod tests {
         assert!(err.contains("排版不许改内容"), "{err}");
         assert!(err.contains("原文：实习与项目经历 铁未来 职位：实习生 通过定性方法"), "{err}");
         assert!(err.contains("你写的是：实习与项目经历 铁未来 职位：实习生 通过定量方法"), "{err}");
-        assert!(err.ends_with("要改内容请调 ask_session。"), "{err}");
+        assert!(err.ends_with("要改内容请用 note_on_page 留批注。"), "{err}");
     }
 
     /// 文字锁：只换 class / 结构 / 标签，一个字不改 —— 必须放行
@@ -970,7 +911,7 @@ mod tests {
         .unwrap_err();
         assert!(err.starts_with("整页接管不能改字：这一页原文共"), "{err}");
         assert!(err.contains("你写的是"), "{err}");
-        assert!(err.ends_with("要改内容请调 ask_session。"), "{err}");
+        assert!(err.ends_with("要改内容请用 note_on_page 留批注。"), "{err}");
         assert!(!err.contains("第 1 块"), "整页这条路不该报块号：{err}");
     }
 
