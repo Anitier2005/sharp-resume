@@ -177,6 +177,8 @@ export function KnowledgePanel({
   const [enriching, setEnriching] = useState("");
   /** 导入进度文案：非空时按钮显示它 */
   const [importing, setImporting] = useState("");
+  /** 拖着文件悬在「新增文本」上：只做视觉提示，真正的导入在 onDrop */
+  const [dragOver, setDragOver] = useState(false);
   const [vectorizing, setVectorizing] = useState(false);
   /** 图片块缩略图地址（按材料池存储名缓存；null = 读不出来） */
   const [thumbs, setThumbs] = useState<Record<string, string | null>>({});
@@ -417,6 +419,23 @@ export function KnowledgePanel({
     }
   };
 
+  /**
+   * 面板开着时接管整页的拖放。
+   *
+   * 不接的话 WebView2 会用自己的默认行为：拖一个 pdf 进窗口、松手 —— 整个应用被导航成
+   * 那个文件（白屏 + 回不来）。这里只拦默认行为，真正的落点由下面的 dropArea 处理。
+   */
+  useEffect(() => {
+    if (!open) return;
+    const stop = (event: DragEvent) => event.preventDefault();
+    window.addEventListener("dragover", stop);
+    window.addEventListener("drop", stop);
+    return () => {
+      window.removeEventListener("dragover", stop);
+      window.removeEventListener("drop", stop);
+    };
+  }, [open]);
+
   /** 导入一批文件：文本走模型分片，图片进材料池再建图块 */
   const importFiles = async (picked: FileList | null) => {
     if (!picked || picked.length === 0) return;
@@ -428,6 +447,7 @@ export function KnowledgePanel({
     const files = Array.from(picked);
     const failures: string[] = [];
     let done = 0;
+    let chunks = 0;
     let lastChunk = "";
     setImporting(`0/${files.length}`);
 
@@ -441,6 +461,7 @@ export function KnowledgePanel({
             { libraryId: libId, title: parsed.title, tags: [], text: parsed.text },
             { baseUrl: chunkAi.baseUrl, apiKey: chunkAi.apiKey, model: chunkAi.model },
           );
+          chunks += saved.chunks.length;
           lastChunk = saved.chunks[0]?.id ?? lastChunk;
         }
         for (const image of parsed.images) {
@@ -474,6 +495,7 @@ export function KnowledgePanel({
             summary: annotated.summary,
             annotation: annotated.annotation,
           });
+          chunks += saved.chunks.length;
           lastChunk = saved.chunks[saved.chunks.length - 1]?.id ?? lastChunk;
         }
         done += 1;
@@ -487,9 +509,12 @@ export function KnowledgePanel({
     await loadLibs();
     if (lastChunk) setChunkId(lastChunk);
     if (failures.length === 0) {
-      toast(`已导入 ${done} 个文件`);
+      toast(`已导入 ${done} 个文件 · ${chunks} 块`);
+    } else if (done === 0) {
+      // 一个都没成：原因必须完整露出来，否则用户只看到「导入 0 个」不知道该换什么格式
+      toast(`没有导入成功：${failures[0]}`);
     } else {
-      toast(`导入 ${done} 个，失败 ${failures.length} 个：${failures[0]}`);
+      toast(`已导入 ${done} 个（${chunks} 块），${failures.length} 个失败：${failures[0]}`);
     }
   };
 
@@ -578,7 +603,7 @@ export function KnowledgePanel({
         ref={importRef}
         type="file"
         multiple
-        accept=".pdf,.md,.markdown,.txt,image/*"
+        accept=".pdf,.docx,.pptx,.xlsx,.md,.markdown,.txt,.csv,image/*"
         className={styles.hidden}
         onChange={(event) => {
           void importFiles(event.target.files);
@@ -678,7 +703,7 @@ export function KnowledgePanel({
                 onChange={(event) => void runSearch(event.target.value)}
               />
             </span>
-            <Tooltip label="导入文件（PDF / MD / TXT / 图片）">
+            <Tooltip label="导入文件（PDF / Word / PPT / Excel / 文本 / 图片）">
               <button
                 type="button"
                 className={styles.iconBtn}
@@ -942,15 +967,35 @@ export function KnowledgePanel({
             </>
           }
         >
-          <Field label="正文" className={styles.bodyFld}>
-            <Textarea
-              data-autofocus
-              rows={14}
-              value={textDraft}
-              placeholder="只写客观事实：行业口径、岗位要求、术语解释、常见问法。"
-              onChange={(event) => setTextDraft(event.target.value)}
-            />
-          </Field>
+          <div
+            className={cx(styles.dropArea, dragOver && styles.dropActive)}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragOver(false);
+              const files = event.dataTransfer.files;
+              // 拖进来的文件直接走导入流程，不用先点「保存并切块」
+              setTextDraft(null);
+              void importFiles(files);
+            }}
+          >
+            <Field label="正文" className={styles.bodyFld}>
+              <Textarea
+                data-autofocus
+                rows={14}
+                value={textDraft}
+                placeholder="只写客观事实：行业口径、岗位要求、术语解释、常见问法。"
+                onChange={(event) => setTextDraft(event.target.value)}
+              />
+            </Field>
+            <p className={styles.hint}>
+              也可以把 PDF / Word / PPT / Excel / 文本 / 图片 直接拖进来，松手即导入。
+            </p>
+          </div>
         </Modal>
       )}
 

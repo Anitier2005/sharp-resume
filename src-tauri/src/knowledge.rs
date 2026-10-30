@@ -1852,17 +1852,73 @@ pub fn ingest_file(name: String, bytes: Vec<u8>) -> Result<Ingested, String> {
     let text = match ext.as_str() {
         "pdf" => pdf_extract::extract_text_from_mem(&bytes)
             .map_err(|error| format!("这份 PDF 解析失败：{error}"))?,
-        "md" | "markdown" | "txt" | "text" => String::from_utf8_lossy(&bytes).to_string(),
-        "docx" | "doc" => {
-            return Err("Word 还不支持直接解析 —— 请另存为 PDF 或纯文本再导入".into())
+        "md" | "markdown" | "txt" | "text" | "csv" | "tsv" => {
+            String::from_utf8_lossy(&bytes).to_string()
         }
-        _ => return Err(format!("不认识的文件类型 .{ext} —— 支持 PDF / MD / TXT / 图片")),
+        // Office 三兄弟走带格式解析，再把大纲拍平成正文。
+        // 拍平不是偷懒：知识库要的是「能检索的观点」，层级用 Markdown 记号留个骨架就够，
+        // 表格保留成「a | b」的行，比整段丢掉强。
+        "docx" | "pptx" | "xlsx" => {
+            let outline = crate::docparse::parse(&ext, &bytes).ok_or_else(|| {
+                format!("这份 .{ext} 解析不出内容 —— 文件可能已损坏，或保存时做了加密")
+            })?;
+            flatten_outline(&outline)
+        }
+        // 老式二进制 Office（.doc/.ppt/.xls）不是 zip + XML，解析不了。
+        // 说清「另存为」这条路，别让它去猜。
+        "doc" | "ppt" | "xls" => {
+            return Err(format!(
+                "老式 .{ext} 是二进制格式，读不了 —— 用 Office/WPS 另存为 .{ext}x 再导入"
+            ))
+        }
+        _ => {
+            return Err(format!(
+                "不认识的文件类型 .{ext} —— 支持 PDF / Word(.docx) / PPT(.pptx) / Excel(.xlsx) / MD / TXT / CSV / 图片"
+            ))
+        }
     };
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err("这个文件里没有可提取的文字（可能是扫描件）".into());
     }
     Ok(Ingested { title, text, images: Vec::new() })
+}
+
+/// 把带格式大纲拍平成一段 Markdown 风味的正文。
+///
+/// 保留三种记号：标题用 `#`（层级给到几就几个）、列表项用 `- `、表格每行用 ` | ` 拼。
+/// 其余块原样成段。**不补原文没有的话** —— 拍平只做减法，不做润色。
+fn flatten_outline(outline: &crate::docparse::DocOutline) -> String {
+    use crate::docparse::BlockKind;
+    let mut out = String::new();
+    for block in &outline.blocks {
+        let text = block.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        match block.kind {
+            BlockKind::Title => out.push_str(&format!("# {text}\n\n")),
+            BlockKind::Heading => {
+                let level = block.style.level.unwrap_or(1).clamp(1, 6) as usize;
+                out.push_str(&format!("{} {text}\n\n", "#".repeat(level)));
+            }
+            BlockKind::ListItem => out.push_str(&format!("- {text}\n")),
+            BlockKind::Table => {
+                if let Some(rows) = &block.table {
+                    for row in rows {
+                        out.push_str(&format!("{}\n", row.join(" | ")));
+                    }
+                    out.push('\n');
+                } else {
+                    out.push_str(&format!("{text}\n\n"));
+                }
+            }
+            // 图片占位与解析器的提示语不写进正文：它们在知识库里检索不到任何东西
+            BlockKind::Image | BlockKind::Note => {}
+            BlockKind::Paragraph => out.push_str(&format!("{text}\n\n")),
+        }
+    }
+    out.trim().to_string()
 }
 
 /// 导入文本：**用模型分片**，模型不可用时退回机械切块（导入不能因为模型挂了就失败）
@@ -2370,6 +2426,59 @@ mod tests {
     ///
     /// 这条是产品口径（`knowledge/README.md` §5.6 / §8）：向量是加分项，不是前提。
     /// 谁把 embedding 写成检索的必需依赖，这里会红。
+    /// 拍平要留住骨架：标题层级、列表记号、表格行；图片占位与提示语不进正文
+    #[test]
+    fn flatten_keeps_headings_lists_and_table_rows() {
+        use crate::docparse::{Align, BlockKind, BlockStyle, DocBlock, DocOutline};
+        let block = |kind, text: &str, style: BlockStyle, table: Option<Vec<Vec<String>>>| DocBlock {
+            kind,
+            text: text.into(),
+            style,
+            table,
+        };
+        let outline = DocOutline {
+            pages: None,
+            margin_pt: None,
+            body_pt: None,
+            blocks: vec![
+                block(BlockKind::Title, "简历", BlockStyle::default(), None),
+                block(BlockKind::Heading, "教育经历", BlockStyle { level: Some(2), ..Default::default() }, None),
+                block(BlockKind::ListItem, "主修课程：公共关系学", BlockStyle::default(), None),
+                block(
+                    BlockKind::Table,
+                    "技能",
+                    BlockStyle { align: Align::Center, ..Default::default() },
+                    Some(vec![vec!["语言".into(), "英语四级".into()]]),
+                ),
+                block(BlockKind::Image, "（图片）", BlockStyle::default(), None),
+                block(BlockKind::Note, "这一页没有文字层", BlockStyle::default(), None),
+            ],
+        };
+        let text = flatten_outline(&outline);
+        assert!(text.starts_with("# 简历"), "{text}");
+        assert!(text.contains("## 教育经历"), "{text}");
+        assert!(text.contains("- 主修课程：公共关系学"), "{text}");
+        assert!(text.contains("语言 | 英语四级"), "{text}");
+        assert!(!text.contains("（图片）"), "图片占位不该进正文：{text}");
+        assert!(!text.contains("没有文字层"), "解析器的提示语不该进正文：{text}");
+    }
+
+    /// 老式 .doc 不是 zip，解析不了；错误里必须给出「另存为」这条路
+    #[test]
+    fn legacy_office_formats_say_how_to_convert() {
+        for name in ["旧简历.doc", "旧版.ppt", "旧表.xls"] {
+            let err = ingest_file(name.into(), b"\xD0\xCF\x11\xE0".to_vec()).unwrap_err();
+            assert!(err.contains("另存为"), "{name} 的报错要指路：{err}");
+        }
+    }
+
+    /// 不认识的扩展名要把「支持什么」列出来，别只说一句「不认识」
+    #[test]
+    fn an_unknown_extension_lists_what_is_supported() {
+        let err = ingest_file("资料.xyz".into(), b"hello".to_vec()).unwrap_err();
+        assert!(err.contains("docx") && err.contains("pptx") && err.contains("xlsx"), "{err}");
+    }
+
     #[test]
     fn search_without_an_embedding_model_falls_back_to_hash() {
         assert!(current_embedding().is_none(), "测试环境不该配着嵌入模型");

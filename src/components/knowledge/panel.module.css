@@ -380,3 +380,20 @@
   display: flex;
   flex-direction: column;
 }
+
+/* 「新增文本」里的拖放区：平时完全隐形（不占额外空间、不加框），
+   只有拖着文件悬停时才亮出虚线框 —— 没有文件在拖的时候，
+   一个虚线框会让人以为「这里是上传框，我不会用」。 */
+.dropArea {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: 6px;
+  border: 1px dashed transparent;
+  padding: 2px;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.dropActive {
+  border-color: var(--acc);
+  background: var(--bg-press);
+}
