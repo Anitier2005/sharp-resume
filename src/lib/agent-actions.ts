@@ -126,6 +126,11 @@ function cleanLayout(input: unknown): PageLayout | null {
   if (typeof source.html === "string" && source.html.trim()) {
     layout.html = source.html;
   }
+  // 页头变体：必须一起放行。此前这里只认 preset/html/parts，模型调的 head 被静默丢弃，
+  // 于是「aside（姓名居中、照片右上）」在数据里根本不存在 —— 屏幕上和 Word 里都不生效。
+  if (typeof source.head === "string" && source.head.trim()) {
+    layout.head = source.head.trim();
+  }
   if (source.parts && typeof source.parts === "object" && !Array.isArray(source.parts)) {
     const parts: Record<string, string> = {};
     for (const [blockId, value] of Object.entries(source.parts as Record<string, unknown>)) {

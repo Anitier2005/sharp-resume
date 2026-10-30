@@ -224,6 +224,13 @@ export interface PageLayout {
   html?: string;
   /** 块 id → 这一块手写的 HTML；没有的块照常自动生成 */
   parts?: Record<string, string>;
+  /**
+   * 页头变体："" | center（姓名与联系方式居中）| bare（无分隔线）| thick（粗分隔线）| aside（照片贴右上）。
+   *
+   * 必须落进页数据，不能只存在于 parts 的 class 里 —— 导出 Word 时要读它决定
+   * 段落对齐与照片位置；藏在 HTML 里的话，Word 侧什么都读不到。
+   */
+  head?: string;
 }
 
 export interface ResumePage {
