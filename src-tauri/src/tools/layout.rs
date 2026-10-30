@@ -534,12 +534,10 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
             notes.push("页头回到生成器默认".to_string());
         } else {
             layout.insert("head".into(), json!(head));
-            // 绝对定位关着时照片只能跟文字并排。这不是失败，是还没到那一步 ——
-            // 但必须说出来：模型看不见渲染结果，不说它就会以为照片已经在右上角了
-            if head == "aside" && !render::ALLOW_ABSOLUTE {
-                notes.push(
-                    "页头 aside：照片无法绝对定位，已降级为左右两栏（等分页引擎接上再开）".to_string(),
-                );
+            // aside 已经用上绝对定位（render::HEAD_ASIDE_ABSOLUTE = true）：照片贴版心右上角。
+            // 模型看不见渲染结果，不说清「现在生效的是什么」，它就会按旧印象以为照片还在左边。
+            if head == "aside" {
+                notes.push("页头 aside：姓名居中、证件照贴右上角".to_string());
             } else {
                 notes.push(format!("页头 {head}"));
             }
@@ -664,9 +662,22 @@ pub fn set_page_layout(args: &Value, ctx: &ToolCtx) -> Result<String, String> {
     if let Some(facts) = ctx.facts {
         reply.push('\n');
         reply.push_str(&crate::agent::facts::layout_result_line(facts));
+        // 这一页的实测是 unknown / stale 时，必须把「滞后一轮」说出来：
+        // 模型同一轮连改两次、看到数字没变，会得出「版面无效、瓶颈在内容」，
+        // 转头去劝用户删内容 —— 而它要的其实是还原原件版式。
+        if matches!(
+            crate::agent::facts::fit_of(facts.measure.as_ref()),
+            crate::agent::facts::Fit::Unknown(_) | crate::agent::facts::Fit::Stale { .. }
+        ) {
+            reply.push('\n');
+            reply.push_str(MEASURE_LAG_HINT);
+        }
     }
     Ok(reply)
 }
+
+/// 实测滞后一轮的说明。只在量不到 / 旧数作废时追加，有实测值时一个字都不多说。
+const MEASURE_LAG_HINT: &str = "页数要等这一轮结束、纸面重新排完才会更新 —— 同一轮里连改两次不会让数字变，别据此判断「版面没用」，也别凭这个去要求删内容。";
 
 /* ---------- 排版 agent：留批注 ---------- */
 
@@ -992,12 +1003,31 @@ mod tests {
         assert!(text_of_block(section).starts_with("实习与项目经历 铁未来 职位:实习生 通过定性方法"));
     }
 
-    /// head: aside 在绝对定位关着的时候必须自己说出来「已降级」
+    /// 页头 aside 现在真的把证件照放到版心右上角，返回里不许再提「降级」
     #[test]
-    fn head_aside_says_it_was_downgraded() {
+    fn head_aside_reports_the_absolute_photo() {
         let text = run(None, json!({ "head": "aside" })).unwrap();
-        assert!(text.contains("已降级"), "{text}");
-        assert!(text.contains("照片无法绝对定位"), "{text}");
+        assert!(text.contains("证件照贴右上角"), "{text}");
+        assert!(!text.contains("已降级"), "{text}");
+        assert!(!text.contains("无法绝对定位"), "{text}");
+    }
+
+    /// 量不到时把「实测要等一轮」说清楚：堵住「版面没用 → 去删内容」的误判
+    #[test]
+    fn unknown_measure_says_the_reading_lags_one_round() {
+        let unknown = PageFacts::default();
+        let text = run(Some(&unknown), json!({ "preset": "compact" })).unwrap();
+        assert!(text.contains("尚未实测"), "{text}");
+        assert!(text.contains("等这一轮结束"), "{text}");
+        assert!(text.contains("不会让数字变"), "{text}");
+        assert!(text.contains("别据此判断"), "{text}");
+    }
+
+    /// 有实测值时不多嘴：「等一轮」那句只属于量不到 / 旧数作废
+    #[test]
+    fn measured_reply_does_not_mention_the_lag() {
+        let text = run(Some(&facts(1000.0)), json!({ "preset": "compact" })).unwrap();
+        assert!(!text.contains("等这一轮结束"), "{text}");
     }
 
     #[test]

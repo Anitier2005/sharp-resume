@@ -117,10 +117,11 @@ describe("measureTip", () => {
     expect(tip).toContain("这一段最多 1 页");
   });
 
-  it("量不到：按 reason 说「尚未实测」", () => {
+  it("量不到：按 reason 说「尚未实测」，不提「预览」", () => {
     const tip = measureTip({ pageId: "pg1", status: "unknown", version: 0, content: "", reason: "no-preview" }, 1);
     expect(tip).toContain("尚未实测");
-    expect(tip).toContain("预览没打开");
+    expect(tip).toContain("这一页还没量到");
+    expect(tip).not.toContain("预览");
   });
 
   it("没有目标页数时不讲达标与否，也不提「这一段最多」", () => {

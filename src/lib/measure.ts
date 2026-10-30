@@ -22,9 +22,15 @@ export const TOLERANCE_MAX = 1.02;
 /** 行高兜底：paper.css 默认 `--fs:10px × --lh:1.7`；读不到 computedStyle 时用它折算行数 */
 const LINE_HEIGHT_FALLBACK = 17;
 
-/** 量不到时的四句原因，与 facts.rs 的 `Reason::text()` 同一套（提示语不能只管一半） */
+/**
+ * 量不到时的四句原因，与 facts.rs 的 `Reason::text()` 同一套（提示语不能只管一半）。
+ *
+ * `no-preview` 这个名字是历史包袱：离屏宿主现在常驻，量不到**不是**预览那边的问题，
+ * 只剩「这一页还没量到」—— 纸面可能还在排、也可能还没挂上。别让这句话再把模型
+ * 引到「预览开没开」上去。
+ */
 const REASON_TEXT: Record<NonNullable<PageMeasure["reason"]>, string> = {
-  "no-preview": "预览没打开，量不到",
+  "no-preview": "这一页还没量到，纸面可能还在排",
   fonts: "字体还没加载完",
   timeout: "测量超时",
   empty: "这一页是空的，没有可量的内容",
@@ -89,7 +95,7 @@ export function contentVersion(person: Person | null, page: ResumePage | null): 
  * 三段简历每段都可以到 1 页。判定本身早在 `facts.rs::fit_of` 里做完，这里只翻译。
  */
 export function measureTip(measure: PageMeasure | null | undefined, targetPages?: number): string {
-  if (!measure) return "尚未实测（预览没打开，量不到）。";
+  if (!measure) return "尚未实测（这一页还没量到）。";
   if (measure.status === "stale") return "尚未实测（内容在上次测量之后改过，旧测量作废）。";
 
   const { onePage, contentPx } = measure;
@@ -172,128 +178,228 @@ export function pageMetrics(input: {
  * 字体没就绪时宁可给 `unknown("fonts")` —— 字形宽度不同会改变换行与总行数，
  * 那一刻量到的数是会变的数，而「会变的数」正是 F-007 要防的东西。
  */
-export function usePageMeasure(input: {
-  /** 离屏宿主的 `.wrap` 元素；它的第一个子元素才是 `.paper` */
+export interface PaperMeasures {
   hostRef: RefObject<HTMLDivElement | null>;
   person: Person | null;
-  page: ResumePage | null;
-}): PageMeasure | null {
-  const { hostRef, person, page } = input;
-  const content = useMemo(() => contentVersion(person, page), [person, page]);
-  const pageId = page?.id ?? "";
-  const [result, setResult] = useState<PageMeasure | null>(null);
+  pages: ResumePage[];
+}
 
-  const last = useRef<Snapshot | null>(null);
+/** 每页各自的那一份测量状态。共享一个 `last` 会让两页互相把对方判成 stale */
+interface PageState {
+  last: Snapshot | null;
+  fontsReady: boolean;
+  /** 这一页自己的「1.5s 还没量到」计时器 */
+  timeout: number | null;
+}
+
+/**
+ * 多页版：每一页在自己的离屏纸面上单独量，键是 pageId。
+ *
+ * 为什么必须分页：内容变更触发的那条路会遍历 `resume.pages`，
+ * 只量当前页的话，另一页永远拿不到实测 —— 模型看到的就是「这一页还没量到」。
+ *
+ * 为什么状态必须按页分开：两页共用一个 `last` 时，甲页量完会把乙页的
+ * 上一次测量比成 stale，乙页的数字永远停在「旧测量作废」。
+ *
+ * `pages` 的渲染顺序与 `hostRef` 里 `[data-page]` 的顺序一致，不按索引取纸，
+ * 而是按 `data-page` 反查 —— 删页、换页后索引会错位。
+ */
+export function usePaperMeasures(input: PaperMeasures): Record<string, PageMeasure> {
+  const { hostRef, person, pages } = input;
+  const [results, setResults] = useState<Record<string, PageMeasure>>({});
+
+  const states = useRef(new Map<string, PageState>());
+  /** 字体就绪是全局事实：后加的页不能因为「fonts effect 只跑一次」永远卡在 fonts */
   const fontsReady = useRef(false);
-  const timeout = useRef<number | null>(null);
   /** 延时补读要用「最新那一份」read：闭包里的旧 read 会拿旧 content 去比，永远比不中 */
-  const readRef = useRef<() => void>(() => undefined);
+  const readRef = useRef<(pageId: string) => void>(() => undefined);
 
-  const stopTimeout = useCallback(() => {
-    if (timeout.current !== null) window.clearTimeout(timeout.current);
-    timeout.current = null;
+  /**
+   * 每一页的内容版本。`contentVersion` 已经带着 layout 与 blocks，
+   * 排版一改版本就变，测量跟着失效重测 —— 这一点保持原样。
+   */
+  const versions = useMemo(
+    () => new Map(pages.map((page) => [page.id, contentVersion(person, page)])),
+    [person, pages],
+  );
+
+  /** 内容指纹拼成一个字符串当依赖：页码/内容不变就不重装观察器 */
+  const signature = pages.map((page) => `${page.id}:${versions.get(page.id)}`).join("|");
+
+  // 依赖只认 signature：工作区其它状态变化（切面板、改批注）不该重装观察器、
+  // 也不该把「1.5s 超时」的秒表反复归零。effect 里读 ref 拿最新一版。
+  const pagesRef = useRef(pages);
+  const versionsRef = useRef(versions);
+  pagesRef.current = pages;
+  versionsRef.current = versions;
+
+  const stopTimeout = useCallback((state: PageState) => {
+    if (state.timeout !== null) window.clearTimeout(state.timeout);
+    state.timeout = null;
   }, []);
 
   /**
-   * 量一次。四道拒绝的顺序有讲究：宽为 0 = 纸还没挂上；高 ≤0 = 这一页是空的；
-   * 字体没就绪 = 数还会变；内容版本对不上 = 旧数不能当新数报。
+   * 量一遍所有页并盯住各自的纸面。
+   *
+   * 依赖里刻意没有「编辑 / 预览」这一档：宿主两态都在，测量不该随视图切换重算。
    */
-  const read = useCallback(() => {
-    const paper = hostRef.current?.firstElementChild as HTMLElement | null;
-    const failed = (reason: NonNullable<PageMeasure["reason"]>) =>
-      setResult({ pageId, status: "unknown", version: okVersion, content, reason });
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    const pages = pagesRef.current;
+    const versions = versionsRef.current;
+    if (!host || !pages.length) return;
 
-    if (!paper || !paper.offsetWidth) return failed("no-preview");
-    const style = getComputedStyle(paper);
-    // 纸的上下内边距就是页边距（离屏宿主按打印口径给的 16mm）。
-    // 一页能装的内容 = 整张纸高 − 上下页边距；那两个数只有 DOM 知道，
-    // 不要再写死 265mm —— 页边距是可配的，写死就是第二个漂移源。
-    const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
-    const { onePage, contentPx } = pageMetrics({
-      width: paper.offsetWidth,
-      height: paper.offsetHeight,
-      padY,
-    });
-    // 判空必须走在减完之后：只填满上下边距的纸，内容其实是 0
-    if (contentPx <= 0) return failed("empty");
-    if (!fontsReady.current) return failed("fonts");
-
-    if (last.current && last.current.content !== content) {
-      // 内容改过了（F-014）：旧测量作废，但把旧数带上，界面上才说得出「改之前是几页」
-      const previous = last.current;
-      last.current = null;
-      setResult({
-        pageId,
-        status: "stale",
-        version: okVersion,
-        content,
-        previous: {
-          content: previous.content,
-          onePage: previous.onePage,
-          contentPx: previous.contentPx,
-        },
-      });
-      window.setTimeout(() => readRef.current(), STALE_RETRY_MS);
-      return;
+    const live = new Set(pages.map((page) => page.id));
+    // 删掉的页连状态一起清，免得旧页的 last 一直挂着
+    for (const id of [...states.current.keys()]) {
+      if (!live.has(id)) states.current.delete(id);
     }
 
-    // 行高读实测值：把溢出量折成「多少行正文」比「超出 0.18 页」好懂
-    const lineHeight = parseFloat(style.lineHeight) || LINE_HEIGHT_FALLBACK;
-    okVersion += 1;
-    last.current = { content, onePage, contentPx, lineHeight };
-    stopTimeout();
-    setResult({ pageId, status: "ok", version: okVersion, content, onePage, contentPx, lineHeight });
-  }, [content, hostRef, pageId, stopTimeout]);
+    /** 这一页自己的纸：容器里每页一个 `.wrap[data-page]`，其第一个子元素才是 `.paper` */
+    const paperOf = (pageId: string): HTMLElement | null => {
+      for (const child of Array.from(host.children)) {
+        if (child.getAttribute("data-page") !== pageId) continue;
+        return child.firstElementChild as HTMLElement | null;
+      }
+      return null;
+    };
 
-  // 延时补读要用「最新那一份」read：闭包里的旧 read 会拿旧 content 去比，永远比不中
-  useEffect(() => {
-    readRef.current = read;
-  }, [read]);
+    const failed = (pageId: string, content: string, reason: NonNullable<PageMeasure["reason"]>) => {
+      setResults((prev) => ({
+        ...prev,
+        [pageId]: { pageId, status: "unknown", version: okVersion, content, reason },
+      }));
+    };
 
-  // 字体只等一次。ready 之后所有 read 都可以给 ok —— 之前给的数都算没量到
+    /**
+     * 量这一页。四道拒绝的顺序有讲究：宽为 0 = 纸还没挂上；高 ≤0 = 这一页是空的；
+     * 字体没就绪 = 数还会变；内容版本对不上 = 旧数不能当新数报。
+     */
+    const readOne = (pageId: string) => {
+      const state = states.current.get(pageId);
+      if (!state) return;
+      const content = versions.get(pageId) ?? "";
+      const paper = paperOf(pageId);
+      if (!paper || !paper.offsetWidth) return failed(pageId, content, "no-preview");
+
+      const style = getComputedStyle(paper);
+      // 纸的上下内边距就是页边距（离屏宿主按打印口径给的 16mm）。
+      // 一页能装的内容 = 整张纸高 − 上下页边距；那两个数只有 DOM 知道，
+      // 不要再写死 265mm —— 页边距是可配的，写死就是第二个漂移源。
+      const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+      const { onePage, contentPx } = pageMetrics({
+        width: paper.offsetWidth,
+        height: paper.offsetHeight,
+        padY,
+      });
+      // 判空必须走在减完之后：只填满上下边距的纸，内容其实是 0
+      if (contentPx <= 0) return failed(pageId, content, "empty");
+      if (!state.fontsReady) return failed(pageId, content, "fonts");
+
+      if (state.last && state.last.content !== content) {
+        // 内容改过了（F-014）：旧测量作废，但把旧数带上，界面上才说得出「改之前是几页」
+        const previous = state.last;
+        state.last = null;
+        setResults((prev) => ({
+          ...prev,
+          [pageId]: {
+            pageId,
+            status: "stale",
+            version: okVersion,
+            content,
+            previous: {
+              content: previous.content,
+              onePage: previous.onePage,
+              contentPx: previous.contentPx,
+            },
+          },
+        }));
+        state.timeout = window.setTimeout(() => readRef.current(pageId), STALE_RETRY_MS);
+        return;
+      }
+
+      // 行高读实测值：把溢出量折成「多少行正文」比「超出 0.18 页」好懂
+      const lineHeight = parseFloat(style.lineHeight) || LINE_HEIGHT_FALLBACK;
+      okVersion += 1;
+      state.last = { content, onePage, contentPx, lineHeight };
+      stopTimeout(state);
+      setResults((prev) => ({
+        ...prev,
+        [pageId]: {
+          pageId,
+          status: "ok",
+          version: okVersion,
+          content,
+          onePage,
+          contentPx,
+          lineHeight,
+        },
+      }));
+    };
+
+    readRef.current = readOne;
+
+    const observers: ResizeObserver[] = [];
+    for (const page of pages) {
+      const content = versions.get(page.id) ?? "";
+      let state = states.current.get(page.id);
+      if (!state) {
+        state = {
+          last: null,
+          fontsReady: fontsReady.current || typeof document === "undefined" || !document.fonts,
+          timeout: null,
+        };
+        states.current.set(page.id, state);
+      }
+      const pageState = state;
+      stopTimeout(pageState);
+
+      readOne(page.id);
+
+      // 1.5s 还没量到这一版就说「超时」，不要一直挂着上一版。
+      // readOne 可能刚给 stale 排了 300ms 的补读 —— 那个计时器已经占着槽位，
+      // 不能再拿超时盖掉它（盖掉就永远补读不到了）。
+      if (pageState.timeout === null && pageState.last?.content !== content) {
+        pageState.timeout = window.setTimeout(() => {
+          pageState.timeout = null;
+          failed(page.id, content, "timeout");
+        }, MEASURE_TIMEOUT_MS);
+      }
+
+      const paper = paperOf(page.id);
+      if (!paper) continue;
+      const observer = new ResizeObserver(() => readRef.current(page.id));
+      observer.observe(paper);
+      observers.push(observer);
+    }
+
+    return () => {
+      for (const observer of observers) observer.disconnect();
+      for (const state of states.current.values()) stopTimeout(state);
+    };
+  }, [signature, hostRef, stopTimeout]);
+
+  // 字体只等一次。ready 之后所有页都可以给 ok —— 之前给的数都算没量到
   useEffect(() => {
     const fonts = typeof document === "undefined" ? undefined : document.fonts;
     if (!fonts) {
       fontsReady.current = true;
+      for (const state of states.current.values()) state.fontsReady = true;
       return;
     }
     let alive = true;
     void fonts.ready.then(() => {
       if (!alive) return;
       fontsReady.current = true;
-      readRef.current();
+      for (const state of states.current.values()) state.fontsReady = true;
+      for (const id of states.current.keys()) readRef.current(id);
     });
     return () => {
       alive = false;
     };
   }, []);
 
-  /**
-   * 量一次并盯住纸面。
-   *
-   * 依赖里刻意没有「编辑 / 预览」这一档：宿主两态都在，测量不该随视图切换重算。
-   */
-  useLayoutEffect(() => {
-    read();
-    const paper = hostRef.current?.firstElementChild;
-    if (!paper) return;
-    const observer = new ResizeObserver(() => readRef.current());
-    observer.observe(paper);
-    return () => observer.disconnect();
-  }, [read, hostRef]);
-
-  // 1.5s 还没量到这一版就说「超时」，不要一直挂着上一版
-  useEffect(() => {
-    if (!pageId || !content) return;
-    stopTimeout();
-    if (last.current?.content === content) return;
-    timeout.current = window.setTimeout(() => {
-      setResult({ pageId, status: "unknown", version: okVersion, content, reason: "timeout" });
-    }, MEASURE_TIMEOUT_MS);
-    return stopTimeout;
-  }, [content, pageId, stopTimeout]);
-
-  return result;
+  return results;
 }
 
 /**

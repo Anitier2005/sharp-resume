@@ -1160,7 +1160,7 @@ mod tests {
     fn measured_section_says_cannot_measure_when_nothing_arrived() {
         let text = describe_page(&sample(), &no_facts());
         assert!(text.contains("## 这一页的实测"), "{text}");
-        assert!(text.contains("尚未实测（预览没打开，量不到）"), "{text}");
+        assert!(text.contains("尚未实测（这一页还没量到，纸面可能还在排）"), "{text}");
         assert!(!text.contains("没有溢出"), "{text}");
     }
 

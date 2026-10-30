@@ -167,6 +167,10 @@ impl PageFacts {
 }
 
 /// 量不到的原因。四句话写在这里，两处注入共用同一份措辞。
+///
+/// `NoPreview` 这个名字是历史包袱（当年只有预览 DOM 可量）。离屏宿主现在常驻，
+/// 前端没给 measure、或这一页还没量到时都会落到这里 —— 真实含义只是「这一页还没量到」，
+/// **不是**「预览不可用」。文案与注释都不许再把它说成预览的问题。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Reason {
     #[default]
@@ -179,14 +183,14 @@ pub enum Reason {
 impl Reason {
     pub fn text(&self) -> &'static str {
         match self {
-            Self::NoPreview => "预览没打开，量不到",
+            Self::NoPreview => "这一页还没量到，纸面可能还在排",
             Self::Fonts => "字体还没加载完",
             Self::Timeout => "测量超时",
             Self::Empty => "这一页是空的，没有可量的内容",
         }
     }
 
-    /// 前端 `reason` 字符串 → 枚举；认不出的一律当「预览没打开」。
+    /// 前端 `reason` 字符串 → 枚举；认不出的一律当「这一页还没量到」。
     pub fn parse(raw: Option<&str>) -> Self {
         match raw {
             Some("fonts") => Self::Fonts,
@@ -200,7 +204,7 @@ impl Reason {
     /// 再说一遍「量不到」是同一句话说两次。
     fn brief(&self) -> &'static str {
         match self {
-            Self::NoPreview => "预览没打开",
+            Self::NoPreview => "这一页还没量到",
             Self::Fonts => "字体还没加载完",
             Self::Timeout => "测量超时",
             Self::Empty => "这一页是空的",
@@ -772,6 +776,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn reason_texts_never_blame_the_preview() {
+        // 离屏宿主常驻之后，「量不到」只剩「这一页还没量到」。
+        // 这句文案曾经把模型带进「预览不可用」的坑，别再回来。
+        let all = [Reason::NoPreview, Reason::Fonts, Reason::Timeout, Reason::Empty];
+        for reason in all {
+            assert!(!reason.text().contains("预览"), "{:?}: {}", reason, reason.text());
+            assert!(!reason.brief().contains("预览"), "{:?}: {}", reason, reason.brief());
+        }
+        assert!(Reason::NoPreview.text().contains("还没量到"));
+    }
+
     fn reason_code(reason: Reason) -> &'static str {
         match reason {
             Reason::NoPreview => "no-preview",
@@ -913,10 +929,10 @@ mod tests {
     #[test]
     fn measure_line_unknown_never_says_no_overflow() {
         let cases = [
-            (None, "预览没打开，量不到"),
+            (None, "这一页还没量到，纸面可能还在排"),
             (
                 Some(measure("unknown", 0, "v37", None, None, None)),
-                "预览没打开，量不到",
+                "这一页还没量到，纸面可能还在排",
             ),
         ];
         for (raw, why) in cases {
@@ -1361,7 +1377,7 @@ mod tests {
         assert_eq!(
             text,
             "## 这一页的实测\n\
-             尚未实测（预览没打开，量不到）。\n\
+             尚未实测（这一页还没量到，纸面可能还在排）。\n\
              不知道有没有达标。这一轮不要说「已经压到一页」「放在一页内」。\n"
         );
         assert!(!text.contains("没有溢出"));
@@ -1414,7 +1430,7 @@ mod tests {
         let unknown = facts(None, target(Some(1), TargetSource::UserBefore), None);
         assert_eq!(
             layout_result_line(&unknown),
-            "尚未实测（测量不可用：预览没打开）。这一轮不能确认是否在一页内 —— 不要写「已压到一页」。"
+            "尚未实测（测量不可用：这一页还没量到）。这一轮不能确认是否在一页内 —— 不要写「已压到一页」。"
         );
         // 量不到的措辞必须与达标明显不同，且不许出现「没有溢出」
         assert_ne!(layout_result_line(&unknown), layout_result_line(&fit));

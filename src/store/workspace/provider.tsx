@@ -15,7 +15,7 @@ import { EMPTY_WORKSPACE } from "@/data/empty";
 import { loadWorkspace, saveWorkspace } from "@/lib/storage";
 import { describeChange, diff, flatten, type Flat } from "@/lib/changes";
 import { submitLayout } from "@/lib/layout";
-import { originOf, TOLERANCE_MAX, usePageMeasure } from "@/lib/measure";
+import { originOf, TOLERANCE_MAX, usePaperMeasures } from "@/lib/measure";
 import { A4_W_PX } from "@/lib/paper-size";
 import {
   applyAgentActions,
@@ -157,6 +157,12 @@ const AUTO_ROUNDS_MAX = 3;
 /** 一帧里的多次测量只投一次：排版跑一轮是模型调用，不能每帧都花一次 */
 const AUTO_DEBOUNCE_MS = 300;
 
+/**
+ * 离屏实测的最多页数：每页是一张真 A4（793.7px 宽）的完整渲染，
+ * 页数再多会拖慢编辑。超出的页实测为空（诚实地说量不到），不悄悄少。
+ */
+const MEASURE_MAX_PAGES = 8;
+
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, INITIAL_WORKSPACE);
   const [ready, setReady] = useState(false);
@@ -216,9 +222,44 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [resume, resolvedPageId],
   );
 
-  /** 离屏测量宿主的 `.wrap`：实测只从这里取，预览那份只管显示 */
+  /**
+   * 离屏测量宿主：每页一份 `.wrap > Paper`，实测只从这里取，预览那份只管显示。
+   *
+   * 为什么不是只量当前页：内容变更触发的那条路会遍历 `resume.pages`，
+   * 非当前页也得拿得到自己的实测 —— 否则模型永远在「这一页还没量到」。
+   */
   const measureHost = useRef<HTMLDivElement | null>(null);
-  const measure = usePageMeasure({ hostRef: measureHost, person, page });
+  /** 上一次提示过的总页数：只在超过上限且页数变化时提示一次，别每次敲键都刷 console */
+  const measureCapWarned = useRef(0);
+  const measurePages = useMemo(() => {
+    const all = resume?.pages ?? [];
+    if (all.length > MEASURE_MAX_PAGES) {
+      // 不悄悄少：页数超上限时明说只量了前几页，剩下那些页的实测就是 null
+      if (measureCapWarned.current !== all.length) {
+        measureCapWarned.current = all.length;
+        console.warn(
+          `[measure] 这份简历有 ${all.length} 页，离屏实测上限是 ${MEASURE_MAX_PAGES} 页，只量前 ${MEASURE_MAX_PAGES} 页；其余页的实测为空。`,
+        );
+      }
+      return all.slice(0, MEASURE_MAX_PAGES);
+    }
+    measureCapWarned.current = 0;
+    return all;
+  }, [resume]);
+
+  const measures = usePaperMeasures({ hostRef: measureHost, person, pages: measurePages });
+
+  /** 当前页那一份：对外语义与旧版一致（只保证当前页，别的页用 measureOf） */
+  const measure = page ? (measures[page.id] ?? null) : null;
+
+  const measureOf = useCallback((pageId: string) => measures[pageId] ?? null, [measures]);
+
+  /**
+   * 内容变更那条路挂在 500ms 防抖里：把 measureOf 放 ref，
+   * 免得每次量出一个新数就把防抖计时器重置一遍。
+   */
+  const measureOfRef = useRef(measureOf);
+  measureOfRef.current = measureOf;
 
   /**
    * 页签栏用的「快速检索」列表（MRU）：
@@ -500,6 +541,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           state,
           kind: "change",
           text: describeChange(deltas),
+          // 内容一变，这一页上一次的实测就作废了；但「量不到」也要如实上送，
+          // 不带的话 Rust 侧拿到 None，只能报「还没量到」—— 现在至少是这一页自己的数
+          measure: measureOfRef.current(target.id),
         });
       }
     }, 500);
@@ -660,8 +704,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         state,
         kind: "request",
         // 实测值一起上送：不带的话排版 agent 看到的仍是「尚未实测」，
-        // 自动压版就成了闭眼开方子
-        measure,
+        // 自动压版就成了闭眼开方子。取的是这一页自己那份，不拿当前页凑数
+        measure: measureOf(page.id),
         origin: originOf(resume.id),
         text: `自动自查：这一页实测 ${pages.toFixed(2)} 页，超出 ${(pages - 1).toFixed(2)} 页，目标是 ${target} 页。请继续压到目标页数内；压不动就说清差多少，不要谎报。`,
       });
@@ -713,6 +757,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     resume,
     page,
     measure,
+    measureOf,
     activePageId: resolvedPageId,
     setActivePageId,
     openPages,
@@ -741,11 +786,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
       {/* 编辑态没有纸面 DOM（面板只在预览分支挂 .paper），而默认视图就是编辑。
           实测只能从这份离屏实例取；预览那份只管显示，不许另起一套公式。
+          每页一份：内容变更的循环会遍历所有页，只留当前页的话别的页永远量不到。
           宽度必须固定：纸是 1:1 的 A4（210mm = 793.7px），跟着面板变就把
           字号与分页一起量歪了 —— 以前这里写 374，等于在缩略纸上量真 A4 的内容，
           页数会大出约一倍。data-print="hide"：打印只留纸面元素，不藏这份就会
-          多打出同样一页。 */}
-      {person && page && (
+          多打出同样几页。 */}
+      {person && measurePages.length > 0 && (
         <div
           aria-hidden
           data-measure="host"
@@ -760,9 +806,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             zIndex: -1,
           }}
         >
-          <div className={paperStyles.wrap} ref={measureHost}>
-            <Paper person={person} page={page} />
-          </div>
+          {measurePages.map((target) => (
+            <div key={target.id} className={paperStyles.wrap} data-page={target.id}>
+              <Paper person={person} page={target} />
+            </div>
+          ))}
         </div>
       )}
 

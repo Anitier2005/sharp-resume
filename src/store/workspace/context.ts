@@ -44,6 +44,12 @@ export interface WorkspaceContextValue {
    * 不落库：它是「这一版 DOM 此刻多高」，刷新即失效。
    */
   measure: PageMeasure | null;
+  /**
+   * 任意一页的实测结果（键是 pageId）。离屏宿主每页一份，
+   * 内容变更触发的重排要给的是「被改的那一页」的数，不是当前页的。
+   * 没量到 / 超出量测上限的页返回 null —— 不拿别的页凑数。
+   */
+  measureOf: (pageId: string) => PageMeasure | null;
   activePageId: string | null;
   setActivePageId: (id: string | null) => void;
   /** 页签栏的快速检索列表：最近用过的在前，当前页一定在首位 */
