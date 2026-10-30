@@ -607,6 +607,19 @@ Anthropic 兼容端点给 `stop_reason`，`finish_reason` 优先，都缺则退�
 `position` / `top/left/right/bottom` / `z-index` 由 `ALLOW_ABSOLUTE` 把着（默认 false），且必须排在真分页之后才能打开——绝对定位元素跨页只能由分页引擎兜底。
 `transform` 只放行 `translate*`：`scale/rotate/skew/matrix` 一律剔除（Word 表达不了缩放，放开了就是「屏幕上对、导出去错」）。
 
+**页头 `aside` 已可用**（`HEAD_ASIDE_ABSOLUTE = true`）：`set_page_layout { head: "aside" }` 产出
+`<header class="head aside" style="text-align:center">` + `<div class="txt">…</div>` +
+`<img class="photo abs" style="top:0;right:0">` —— 姓名与联系方式居中，照片绝对定位到版心右上角。
+三条前提都已满足：Paged.js（`Previewer`）按页切分、`paper.css` 的 `.doc{position:relative}` 让 `.abs`
+以版心为原点、docx 侧 `w:framePr` 承接同一个坐标（`w:x` 已加页边距）。
+
+**这两件事必须分开**，所以是两个常量而不是一个：
+- 页头照片只是生成器写死坐标的一个 `<img>` 盒子，模型既写不到它、也改不了它的 `top/right`，跨页风险可控 —— 开放。
+- 模型手写的 `position` 仍在白名单外（`style_props()` 不含 `ABSOLUTE_PROPS`）：它能把整段正文抽出文档流，
+  屏幕上看还在，纸上的页数与 Word 的 `w:framePr` 同时失真，而模型看不见渲染结果、发现不了 —— 不开放。
+
+放开「让照片落在右上角」不等于放开「让模型自己排版任意定位」。
+
 ## 11. 附件正文：Fact 层
 
 **附件正文是事实，不是每轮的投影。** 曾经把它整段塞进 system 用完即弃，一轮中断就永久丢失（真机：2404 字正文蒸发，后续轮次只能说「系统里只有你的照片」）。

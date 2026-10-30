@@ -89,8 +89,9 @@ const SPLIT_UNSUPPORTED: &str = "split 只适合手写片段（parts），结构
 /// `style` 里允许的属性。
 ///
 /// 只开「排版」这一类：字体、间距、颜色、盒模型、布局、边框、分栏。
-/// 刻意不开 `position`（分页会失控，见 `ALLOW_ABSOLUTE`）、`animation`（没有意义）、
-/// `z-index`（同上）。`transform` 只放行平移：缩放 / 旋转在 Word 里没有对应。
+/// 刻意不开 `position`（模型手写绝对定位会脱离文档流，见 `ALLOW_ABSOLUTE`）、
+/// `animation`（没有意义）、`z-index`（同上）。`transform` 只放行平移：
+/// 缩放 / 旋转在 Word 里没有对应。
 const CSS_PROPS: &[&str] = &[
     // 字体与文本
     "font-size", "font-weight", "font-family", "font-style", "line-height", "letter-spacing",
@@ -113,17 +114,37 @@ const CSS_PROPS: &[&str] = &[
     "columns", "column-count", "break-inside", "page-break-inside", "float", "clear",
 ];
 
-/// 绝对定位总开关。
+/// **模型手写** `style` 里能不能写 `position`。
 ///
 /// 关着的时候 `position` / `top` / `left` / `right` / `bottom` / `z-index` 一律被
-/// 清洗掉：绝对定位的元素不知道自己在第几页，一跨页就压到页脚外面 —— 屏幕上看
-/// 着对，导出的 PDF 是错的。要开必须先有真分页引擎（Paged.js）兜底，由它把
-/// 绝对定位元素按页切分。
+/// 清洗掉。注意这个开关只管模型手写的那一部分 —— 页头照片的绝对定位走
+/// `HEAD_ASIDE_ABSOLUTE`，两者刻意分开。
+///
+/// 为什么仍然关着：页头照片只是一个 `<img class="photo abs">` 盒子，坐标由生成器
+/// 写死成 `top:0;right:0`，跨页时最多是「这张图被切走」，风险可控；而模型自己把
+/// 任意段落设成 `position:absolute`，一次就能把整段正文抽出文档流 —— 屏幕上看着
+/// 还在，纸上的页数与 Word 的 `w:framePr` 同时失真，而它看不见渲染结果，发现不了。
 ///
 /// 留成常量而不是配置项：这是**能力边界**，不是偏好，模型不该有机会把它打开。
 pub const ALLOW_ABSOLUTE: bool = false;
 
-/// 只在 `ALLOW_ABSOLUTE` 为真时才进白名单的定位属性。
+/// 页头 `aside` 能不能真的把照片绝对定位到版心右上角。
+///
+/// 开启前提已经满足，三件事同时到位：
+///   1. **Paged.js 兜底**：前端 `src/lib/paginate.ts` 已用 `Previewer` 真分页，
+///      绝对定位元素跨页由分页引擎按页切分，不会压到页脚外面；
+///   2. **`.doc` 是定位包含块**：`paper.css` 里 `.doc { position: relative }`，
+///      照片的 `top:0;right:0` 就是「相对版心左上角」，与 Word 侧的 `w:framePr`
+///      （`w:x` 已加上页边距）是同一个坐标系；
+///   3. **docx 侧有 `w:framePr`**：`photo_para` 把照片放进 `w:framePr` 段落钉在
+///      右上角，导出不是另一张纸。
+///
+/// 与 `ALLOW_ABSOLUTE` 拆开是因为风险不等价：这里只动生成器写死的那个 `<img>`，
+/// 模型既写不到它、也改不了它的坐标；放开它不应该顺带放开整页正文的定位能力。
+pub const HEAD_ASIDE_ABSOLUTE: bool = true;
+
+/// 进白名单的定位属性。**当前恒为空**：`ALLOW_ABSOLUTE` 关着，模型写的
+/// `position` / `top` … 全部清洗掉；留着这份清单是为了让「要开时开哪些」有唯一出处。
 /// `width` / `height` 本来就在 `CSS_PROPS` 里（做卡片、图框用得到），不重复列。
 const ABSOLUTE_PROPS: &[&str] = &["position", "top", "left", "right", "bottom", "z-index"];
 
@@ -515,10 +536,10 @@ fn render_head(
         text.push_str(&format!(r#"<div class="meta">{}</div>"#, escape(&line)));
     }
 
-    // `aside` 依赖绝对定位。开关关着时按默认的两栏排 —— 照片在右、文字在左，
-    // 仍然是一份能用的页头，只是不如原件那么像。
-    // 「已降级」这句话由 set_page_layout 返回给模型，这里不重复说。
-    let aside = head == "aside" && ALLOW_ABSOLUTE;
+    // `aside` 依赖绝对定位，由 `HEAD_ASIDE_ABSOLUTE` 单独把着（Paged.js 分页 +
+    // `.doc` 定位包含块 + docx 的 `w:framePr` 都已就位）。它和「模型手写 position」
+    // 是两件事：这里出的是生成器写死坐标的 `<img>`，不是模型的样式声明。
+    let aside = head == "aside" && HEAD_ASIDE_ABSOLUTE;
 
     let inner = if aside {
         aside_inner(&text, photo.as_deref())
@@ -534,7 +555,7 @@ fn render_head(
 
     let class = match head {
         "aside" if aside => "head aside",
-        // 降级时不要留 aside：留着会去匹配一条不存在的规则，纸上什么都不会变
+        // 开关关掉时不要留 aside：留着会去匹配一条不存在的规则，纸上什么都不会变
         "center" => "head center",
         "bare" => "head bare",
         "thick" => "head thick",
@@ -542,7 +563,8 @@ fn render_head(
     };
 
     // 居中写成内联样式，不新建 `.head.aside` 规则：paper.css 是共用样式表，
-    // 为一条还没启用的分支加类，比把这条声明就近写在生成处更容易看清是谁要的
+    // 为一条只在 `HEAD_ASIDE_ABSOLUTE` 下才走的分支加类，不如把这条声明就近
+    // 写在生成处 —— 一眼能看出是谁要的
     let style = if aside {
         r#" style="text-align:center""#
     } else {
@@ -557,9 +579,10 @@ fn render_head(
 
 /// 页头 `aside` 的内层：居中的文字 + 贴在右上角的照片。
 ///
-/// 独立成函数是为了能单测 —— 这条分支要等分页引擎接上（`ALLOW_ABSOLUTE`）才真正
-/// 出到纸上，测试不该靠翻开关才能跑到它。
-/// `abs` 只负责「脱出文档流」，偏移写成内联样式：类里写死 top/right 就绑死了一种纸。
+/// 独立成函数是为了能单测 —— 这条分支由 `HEAD_ASIDE_ABSOLUTE` 把着，
+/// 测试不该靠翻开关才能跑到它。
+/// `abs` 只负责「脱出文档流」（`paper.css` 的 `.doc .abs`），偏移写成内联样式：
+/// 类里写死 top/right 就绑死了一种纸。
 fn aside_inner(text: &str, photo: Option<&str>) -> String {
     let image = photo
         .map(|asset_id| {
@@ -1018,8 +1041,9 @@ fn escape(text: &str) -> String {
 
 /// `style` 实际生效的属性集合：静态清单 + `transform` + 开关打开时的定位属性。
 ///
-/// 为什么不在常量里一次写全：`position` 能不能用取决于有没有真分页引擎，
-/// 两个状态必须只有一处来源 —— 常量 `ALLOW_ABSOLUTE`。
+/// 为什么不在常量里一次写全：模型手写的 `position` 能不能用是一道单独的能力边界，
+/// 两个状态必须只有一处来源 —— 常量 `ALLOW_ABSOLUTE`（当前 false，与页头照片的
+/// `HEAD_ASIDE_ABSOLUTE` 无关）。
 fn style_props() -> HashSet<&'static str> {
     let mut set: HashSet<&'static str> = CSS_PROPS.iter().copied().collect();
     // transform 的名字要留在白名单里，值另行把关（见 strip_bad_transform）
@@ -1389,35 +1413,76 @@ mod tests {
         assert!(out.contains("margin-top:2px"), "{out}");
     }
 
-    /// position 仍由开关把着（当前 false）：模型写绝对定位一个字都进不来
+    /// 模型手写的 position 仍被清洗：页头照片开了绝对定位，不等于模型也能写定位
     #[test]
-    fn absolute_positioning_stays_off_while_the_switch_is_false() {
-        assert!(!ALLOW_ABSOLUTE, "开关保持 false，等分页引擎接上");
+    fn model_written_position_is_still_stripped() {
         let out = sanitize(r#"<div style="position: absolute; top: 0; z-index: 3">甲</div>"#);
         assert!(!out.contains("position"), "{out}");
         assert!(!out.contains("z-index"), "{out}");
+
         let props = style_props();
+        assert!(!props.contains("position"), "position 不该进白名单");
         for prop in ABSOLUTE_PROPS {
             assert!(!props.contains(prop), "{prop} 不该在白名单里");
         }
     }
 
-    /// head: aside 依赖绝对定位，开关关着就降级成左右两栏（照片仍在，只是进正常流）
+    /// 两个开关是两件事：页头照片开了，模型手写这条仍关着
     #[test]
-    fn head_aside_falls_back_to_two_columns() {
+    fn head_aside_switch_is_not_the_model_style_switch() {
+        assert!(HEAD_ASIDE_ABSOLUTE, "页头 aside 已可用");
+        assert!(!ALLOW_ABSOLUTE, "模型手写 position 仍不放行");
+    }
+
+    /// head: aside 现在真的出绝对定位的照片（原件那种「姓名居中、照片贴右上角」）
+    #[test]
+    fn head_aside_pins_the_photo_to_the_top_right() {
         let mut page = page();
         page.layout = Some(PageLayout {
             head: "aside".into(),
             ..Default::default()
         });
         let out = compile(&page, &person());
-        if ALLOW_ABSOLUTE {
-            assert!(out.html.contains(r#"class="head aside""#), "{}", out.html);
-        } else {
-            assert!(out.html.contains(r#"<header class="head""#), "{}", out.html);
-            assert!(out.html.contains(r#"<div class="top">"#), "{}", out.html);
-            assert!(!out.html.contains("abs"), "降级后不该留 aside 的附属 class：{}", out.html);
-        }
+        assert!(out.html.contains(r#"<header class="head aside""#), "{}", out.html);
+        assert!(!out.html.contains(r#"<div class="top">"#), "不该再走两栏降级：{}", out.html);
+        assert!(out.html.contains(r#"<img class="photo abs" style="top:0;right:0""#), "{}", out.html);
+        assert!(out.html.contains(r#"style="text-align:center""#), "{}", out.html);
+    }
+
+    /// 没有照片时 aside 不留空 img，文字照样居中
+    #[test]
+    fn head_aside_without_a_photo_leaves_no_empty_image() {
+        let mut page = page();
+        page.layout = Some(PageLayout {
+            head: "aside".into(),
+            ..Default::default()
+        });
+        // page() 的页头没有图片字段，照片会退回人身上第一张；把人身上的也去掉，
+        // 才是真的「没有照片」
+        let mut bare_person = person();
+        bare_person.assets.clear();
+        let out = compile(&page, &bare_person);
+        assert!(out.html.contains(r#"<header class="head aside""#), "{}", out.html);
+        assert!(!out.html.contains(r#"class="photo abs""#), "不该输出空 img：{}", out.html);
+        assert!(out.html.contains(r#"<div class="txt">"#), "{}", out.html);
+    }
+
+    /// aside 里的照片不参与文字居中：照片在 `<div class="txt">` 之后、`<header>` 之内
+    #[test]
+    fn head_aside_photo_sits_outside_the_centered_text() {
+        let mut page = page();
+        page.layout = Some(PageLayout {
+            head: "aside".into(),
+            ..Default::default()
+        });
+        let html = compile(&page, &person()).html;
+        let header_at = html.find("<header").expect("有页头");
+        let txt_at = html.find(r#"<div class="txt">"#).expect("有文字层");
+        let img_at = html.find(r#"class="photo abs""#).expect("有照片");
+        let header_end = html.find("</header>").expect("有页头结束");
+        assert!(header_at < txt_at, "{}", html);
+        assert!(txt_at < img_at, "照片必须排在文字之后（否则会挤掉居中）：{}", html);
+        assert!(img_at < header_end, "照片必须留在 header 里：{}", html);
     }
 
     /// head: center 这类纸面 class 走选项时也要生效
