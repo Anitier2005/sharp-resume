@@ -17,7 +17,7 @@ import styles from "./button.module.css";
  *   danger   —— 会造成数据损失的确认动作。
  */
 export type ButtonVariant = "primary" | "ghost" | "quiet" | "danger";
-export type ButtonSize = "xs" | "sm" | "md";
+export type ButtonSize = "xs" | "sm" | "md" | "lg";
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;

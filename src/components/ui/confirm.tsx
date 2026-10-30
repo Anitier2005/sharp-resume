@@ -49,10 +49,10 @@ export function Confirm({
       footer={
         <>
           {/* 危险操作默认停在「取消」上：回车不该替用户做决定 */}
-          <Button onClick={onCancel} data-autofocus>
+          <Button size="lg" onClick={onCancel} data-autofocus>
             {cancelLabel}
           </Button>
-          <Button variant={danger ? "danger" : "primary"} onClick={onConfirm}>
+          <Button size="lg" variant={danger ? "danger" : "primary"} onClick={onConfirm}>
             {confirmLabel}
           </Button>
         </>

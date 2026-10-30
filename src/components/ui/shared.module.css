@@ -37,18 +37,22 @@
 .overlayTitle {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 5px;
   min-width: 0;
   flex: 1;
 }
 .overlayTitle b {
-  font-size: 0.78125rem;
+  /* 12.5 → 14：标题是这一屏唯一的「你要做决定」信号，和 11px 的正文
+     只差一个字重的话，用户扫过去会先看到说明、后看到问题 */
+  font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: 0.01em;
+  line-height: 1.4;
   color: var(--fg-1);
 }
 .overlayTitle span {
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
+  line-height: 1.65;
   color: var(--fg-3);
 }
 

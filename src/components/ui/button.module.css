@@ -23,6 +23,13 @@
 /* 26px = 输入框高度（并排时底边对齐）
    22px = 面板内的常规行
    18px = 密集列表的行内动作（资料库条目头那种，再高就把行撑开了） */
+.lg {
+  /* 对话框里的主按钮。26px 在 460 宽的卡片里像一行小字，
+     点了才知道是按钮；这一档只给「要你做决定」的地方用 */
+  height: 32px;
+  padding: 0 16px;
+  font-size: 0.75rem;
+}
 .md {
   height: 26px;
   padding: 0 10px;
@@ -40,6 +47,10 @@
 }
 
 /* 纯图标：宽度必须等于高度，padding 归零 */
+.iconOnly.lg {
+  width: 32px;
+  padding: 0;
+}
 .iconOnly.md {
   width: 26px;
   padding: 0;

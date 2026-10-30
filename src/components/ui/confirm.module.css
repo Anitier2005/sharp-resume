@@ -5,16 +5,16 @@
 /* 将被删除的东西逐条列出来：说「2 项」等于没说，用户要认的是具体的页和条目 */
 .items {
   margin: 0;
-  padding: 0 0 0 8px;
+  padding: 0 0 0 10px;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
   border-left: 2px solid var(--danger);
 }
 .items li {
-  font-size: 0.6875rem;
-  line-height: 1.6;
+  font-size: 0.71875rem;
+  line-height: 1.65;
   color: var(--fg-2);
   word-break: break-word;
 }

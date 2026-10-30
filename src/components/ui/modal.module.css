@@ -10,14 +10,20 @@
    不会让用户觉得「窗把界面盖死了」；高度不写死，由内容决定 ——
    三行确认框拉到 480 高只是把空白当设计。 */
 .card {
-  width: 420px;
+  /* 420 → 460：确认框大多只有「一句标题 + 一句说明 + 两个按钮」，
+     在 420 里上下挤成一条，看着像提示条而不是对话框。加宽一点、留白给足，
+     它才像个「要你做决定」的东西。 */
+  width: 460px;
+  /* 一句话的确认框不该只有 140 高：扁成一条横幅，用户扫一眼掠过去，
+     根本不会停下来读「删的是什么」。给一个下限，让它有对话框的体量。 */
+  min-height: 176px;
   max-width: calc(100vw - 48px);
   max-height: calc(100vh - 96px);
   display: flex;
   flex-direction: column;
   background: var(--bg-elev);
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
+  border-radius: 10px;
   box-shadow: 0 1px 2px rgba(20, 20, 15, 0.06),
     0 24px 60px -24px rgba(20, 20, 15, 0.45);
   /* 内容再长也只滚中间那段：标题与按钮永远留在窗里。
@@ -35,10 +41,9 @@
 .head {
   flex: none;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  min-height: 44px;
-  padding: 8px 10px 8px 16px;
+  padding: 24px 12px 6px 22px;
   /* 不画分隔线：标题、正文、按钮区是同一张纸上的三层，一条线就把纸切成了条块。
      需要区分层级时靠字号与留白，不靠框线 */
   border-bottom: 0;
@@ -59,10 +64,10 @@
 .body {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 14px 18px 16px;
+  padding: 8px 22px 24px;
   overflow: auto;
-  font-size: 0.6875rem;
-  line-height: 1.7;
+  font-size: 0.71875rem;
+  line-height: 1.75;
   color: var(--fg-2);
 }
 
@@ -77,8 +82,8 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
-  padding: 2px 16px 16px;
+  gap: 10px;
+  padding: 6px 22px 22px;
   border-top: 0;
   background: transparent;
 }
