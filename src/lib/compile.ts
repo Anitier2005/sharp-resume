@@ -47,7 +47,11 @@ function findAsset(person: Person, id: string): Asset | undefined {
  */
 export async function resolveAssetRefs(html: string, person: Person): Promise<string> {
   const ids = new Set<string>();
-  for (const match of html.matchAll(/asset:([\w-]+)/g)) {
+  // **id 里带点**：资产 id 就是内容寻址的存储名（`92c40bfc645989ee.jpg`），
+  // 早先写成 `/asset:([\w-]+)/` 会在第一个点处截断，取到 `92c40bfc645989ee`
+  // 这个不存在的 id → 换不到地址 → 纸上是一张破图（照片一直显示不出来的原因）。
+  // 只允许「短后缀」吃进点，免得把句末的句号也当成 id 的一部分。
+  for (const match of html.matchAll(/asset:([\w-]+(?:\.[A-Za-z0-9]{2,5})?)/g)) {
     ids.add(match[1]);
   }
   if (!ids.size) return html;
