@@ -11,7 +11,7 @@
 
 排版不是会话 agent 的活。会话 agent 只负责**描述与转达**：
 `request_layout` 把 brief 投进该页信箱，排版 agent 自己改；排版 agent 有疑问时，
-反过来用 `note_on_page` 在纸面上留注、用 `ask_session` 向会话 agent 提问。
+反过来用 `note_on_page` 在纸面上留注给用户看。
 
 ---
 
@@ -237,7 +237,7 @@ pub page_index: Option<u32>,    // 在来源 PDF 里的页序（1 基）
 
 ---
 
-## 3. 会话 agent 工具（Scope::Session）
+## 3. 会话工具
 
 已有只读：`read_person` `list_pages` `read_page` `read_library`。
 已有界面：`open_page` `set_view` `set_open_pages` `set_ui` `ask_user`。
@@ -327,56 +327,42 @@ pub page_index: Option<u32>,    // 在来源 PDF 里的页序（1 基）
 
 ---
 
-## 4. 排版 agent 的新工具（Scope::Layout）
+## 4. 排版工具（与会话工具同在一套里）
+
+**没有第二个 agent。** 曾经有过「页排版 agent」：独立的一轮循环、每页一份会话、靠信箱与
+`layout:applied` 事件和会话互相喊话。它被取消掉了 —— 代价是两边互相看不见（内容改完排版不知道、
+排版改完会话不知道），换来的是两个模型各说各话、每次内容变更都要多烧一轮。
+
+合并后的形态：**一套工具集，一个 `agent::turn::run`**。排版三个工具与内容工具并列：
 
 | 工具 | 参数 | 产物 |
 |---|---|---|
+| `set_page_layout` | `preset? / head? / parts? / html? / margin?` | `{type:"patchPageLayout", pageId, layout}` |
+| `read_layout_guide` | 无 | 组件手册原文（`render::GUIDE`） |
 | `note_on_page` | `text, blockId?` | `{type:"pageNote", pageId, note:{id,blockId?,text,at}}` |
-| `ask_session` | `question, blockId?` | `{type:"askSession", pageId, question, blockId?}` |
 
-- `note_on_page`：纸面上一个批注点（有 `blockId` 贴在该块右侧，否则贴在页边）。
-  用户可点开、可关闭。**不进导出**。**每轮最多 2 条**（`Outbox` 里计数，超了直接拒绝，不是静默丢弃）。
-- `ask_session`：把问题交给会话 agent。`blockId` 要一起下发 —— 会话 agent 得知道
-  「问的是哪一块」，否则只能再调一次 `read_page` 猜。
-  前端收到后**追加一条来自「排版」的会话消息**，并**自动让会话 agent 跑一轮**。
-  **每轮最多 1 次**（同计数方式），防止两个 agent 互相呼叫打转。
-
-| 工具 | 参数 | 产物 |
-|---|---|---|
-| `split_page` | `pageId?, afterBlockId` | `addPage` + `pageBlocks`×2 + `pageLayout`×2 |
-| `delete_empty_page` | `pageId` | `removeEmptyPage` |
-
-`split_page` 的语义（10 条）见技术方案 §4.1：新页插在源页后、最后一块报错、`parts` 随块走、
-`preset` 继承、`layout.html` 存在则报错、`notes` 留源页、一轮 1 次、总页数上限 12、
-返回值带新页 id。**一次 turn 只许 1 次**（`Outbox.splits` 计数，超了报错不是静默丢弃）。
-
-`set_page_layout` 的返回在 freeform 档要追加（检测到绝对定位时）：
-
-`注意：这一版有绝对定位（position:absolute / fixed）的内容，它不参与页高计算，实测页数可能比实际偏小。给根容器一个 min-height 能改善。`
-
-排版 agent **不能**调内容写入工具 —— 它的职责边界是「不改内容」。`Scope` 表照旧：
-`set_page_layout` / `read_layout_guide` 只有 `Layout`；内容工具只有 `Session`。
+- `note_on_page`：纸面上一个批注点（有 `blockId` 贴在该块右侧，否则贴页边）。用户可点开、可关闭，
+  **不进导出**。**每轮最多 2 条**（`Outbox.notes` 计数，超了直接拒绝，不是静默丢弃）。
+- 三个工具都在 `specs()` 的全量清单里，**没有 `Scope` 这层抽象**：内容与版面都是同一个模型在决定。
+- 曾经存在的 `ask_session`（排版 agent 向会话提问）与 `request_layout`（会话把意图转给排版 agent）
+  随机制一起删除。历史会话里模型仍可能硬调 `ask_session`，`call()` 会返回一句人话说明它不存在，
+  不能落成「没有这个工具」这种读起来像配置错了的报错。
 
 ### 4.1 返回文案里的实测结论
 
 `set_page_layout` 的返回值**必须**带一行实测结论，三态各一句（见 `agent/facts.rs`）：
+达标 / 未达标 / 量不到。量不到时的措辞**必须**与达标明显不同：写「尚未实测」，不许写「没有溢出」。
 
-- 达标：`实测 1.00 页，没有溢出（目标 1 页，达标）。`
-- 未达标：`实测 1.12 页，超出 0.12 页（目标 1 页，仍未达标）。继续压，或停在这一档并说清差多少。`
-- 量不到：`尚未实测（测量不可用：预览没打开）。这一轮不能确认是否在一页内 —— 不要写「已压到一页」。`
-
-量不到时的措辞**必须**与「达标」明显不同：测量不可用时写「尚未实测」，不许写「没有溢出」。
-`describe_page` 的正文末尾追加 `## 这一页的实测` 一段，与上面同源（`facts::measure_section()`）。
+**量不到时还要追加一句「实测滞后一轮」**：页数是上一轮纸面量出来的，这一轮改完不会变。
+不写这句，模型会连改两次、看到数字没动，然后推出「版面无效、瓶颈在内容」，转头去劝用户删内容 ——
+这个推论我们已经在真机上见过，代价是把「忠实还原」这个目标本身丢了。
 
 `达标` 只用于**用户说过的**目标（`target.source` 为 `UserThisTurn` / `UserBefore`）；
-目标来自原件页数（`FromOrigin`：系统按原件页数给的默认值，不是用户的要求）时**不宣称达标**，
-改说「按原件页数 {t} 页算」（事实块、实测段、`set_page_layout` 返回值三处同批）。
+目标来自原件页数（`FromOrigin`）时**不宣称达标**，改说「按原件页数 {t} 页算」。
 
 **文案只陈述系统状态，不替用户作证。** `facts.rs` 只能陈述「系统里记了什么」，
 不能陈述「用户说过 / 没说过什么」—— 它看不到用户那句话，一旦模型漏调 `set_target_pages`，
-替用户作证就成了伪证，而读者（用户与模型）都会信它。同理，事实块不陈述「用户是否说过」，
-只陈述「系统里有没有记下目标页数」：`{target}` 的未设置档写
-`未设置（系统里没有记下目标页数…）`，`FromOrigin` 的括注写 `系统里没有记下目标页数`。
+替用户作证就成了伪证，而读者（用户与模型）都会信它。
 
 ---
 
@@ -599,10 +585,10 @@ Anthropic 兼容端点给 `stop_reason`，`finish_reason` 优先，都缺则退�
 
 - **归一化链**（两侧同一个函数、各一次）：去零宽/软连字符 → NFKC → **抹标点邻接空白** → 压空白。
   标点邻接空白一律视为排版噪声：`A B:C` / `A B : C` / `A B：C` 归一后全等；字母之间的空格不动（`Java Script` ≠ `JavaScript`）。
-- **比对用序列比对**（`blocks` 按顺序拼接）。因此：重排区块顺序、把两块并成一块都会被拒——**这是有意的**，调区块顺序属内容决定，要走 `ask_session`。
+- **比对用序列比对**（`blocks` 按顺序拼接）。因此：重排区块顺序、把两块并成一块都会被拒——**这是有意的**，调区块顺序是内容决定，要用内容工具改，不是在 HTML 里搬。
 - **报错两侧口径不同**：比对走归一文本，**报错预览走不归一的那份**。否则 NFKC 把全角「：」压成半角，模型认不出自己写的是哪句。
 - `kind == "media"` 整块豁免；未知块报「块 {id} 不存在」并列出这一页的块，不许静默放行。
-- 整页接管的拒绝文案不报块号：`整页接管不能改字：这一页原文共 {n} 字，你写的是 {m} 字。要改内容请调 ask_session。`
+- 整页接管的拒绝文案不报块号：`整页接管不能改字：这一页原文共 {n} 字，你写的是 {m} 字。要改字请用内容工具（set_field / update_entry）。`
 
 `position` / `top/left/right/bottom` / `z-index` 由 `ALLOW_ABSOLUTE` 把着（默认 false），且必须排在真分页之后才能打开——绝对定位元素跨页只能由分页引擎兜底。
 `transform` 只放行 `translate*`：`scale/rotate/skew/matrix` 一律剔除（Word 表达不了缩放，放开了就是「屏幕上对、导出去错」）。
@@ -645,7 +631,7 @@ Anthropic 兼容端点给 `stop_reason`，`finish_reason` 优先，都缺则退�
 
 三条硬要求：
 
-1. **存在性**：`specs(Scope::Layout)` 里必须含提示词点名的每个工具；`ask_session` 不得出现在排版侧清单里。
+1. **存在性**：`specs()` 的全量清单里必须含提示词点名的每个工具；`ask_session`、`request_layout` 必须**根本不存在**（不是「某角色不能用」）。
 2. **参数名**：文案里凡出现「参数 `Y`」，断言 `Y` 在该工具 `params()` 的 `required` 中；且那句提示里不得出现 `stored =`（池内寻址名不是对外参数名）。
 3. **反空转**：断言本轮**实际核对过的次数**（工具名条数、参数核对次数）不为零。一条从没红过的护栏，和没有护栏是一样的；一个"抽取器坏了所以一条都没抽到"的护栏，会静默变绿。
 
@@ -659,7 +645,7 @@ Anthropic 兼容端点给 `stop_reason`，`finish_reason` 优先，都缺则退�
 
 线上代价：还原一份 PDF 简历时，模型把页头六项和证件照写了两遍还在问「为什么页头是空的」；同一轮里 `add_field(A)` 之后 `set_field(B)` 会把 A 冲掉（两次都基于不含对方的旧数组算整份 fields）。
 
-**14.2 写入要边写边落，不要攒到轮末。** 每批工具执行完立刻 `flush_all` 并推一条 `mutate` 信封（`StreamChunk::envelope`）；轮末 `drain_actions` 只收尾剩余部分，不会重复。排版侧把同一条信封转成 `layout:applied`，纸面边改边变。
+**14.2 写入要边写边落，不要攒到轮末。** 每批工具执行完立刻 `flush_all` 并推一条 `mutate` 信封（`StreamChunk::envelope`）；轮末 `drain_actions` 只收尾剩余部分，不会重复。会话侧自己就把它落进 store，纸面边改边变。
 
 **14.3 页头块的 id 由 Rust 定。** 页头 = 这一页第一个 `kind=="fields"` 的块。块不存在时前端原本会自己 `uid("b")` 现造一个，Rust 猜不到 ⇒ 同轮后续写入没有 id 可打。现在 `pageHeader` 信封带 `blockId`（同一页同一轮只会发一个 id），前端 `withHeader(page, fields, blockId)` 照它建块。
 
@@ -667,4 +653,4 @@ Anthropic 兼容端点给 `stop_reason`，`finish_reason` 优先，都缺则退�
 
 **14.5 实测永远是上一轮的数，同一轮里不会变。** 这句话必须出现在提示词里：模型连改两次、看到页数没动，会推出「版面无效、瓶颈在内容」，然后转头劝用户删内容——而我们付的代价是「忠实还原」这个目标本身。`set_page_layout` 在量不到时主动把这句话写进返回值。
 
-**14.6 长时间无输出要有心跳。** 排版一轮 30–90 秒，界面只在工具开始时换一次文案就等于全程静止。`layout:progress` 带 `kind`（`tool_start`/`tool_end`/`thinking`）与 `step`，状态栏用 `since` 现算秒表 —— 用户要能判断它是活着还是卡死。
+**14.6 长时间无输出要有心跳。** 一轮可能跑 30–90 秒。工具事件（`StreamChunk::tool_event`）会一路推到会话气泡的 tool 行，那是用户判断「它还活着」的唯一依据 —— 所以 `turn::describe()` 必须给每个工具一句人话，退化成「调用 set_page_layout」就等于没有信号。
