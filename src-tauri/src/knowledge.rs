@@ -53,6 +53,12 @@ struct ManifestChunk {
     heading: String,
     #[serde(default)]
     text: String,
+    /// 这一片讲什么（≤60 字）。参与词项打分，也直接回给模型，省一次 read_knowledge
+    #[serde(default)]
+    summary: String,
+    /// 别人可能怎么问。同样 ×2 加权，让口语化提问也能命中
+    #[serde(default)]
+    questions: Vec<String>,
 }
 
 fn preset_entries() -> Vec<ManifestEntry> {
@@ -199,6 +205,10 @@ pub struct KnowledgeHit {
     pub title: String,
     pub tags: Vec<String>,
     pub heading: String,
+    /// 这一片讲了什么（模型写过就用它，否则截正文 120 字）
+    pub summary: String,
+    /// 别人可能怎么问：给模型提示「这一片能答哪些问题」
+    pub questions: Vec<String>,
     pub snippet: String,
     /// 图片块：`asset:<stored>`
     pub image: Option<String>,
@@ -563,6 +573,7 @@ struct Chunk {
     heading: String,
     text: String,
     summary: String,
+    questions: Vec<String>,
     preset: bool,
     asset: String,
     vector: Option<Vec<i8>>,
@@ -605,6 +616,14 @@ impl Index {
                     }
                 }
             }
+            // 预设问题是「别人可能怎么问」，和摘要同权：用户口语化的问法靠它命中
+            for question in &chunk.questions {
+                for _ in 0..2 {
+                    for token in tokens(question) {
+                        *tf.entry(token).or_insert(0) += 1;
+                    }
+                }
+            }
             for token in tokens(&chunk.text) {
                 *tf.entry(token).or_insert(0) += 1;
             }
@@ -640,6 +659,7 @@ impl Index {
                     heading: chunk.heading,
                     text: chunk.text,
                     summary: chunk.summary,
+                    questions: chunk.questions,
                     preset: doc.preset,
                     asset: chunk.asset,
                     vector: chunk.vector,
@@ -668,7 +688,8 @@ impl Index {
                     tags: entry.tags.clone(),
                     heading: chunk.heading.trim().to_string(),
                     text: chunk.text.trim().to_string(),
-                    summary: String::new(),
+                    summary: chunk.summary.trim().to_string(),
+                    questions: chunk.questions,
                     preset: true,
                     asset: String::new(),
                     vector: None,
@@ -696,6 +717,7 @@ impl Index {
                                 heading: chunk.heading,
                                 text: chunk.text,
                                 summary: chunk.summary,
+                                questions: chunk.questions,
                                 preset: false,
                                 asset: chunk.asset,
                                 vector: chunk.vector,
@@ -806,6 +828,12 @@ impl Index {
             .into_iter()
             .map(|(idx, score)| {
                 let chunk = &self.chunks[idx];
+                // 摘要和 snippet 是同一句话：模型写过就用它，没写过就截正文
+                let summary_line = if chunk.summary.trim().is_empty() {
+                    snippet(&chunk.text, 120)
+                } else {
+                    chunk.summary.clone()
+                };
                 KnowledgeHit {
                     chunk_id: chunk.chunk_id.clone(),
                     entry_id: chunk.entry_id.clone(),
@@ -814,11 +842,9 @@ impl Index {
                     title: chunk.title.clone(),
                     tags: chunk.tags.clone(),
                     heading: chunk.heading.clone(),
-                    snippet: if chunk.summary.trim().is_empty() {
-                        snippet(&chunk.text, 120)
-                    } else {
-                        chunk.summary.clone()
-                    },
+                    summary: summary_line.clone(),
+                    questions: chunk.questions.clone(),
+                    snippet: summary_line,
                     image: if chunk.asset.is_empty() {
                         None
                     } else {
@@ -1222,8 +1248,8 @@ pub fn knowledge_chunks(state: State<'_, Shared>, library_id: String) -> Result<
                     ord: index as u32 + 1,
                     heading: chunk.heading.clone(),
                     text: chunk.text.clone(),
-                    summary: String::new(),
-                    questions: Vec::new(),
+                    summary: chunk.summary.clone(),
+                    questions: chunk.questions.clone(),
                     kind: "text".into(),
                     asset: String::new(),
                     asset_name: String::new(),
@@ -1296,8 +1322,8 @@ pub fn knowledge_entry_get(state: State<'_, Shared>, id: String) -> Result<Optio
                 ord: index + 1,
                 heading: chunk.heading.trim().to_string(),
                 text: chunk.text.trim().to_string(),
-                summary: String::new(),
-                questions: Vec::new(),
+                summary: chunk.summary.trim().to_string(),
+                questions: chunk.questions.clone(),
                 kind: "text".into(),
                 asset: String::new(),
                 asset_name: String::new(),
@@ -2225,6 +2251,8 @@ pub fn read_tool(args: &Value, ctx: &crate::tools::ToolCtx) -> Result<String, St
                 json!({
                     "chunkId": format!("{}#{}", entry.id, index + 1),
                     "heading": chunk.heading.trim(),
+                    "summary": chunk.summary.trim(),
+                    "questions": chunk.questions,
                     "text": chunk.text.trim(),
                 })
             })

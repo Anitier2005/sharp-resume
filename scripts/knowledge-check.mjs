@@ -102,7 +102,8 @@ if (manifest) {
     }
 
     const list = Array.isArray(entry.chunks) ? entry.chunks : [];
-    if (!list.length) fail(`${id}.chunks 至少要有一块`);
+    if (!list.length) fail(`${id}.chunks 至少要有一片`);
+    if (list.length > 1) fail(`${id}.chunks 有 ${list.length} 片 —— 一个视频只能一片，观点写在同一片里`);
     for (const [ci, chunk] of list.entries()) {
       chunks += 1;
       const cid = typeof chunk?.id === "string" ? chunk.id.trim() : "";
@@ -114,7 +115,21 @@ if (manifest) {
       if (!text.trim()) fail(`${cid || `${id}#${ci + 1}`} 的 text 为空`);
       const size = weight(text);
       chars += size;
-      if (size > 400) fail(`${cid} 有 ${size.toFixed(0)} 字，超过 400 —— 请按小标题切开`);
+      if (size > 400) fail(`${cid} 有 ${size.toFixed(0)} 字，超过 400 —— 请压掉观点或合并句子`);
+
+      const summary = typeof chunk?.summary === "string" ? chunk.summary.trim() : "";
+      if (!summary) fail(`${cid} 缺 summary —— 每片必须有一句摘要`);
+      else if (weight(summary) > 60) {
+        fail(`${cid}.summary 有 ${weight(summary).toFixed(0)} 字，超过 60 —— 压成一句结论`);
+      }
+
+      const questions = Array.isArray(chunk?.questions) ? chunk.questions : [];
+      if (questions.length !== 3) fail(`${cid}.questions 应为 3 条，实际 ${questions.length} 条`);
+      for (const [qi, question] of questions.entries()) {
+        if (typeof question !== "string" || !question.trim()) {
+          fail(`${cid}.questions[${qi}] 不能为空`);
+        }
+      }
 
       if (chunk?.vector !== undefined && chunk.vector !== null) {
         if (!Number.isInteger(chunk.vector) || chunk.vector < 0) {
